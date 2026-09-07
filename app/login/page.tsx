@@ -34,27 +34,51 @@ export default function LoginPage() {
     setBusy(false);
   }
 
+  const isLogin = mode === 'login';
+
   return (
     <main className="authPage">
       <section className="authCard">
-        <div className="authLogo">⚔</div>
-        <div className="eyebrow">TEAMZENTRALE ODIN</div>
-        <h1>{mode === 'login' ? 'Anmelden' : 'Konto erstellen'}</h1>
-        <p className="muted">
-          {mode === 'login'
-            ? 'Verwalte dein Team und alle freigegebenen Spielaccounts zentral.'
-            : 'Erstelle dein Konto für die Teamzentrale Odin.'}
-        </p>
-        <form onSubmit={submit}>
-          <label className="field">E-Mail<input name="user" type="email" autoComplete="email" required placeholder="name@beispiel.de" /></label>
-          <label className="field">Passwort<input name="password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={6} required placeholder="Mindestens 6 Zeichen" /></label>
-          <button className="button authButton" type="submit" disabled={busy}>{busy ? 'Bitte warten…' : mode === 'login' ? 'Anmelden' : 'Konto erstellen'}</button>
+        <div className="authBrand">
+          <div className="authLogo">⚔</div>
+          <div>
+            <div className="authBrandName">Teamzentrale Odin</div>
+            <div className="authBrandSub">Sicher. Zentral. Für dein Team.</div>
+          </div>
+        </div>
+
+        <div className="authIntro">
+          <div className="authBadge">{isLogin ? 'WILLKOMMEN ZURÜCK' : 'NEUES TEAMKONTO'}</div>
+          <h1>{isLogin ? 'Anmelden' : 'Konto erstellen'}</h1>
+          <p>
+            {isLogin
+              ? 'Melde dich an, um deine Teamzentrale zu öffnen.'
+              : 'Erstelle dein Konto und starte deine eigene Teamzentrale.'}
+          </p>
+        </div>
+
+        <form onSubmit={submit} className="authForm">
+          <label className="authField">
+            <span>E-Mail-Adresse</span>
+            <input name="user" type="email" autoComplete="email" required placeholder="name@beispiel.de" />
+          </label>
+          <label className="authField">
+            <span>Passwort</span>
+            <input name="password" type="password" autoComplete={isLogin ? 'current-password' : 'new-password'} minLength={6} required placeholder="Mindestens 6 Zeichen" />
+          </label>
+          <button className="button authButton" type="submit" disabled={busy}>
+            {busy ? 'Bitte warten…' : isLogin ? 'Anmelden' : 'Konto erstellen'}
+          </button>
         </form>
+
         {message && <div className="authNotice">{message}</div>}
-        <button className="authSwitch" type="button" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setMessage(''); }}>
-          {mode === 'login' ? 'Noch kein Konto? Jetzt registrieren' : 'Bereits ein Konto? Jetzt anmelden'}
+
+        <div className="authDivider"><span>oder</span></div>
+        <button className="authSwitch" type="button" onClick={() => { setMode(isLogin ? 'signup' : 'login'); setMessage(''); }}>
+          {isLogin ? 'Noch kein Konto? Jetzt registrieren' : 'Bereits ein Konto? Jetzt anmelden'}
         </button>
         <a className="authBack" href="/">← Zur Teamzentrale</a>
+        <div className="authFooter">Teamzentrale Odin · Zugang nur für berechtigte Nutzer</div>
       </section>
     </main>
   );
