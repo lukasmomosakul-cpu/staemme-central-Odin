@@ -2,10 +2,10 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Stämme Central',
-  description: 'Team-Zentrale',
-  applicationName: 'Stämme Central',
-  appleWebApp: { capable: true, title: 'Stämme Central', statusBarStyle: 'black-translucent' },
+  title: 'Teamzentrale Odin',
+  description: 'Zentrale Verwaltung für dein Team',
+  applicationName: 'Teamzentrale Odin',
+  appleWebApp: { capable: true, title: 'Teamzentrale Odin', statusBarStyle: 'black-translucent' },
 };
 
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
