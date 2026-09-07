@@ -36,6 +36,15 @@ jobs:
           pnpm cap:add:android
           pnpm cap:sync
 
+      - name: Align Android minimum SDK
+        working-directory: android
+        run: |
+          if grep -Rqs 'minSdkVersion 24' .; then
+            grep -RIl 'minSdkVersion 24' . | xargs sed -i 's/minSdkVersion 24/minSdkVersion 26/g'
+          fi
+          echo 'Effective minSdkVersion values:'
+          grep -RIn 'minSdkVersion' . --include='*.gradle' --include='*.gradle.kts' || true
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
