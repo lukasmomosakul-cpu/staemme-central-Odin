@@ -220,6 +220,24 @@ jobs:
           }
           EOF
 
+          # The activity is created dynamically above, so it must also be declared
+          # in the generated Android manifest. Without this entry Android rejects
+          # the Intent and Odin falls back to the external browser.
+          python - <<'PY'
+          from pathlib import Path
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          text = manifest.read_text()
+          activity = '        <activity android:name=".GameWebViewActivity" android:exported="false" />\n'
+          if 'GameWebViewActivity' not in text:
+              marker = '    </application>'
+              if marker not in text:
+                  raise SystemExit('AndroidManifest.xml: application marker not found')
+              text = text.replace(marker, activity + marker, 1)
+              manifest.write_text(text)
+          PY
+
+          grep -n 'GameWebViewActivity' android/app/src/main/AndroidManifest.xml
+
       - name: Align Android minimum SDK
         working-directory: android
         run: |
