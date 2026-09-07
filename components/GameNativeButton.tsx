@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { registerPlugin } from '@capacitor/core';
+import { DefaultWebViewOptions, InAppBrowser } from '@capacitor/inappbrowser';
 
 type Props = {
   url: string;
@@ -20,18 +21,26 @@ export default function GameNativeButton({ url, onFallback }: Props) {
   const openGame = async () => {
     setBusy(true);
     try {
-      // First use Capacitor's official browser container (Chrome Custom Tab on Android).
-      // If the plugin is unavailable, fall back to our native ACTION_VIEW bridge.
-      const { Browser } = await import('@capacitor/browser');
-      await Browser.open({ url });
+      // Open Die Stämme in a real WebView that is displayed inside the Odin app.
+      await InAppBrowser.openInWebView({
+        url,
+        options: DefaultWebViewOptions,
+      });
       return;
     } catch {
       try {
-        await ExternalBrowser.open({ url });
+        // Fallback: Capacitor's system browser container (Chrome Custom Tab on Android).
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url });
         return;
       } catch {
-        onFallback?.();
-        window.open(url, '_blank', 'noopener,noreferrer');
+        try {
+          await ExternalBrowser.open({ url });
+          return;
+        } catch {
+          onFallback?.();
+          window.open(url, '_blank', 'noopener,noreferrer');
+        }
       }
     } finally {
       setBusy(false);
