@@ -45,8 +45,8 @@ export default function GameNativeButton({ url, username, password, onFallback }
       className="gameIconButton"
       onClick={openGame}
       disabled={busy}
-      title="Die Stämme öffnen"
-      aria-label="Die Stämme öffnen"
+      title="Die Stämme in Odin öffnen"
+      aria-label="Die Stämme in Odin öffnen"
     >
       {busy ? '…' : '🎮'}
     </button>
