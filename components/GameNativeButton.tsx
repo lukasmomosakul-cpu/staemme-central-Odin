@@ -29,7 +29,7 @@ export default function GameNativeButton({ url, username, password, onFallback }
         const pass = JSON.stringify(password ?? '');
         try {
           await InAppBrowser.executeScript({
-            script: `(() => {
+            code: `(() => {
               const u = ${user};
               const p = ${pass};
               const userSelectors = ['input[name="username"]','input[name="user"]','input[name="login"]','input[type="text"]','input[type="email"]'];
@@ -49,13 +49,11 @@ export default function GameNativeButton({ url, username, password, onFallback }
       const listener = await InAppBrowser.addListener('browserPageLoaded', fillCredentials);
       await InAppBrowser.openInWebView({
         url,
-        options: {
-          showURL: true,
-          showToolbar: true,
-          closeButtonText: 'Schließen',
-          showNavigationButtons: true,
-          android: { hardwareBack: true, allowZoom: false, pauseMedia: true, isIsolated: false },
-        },
+        showURL: true,
+        showToolbar: true,
+        closeButtonText: 'Schließen',
+        showNavigationButtons: true,
+        android: { hardwareBack: true, allowZoom: false, pauseMedia: true, isIsolated: false },
       });
       void listener;
       return;
