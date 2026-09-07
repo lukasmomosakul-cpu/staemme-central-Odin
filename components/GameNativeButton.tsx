@@ -9,62 +9,29 @@ type Props = {
   onFallback?: () => void;
 };
 
-export default function GameNativeButton({ url, username, password, onFallback }: Props) {
+export default function GameNativeButton({ url, onFallback }: Props) {
   const [busy, setBusy] = useState(false);
 
   const openGame = async () => {
     setBusy(true);
     try {
-      const { InAppBrowser } = await import('@capawesome/capacitor-in-app-browser');
       const native = typeof window !== 'undefined' && 'Capacitor' in window;
 
-      if (!native) {
-        window.open(url, '_blank', 'noopener,noreferrer');
+      // In the Android app we deliberately navigate the existing WebView to the game.
+      // This is the most reliable way to keep Die Stämme inside Odin and avoids
+      // version-dependent behavior of external browser plugins.
+      if (native) {
+        window.location.assign(url);
         return;
       }
 
-      const fillCredentials = async () => {
-        if (!username && !password) return;
-        const user = JSON.stringify(username ?? '');
-        const pass = JSON.stringify(password ?? '');
-        try {
-          await InAppBrowser.executeScript({
-            code: `(() => {
-              const u = ${user};
-              const p = ${pass};
-              const userSelectors = ['input[name="username"]','input[name="user"]','input[name="login"]','input[type="text"]','input[type="email"]'];
-              const passSelectors = ['input[name="password"]','input[name="pass"]','input[type="password"]'];
-              const find = (selectors) => selectors.map(s => document.querySelector(s)).find(Boolean);
-              const userInput = find(userSelectors);
-              const passInput = find(passSelectors);
-              if (userInput && u) { userInput.value = u; userInput.dispatchEvent(new Event('input', { bubbles: true })); userInput.dispatchEvent(new Event('change', { bubbles: true })); }
-              if (passInput && p) { passInput.value = p; passInput.dispatchEvent(new Event('input', { bubbles: true })); passInput.dispatchEvent(new Event('change', { bubbles: true })); }
-            })();`,
-          });
-        } catch {
-          // Filling is best-effort; the game remains fully usable manually.
-        }
-      };
-
-      const listener = await InAppBrowser.addListener('browserPageLoaded', fillCredentials);
-      await InAppBrowser.openInWebView({
-        url,
-        showURL: true,
-        showToolbar: true,
-        closeButtonText: 'Schließen',
-        showNavigationButtons: true,
-        android: { hardwareBack: true, allowZoom: false, pauseMedia: true, isIsolated: false },
-      });
-      void listener;
-      return;
+      window.open(url, '_blank', 'noopener,noreferrer');
     } catch {
+      onFallback?.();
       try {
-        const { Browser } = await import('@capacitor/browser');
-        await Browser.open({ url });
-        return;
-      } catch {
-        onFallback?.();
         window.open(url, '_blank', 'noopener,noreferrer');
+      } catch {
+        // Nothing else to do here.
       }
     } finally {
       setBusy(false);
