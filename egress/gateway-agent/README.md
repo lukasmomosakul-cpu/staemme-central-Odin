@@ -1,28 +1,28 @@
 # Odin Gateway Agent
 
-Der Gateway-Agent ist die serverseitige Komponente zwischen Odin und einem eigenen Egress-Host.
+Der Gateway-Agent ist die serverseitige Komponente zwischen Odin und einem externen Egress-Host.
 
-## Ziel
+## Übergangsbetrieb
 
-`Endgerät -> WireGuard -> Odin Gateway -> Internet`
+Bis die Egress-Infrastruktur produktiv ist, verbindet sich jeder Spieler direkt mit Die Stämme über seine normale Internet-IP. Odin speichert bereits die gewünschte Network-Profile-Zuordnung, routet den Spielverkehr aber noch nicht über einen Gateway.
 
-Die WebApp kennt dabei nur den Gateway-Status und die Zuordnung. Private WireGuard-Schlüssel bleiben ausschließlich auf Gateway und Endgerät.
+## Read-only Spielintegration
 
-## Sicherheitsregeln
+Die erste Spielintegration läuft als Tampermonkey-Bridge im Browser und ist bewusst **read-only**. Sie kann sichtbare Spielinformationen melden: Welt, Spielaccount, Dörfer, Session-Status, Angriffsereignisse und Botschutz-Signale.
+
+Spielpasswörter werden nicht an Odin übertragen oder gespeichert. Die Bridge soll keine Captchas, Botschutz-Mechanismen oder andere Schutzmaßnahmen umgehen. Automatisierung wird erst nach einer separaten Prüfung der Spielregeln und mit klaren Sicherheitsgrenzen umgesetzt.
+
+## Zielarchitektur
+
+`Spielbrowser -> read-only Tampermonkey Bridge -> Odin Integration API -> Team-Dashboard`
+
+und später:
+
+`Spielaccount -> Network Profile -> Egress Node -> öffentliche IP`
+
+## Gateway-Sicherheit
 
 - Keine privaten Schlüssel in GitHub, Supabase oder Vercel speichern.
-- Keine Spielpasswörter im Gateway-Agent speichern.
 - Kein offener HTTP/SOCKS-Proxy.
-- Der Status-Endpunkt darf nur minimale Betriebsdaten liefern.
-- Für Produktion muss der Agent authentifiziert und TLS-geschützt betrieben werden.
-
-## Erste Testphase
-
-1. Einen eigenen Linux-Rechner/Server als Gateway verwenden.
-2. WireGuard installieren und als VPN-Gateway konfigurieren.
-3. IP-Forwarding und NAT aktivieren.
-4. Auf dem Client die WireGuard-Konfiguration importieren.
-5. Eine öffentliche IP prüfen.
-6. Erst danach das Gateway in `egress_nodes` registrieren.
-
-Die konkrete Gateway-Konfiguration hängt vom vorhandenen Internetanschluss und dessen öffentlicher IP ab. Diese Datei enthält absichtlich keine geheimen Schlüssel oder Beispiel-Credentials.
+- Gateway-API authentifizieren und TLS-geschützt betreiben.
+- Nur notwendige Betriebsdaten an Odin melden.
