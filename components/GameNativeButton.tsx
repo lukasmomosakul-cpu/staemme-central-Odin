@@ -34,9 +34,23 @@ export default function GameNativeButton({ url, onFallback }: Props) {
     }
   };
 
+  const openSystemBrowser = async () => {
+    try {
+      const { InAppBrowser } = await import('@capacitor/inappbrowser');
+      await InAppBrowser.openInExternalBrowser({ url });
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   return (
-    <button className="button" onClick={openNative} disabled={busy}>
-      {busy ? 'Spiel wird geöffnet …' : 'Spiel-Appansicht öffnen'}
-    </button>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <button className="button" onClick={openNative} disabled={busy}>
+        {busy ? 'Spiel wird geöffnet …' : 'Spiel in Odin öffnen'}
+      </button>
+      <button className="button secondary" onClick={openSystemBrowser} disabled={busy}>
+        Normalen Browser testen
+      </button>
+    </div>
   );
 }
