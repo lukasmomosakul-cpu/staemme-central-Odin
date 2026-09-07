@@ -2,26 +2,38 @@
 
 import { useState } from 'react';
 
-type Props = {
+ type Props = {
   url: string;
   username?: string;
   password?: string;
   onFallback?: () => void;
 };
 
-export default function GameNativeButton({ url, username, password, onFallback }: Props) {
+export default function GameNativeButton({ url, onFallback }: Props) {
   const [busy, setBusy] = useState(false);
 
   const openGame = async () => {
     setBusy(true);
     try {
-      const { Capacitor, registerPlugin } = await import('@capacitor/core');
+      const { Capacitor } = await import('@capacitor/core');
 
       if (Capacitor.isNativePlatform()) {
-        const GameWebView = registerPlugin<{
-          open: (options: { url: string; username?: string; password?: string }) => Promise<void>;
-        }>('GameWebView');
-        await GameWebView.open({ url, username, password });
+        const { InAppBrowser, DefaultWebViewOptions } = await import('@capacitor/inappbrowser');
+        await InAppBrowser.openInWebView({
+          url,
+          options: {
+            ...DefaultWebViewOptions,
+            showURL: false,
+            showToolbar: true,
+            closeButtonText: 'Odin schließen',
+            clearCache: false,
+            clearSessionCache: false,
+            mediaPlaybackRequiresUserAction: false,
+            android: {
+              isIsolated: false,
+            },
+          },
+        });
         return;
       }
 
