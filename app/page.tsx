@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { supabase } from '../lib/supabase';
 
 type Account = { name: string; world: string; status: string; device: string; member: string; network: string; attacks: number };
 const initialAccounts: Account[] = [
@@ -14,6 +15,21 @@ export default function Home() {
   const [accounts, setAccounts] = useState<Account[]>(initialAccounts);
   const [notice, setNotice] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) { setAuthChecked(true); return; }
+    supabase.auth.getSession().then(({ data }) => {
+      setUserEmail(data.session?.user?.email ?? null);
+      setAuthChecked(true);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserEmail(session?.user?.email ?? null);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
   const action = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 2500); };
   const addAccount = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -27,11 +43,18 @@ export default function Home() {
     setDialogOpen(false);
     action(`${name} wurde zur Teamzentrale Odin hinzugefügt`);
   };
+  const logout = async () => {
+    if (supabase) await supabase.auth.signOut();
+    window.location.href = '/login';
+  };
+
+  if (!authChecked) return <main className="authPage"><section className="authCard"><div className="authLogo">⚔</div><div className="eyebrow">TEAMZENTRALE ODIN</div><h1>Laden…</h1><p className="muted">Sitzung wird geprüft.</p></section></main>;
+
   return <div className="shell">
     <aside className="sidebar"><div className="brand">⚔ Teamzentrale Odin</div><nav className="nav">{nav.map(([x, href], i) => <a className={i === 0 ? 'active' : ''} href={href} key={x}>{x}</a>)}</nav></aside>
-    <div style={{ flex: 1, minWidth: 0 }}><div className="mobileNav"><strong>⚔ Teamzentrale Odin</strong><a href="#accounts" className="mobileAdd" aria-label="Account hinzufügen">＋</a></div>
+    <div style={{ flex: 1, minWidth: 0 }}><div className="mobileNav"><strong>⚔ Teamzentrale Odin</strong><div style={{display:'flex',gap:8}}><a href="/login" className="mobileAdd" aria-label="Anmelden">↪</a><a href="#accounts" className="mobileAdd" aria-label="Account hinzufügen">＋</a></div></div>
       <main className="main">
-        <header className="top"><div><div className="eyebrow">Teamzentrale Odin</div><h1 className="title">Dashboard</h1><div className="muted">Guten Morgen, Team Admin</div></div><div className="user">👤 Team Admin</div></header>
+        <header className="top"><div><div className="eyebrow">Teamzentrale Odin</div><h1 className="title">Dashboard</h1><div className="muted">{userEmail ? `Angemeldet als ${userEmail}` : 'Noch nicht angemeldet'}</div></div><div className="user">{userEmail ? <><span>👤 {userEmail}</span><button className="button secondary" onClick={logout}>Abmelden</button></> : <a className="button" href="/login">Anmelden</a>}</div></header>
         {notice && <div className="toast">✓ {notice}</div>}
         <section id="dashboard" className="grid"><Metric label="Accounts" value={String(accounts.length + 9)} note="im Team"/><Metric label="Online" value="8" note="aktuell verbunden"/><Metric label="Angriffe" value="3" note="offen" tone="danger"/><Metric label="Botschutz" value="1" note="Aufmerksamkeit nötig" tone="warning"/></section>
         <section id="accounts" className="section card"><SectionHead title="Accounts" button="+ Account hinzufügen" onClick={() => setDialogOpen(true)}/><div className="table-wrap"><table className="table"><thead><tr><th>Account</th><th>Welt</th><th>Status</th><th>Spieler</th><th>Gerät</th><th>Netzwerk</th><th>Angriffe</th></tr></thead><tbody>{accounts.map((a, index)=><tr key={`${a.name}-${index}`}><td><strong>{a.name}</strong></td><td>{a.world}</td><td><span className={'pill '+(a.status==='Online'?'online':'')}>{a.status==='Online'?'●':'○'} {a.status}</span></td><td>{a.member}</td><td>{a.device}</td><td>{a.network}</td><td>{a.attacks ? `⚔ ${a.attacks}` : '—'}</td></tr>)}</tbody></table></div></section>
