@@ -6,6 +6,8 @@
     "build": "next build",
     "start": "next start",
     "cap:sync": "cap sync",
+    "cap:add:ios": "cap add ios",
+    "cap:add:android": "cap add android",
     "cap:ios": "cap open ios",
     "cap:android": "cap open android"
   },
@@ -16,7 +18,9 @@
     "lucide-react": "latest",
     "@supabase/supabase-js": "latest",
     "@capacitor/core": "latest",
-    "@capacitor/inappbrowser": "latest"
+    "@capacitor/inappbrowser": "latest",
+    "@capacitor/ios": "latest",
+    "@capacitor/android": "latest"
   },
   "devDependencies": {
     "typescript": "latest",
