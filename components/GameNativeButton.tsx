@@ -26,14 +26,13 @@ export default function GameNativeButton({ url, username, password, onFallback }
       }
 
       window.open(url, '_blank', 'noopener,noreferrer');
-    } catch {
+    } catch (error) {
       onFallback?.();
-      // Never silently escape to the external browser from the Android app.
-      // If the native bridge is unavailable, keep the failure inside Odin.
       try {
         const { Capacitor } = await import('@capacitor/core');
         if (Capacitor.isNativePlatform()) {
-          window.alert('Die Stämme konnte nicht innerhalb von Odin geöffnet werden. Bitte die aktuelle Odin-App installieren.');
+          const message = error instanceof Error ? error.message : String(error);
+          window.alert(`Die Stämme konnte nicht innerhalb von Odin geöffnet werden.\n\nFehler: ${message}`);
           return;
         }
       } catch {
