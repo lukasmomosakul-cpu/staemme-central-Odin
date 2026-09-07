@@ -10,29 +10,13 @@ type Props = {
 export default function GameNativeButton({ url, onFallback }: Props) {
   const [busy, setBusy] = useState(false);
 
-  const openNative = async () => {
+  const openGame = async () => {
     setBusy(true);
     try {
+      // Die Stämme needs the real browser session for its login/session cookies.
+      // Android WebView/embedded sessions are isolated from the user's normal browser.
       const { InAppBrowser } = await import('@capacitor/inappbrowser');
-      await InAppBrowser.openInWebView({
-        url,
-        options: {
-          showURL: true,
-          showToolbar: true,
-          showNavigationButtons: true,
-          clearCache: false,
-          clearSessionCache: false,
-          closeButtonText: 'Odin',
-          android: {
-            hardwareBack: true,
-            isIsolated: false,
-          },
-          iOS: {
-            enableViewportScale: true,
-            allowsBackForwardNavigationGestures: true,
-          },
-        },
-      });
+      await InAppBrowser.openInExternalBrowser({ url });
     } catch {
       onFallback?.();
       window.open(url, '_blank', 'noopener,noreferrer');
@@ -41,23 +25,9 @@ export default function GameNativeButton({ url, onFallback }: Props) {
     }
   };
 
-  const openSystemBrowser = async () => {
-    try {
-      const { InAppBrowser } = await import('@capacitor/inappbrowser');
-      await InAppBrowser.openInExternalBrowser({ url });
-    } catch {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    }
-  };
-
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      <button className="button" onClick={openNative} disabled={busy}>
-        {busy ? 'Spiel wird geöffnet …' : 'Spiel in Odin öffnen'}
-      </button>
-      <button className="button secondary" onClick={openSystemBrowser} disabled={busy}>
-        Normalen Browser testen
-      </button>
-    </div>
+    <button className="button" onClick={openGame} disabled={busy}>
+      {busy ? 'Spiel wird geöffnet …' : 'Die Stämme öffnen'}
+    </button>
   );
 }
