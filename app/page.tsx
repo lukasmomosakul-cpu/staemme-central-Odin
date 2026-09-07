@@ -74,11 +74,25 @@ export default function Home() {
       const { data: profile } = await supabase.from('network_profiles').select('id').eq('team_id', teamId).eq('name', profileName).limit(1).maybeSingle();
       networkProfileId = profile?.id ?? null;
     }
-    const { error } = await supabase.from('game_accounts').insert({ team_id: teamId, name, world, network_profile_id: networkProfileId });
-    if (error) { action(`Account konnte nicht gespeichert werden: ${error.message}`); return; }
+    const { data: inserted, error } = await supabase.from('game_accounts')
+      .insert({ team_id: teamId, name, world, network_profile_id: networkProfileId })
+      .select('id, name, world, network_profile_id')
+      .single();
+    if (error || !inserted) { action(`Account konnte nicht gespeichert werden: ${error?.message ?? 'Unbekannter Fehler'}`); return; }
+
+    // Sofort lokal ergänzen, damit der neue Account ohne Seiten-Reload sichtbar wird.
+    setAccounts(prev => [{
+      id: inserted.id,
+      name: inserted.name,
+      world: inserted.world,
+      status: 'Offline',
+      device: '—',
+      member: roleLabel(role),
+      network: profileName,
+      attacks: 0
+    }, ...prev]);
+
     setDialogOpen(false); event.currentTarget.reset();
-    const user = (await supabase.auth.getUser()).data.user;
-    if (user) await loadTeamData(user.id);
     action(`${name} wurde dauerhaft zur Teamzentrale Odin hinzugefügt`);
   };
   const logout = async () => { if (supabase) await supabase.auth.signOut(); window.location.href = '/login'; };
