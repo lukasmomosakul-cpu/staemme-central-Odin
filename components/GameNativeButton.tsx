@@ -10,22 +10,14 @@ type Props = {
 export default function GameNativeButton({ url, onFallback }: Props) {
   const [busy, setBusy] = useState(false);
 
-  const openNative = async () => {
+  const openInAppBrowser = async () => {
     setBusy(true);
     try {
-      const { InAppBrowser } = await import('@capacitor/inappbrowser');
-      await InAppBrowser.openInWebView({
-        url,
-        options: {
-          showURL: true,
-          showToolbar: true,
-          showNavigationButtons: true,
-          closeButtonText: 'Odin',
-          allowsBackForwardNavigationGestures: true,
-          android: { hardwareBack: true },
-          iOS: { enableViewportScale: true, allowsBackForwardNavigationGestures: true },
-        },
-      });
+      // Use the platform browser container (Chrome Custom Tab / SFSafariViewController)
+      // instead of an embedded WebView. This keeps the game in the Odin app flow while
+      // giving the login page a normal browser session/cookie environment.
+      const { Browser } = await import('@capacitor/browser');
+      await Browser.open({ url });
     } catch {
       onFallback?.();
       window.open(url, '_blank', 'noopener,noreferrer');
@@ -45,7 +37,7 @@ export default function GameNativeButton({ url, onFallback }: Props) {
 
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      <button className="button" onClick={openNative} disabled={busy}>
+      <button className="button" onClick={openInAppBrowser} disabled={busy}>
         {busy ? 'Spiel wird geöffnet …' : 'Spiel in Odin öffnen'}
       </button>
       <button className="button secondary" onClick={openSystemBrowser} disabled={busy}>
