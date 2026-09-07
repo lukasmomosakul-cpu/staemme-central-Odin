@@ -3,7 +3,6 @@
 import { useState, type FormEvent } from 'react';
 
 type Account = { name: string; world: string; status: string; device: string; member: string; network: string; attacks: number };
-
 const initialAccounts: Account[] = [
   { name: 'SpielerA', world: 'Welt 201', status: 'Online', device: 'PC', member: 'Max', network: 'Profil A', attacks: 2 },
   { name: 'SpielerB', world: 'Welt 205', status: 'Online', device: 'Laptop', member: 'Lukas', network: 'Profil B', attacks: 0 },
@@ -26,13 +25,13 @@ export default function Home() {
     if (!name || !world) return;
     setAccounts(current => [...current, { name, world, status: 'Offline', device: '—', member, network, attacks: 0 }]);
     setDialogOpen(false);
-    action(`${name} wurde zur Team-Zentrale hinzugefügt`);
+    action(`${name} wurde zur Teamzentrale Odin hinzugefügt`);
   };
   return <div className="shell">
-    <aside className="sidebar"><div className="brand">⚔ Stämme Central</div><nav className="nav">{nav.map(([x, href], i) => <a className={i === 0 ? 'active' : ''} href={href} key={x}>{x}</a>)}</nav></aside>
-    <div style={{ flex: 1, minWidth: 0 }}><div className="mobileNav"><strong>⚔ Stämme Central</strong><a href="#accounts" className="mobileAdd" aria-label="Account hinzufügen">＋</a></div>
+    <aside className="sidebar"><div className="brand">⚔ Teamzentrale Odin</div><nav className="nav">{nav.map(([x, href], i) => <a className={i === 0 ? 'active' : ''} href={href} key={x}>{x}</a>)}</nav></aside>
+    <div style={{ flex: 1, minWidth: 0 }}><div className="mobileNav"><strong>⚔ Teamzentrale Odin</strong><a href="#accounts" className="mobileAdd" aria-label="Account hinzufügen">＋</a></div>
       <main className="main">
-        <header className="top"><div><div className="eyebrow">Team-Zentrale / Odin</div><h1 className="title">Dashboard</h1><div className="muted">Guten Morgen, Team Admin</div></div><div className="user">👤 Team Admin</div></header>
+        <header className="top"><div><div className="eyebrow">Teamzentrale Odin</div><h1 className="title">Dashboard</h1><div className="muted">Guten Morgen, Team Admin</div></div><div className="user">👤 Team Admin</div></header>
         {notice && <div className="toast">✓ {notice}</div>}
         <section id="dashboard" className="grid"><Metric label="Accounts" value={String(accounts.length + 9)} note="im Team"/><Metric label="Online" value="8" note="aktuell verbunden"/><Metric label="Angriffe" value="3" note="offen" tone="danger"/><Metric label="Botschutz" value="1" note="Aufmerksamkeit nötig" tone="warning"/></section>
         <section id="accounts" className="section card"><SectionHead title="Accounts" button="+ Account hinzufügen" onClick={() => setDialogOpen(true)}/><div className="table-wrap"><table className="table"><thead><tr><th>Account</th><th>Welt</th><th>Status</th><th>Spieler</th><th>Gerät</th><th>Netzwerk</th><th>Angriffe</th></tr></thead><tbody>{accounts.map(a=><tr key={a.name}><td><strong>{a.name}</strong></td><td>{a.world}</td><td><span className={'pill '+(a.status==='Online'?'online':'')}>{a.status==='Online'?'●':'○'} {a.status}</span></td><td>{a.member}</td><td>{a.device}</td><td>{a.network}</td><td>{a.attacks ? `⚔ ${a.attacks}` : '—'}</td></tr>)}</tbody></table></div></section>
@@ -47,10 +46,10 @@ export default function Home() {
       </main>
       <nav className="bottomNav" aria-label="Mobile Navigation">{[['⌂','Dashboard','#dashboard'],['♟','Accounts','#accounts'],['👥','Team','#team'],['⋯','Mehr','#settings']].map(([icon,label,href]) => <a href={href} key={label}><span>{icon}</span><small>{label}</small></a>)}</nav>
     </div>
-    {dialogOpen && <div className="modalBackdrop" role="presentation" onMouseDown={() => setDialogOpen(false)}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="add-account-title" onMouseDown={e => e.stopPropagation()}><div className="modalHead"><div><div className="eyebrow">Team-Zentrale</div><h2 id="add-account-title">Account hinzufügen</h2></div><button className="iconButton" onClick={() => setDialogOpen(false)} aria-label="Schließen">×</button></div><form onSubmit={addAccount}><label className="field">Accountname<input name="name" placeholder="z. B. Odin123" required autoFocus /></label><label className="field">Welt<input name="world" placeholder="z. B. Welt 201" required /></label><label className="field">Spieler<select name="member" defaultValue="Max"><option>Max</option><option>Lukas</option><option>Team Admin</option></select></label><label className="field">Netzwerkprofil<select name="network" defaultValue="Direkt"><option>Direkt</option><option>Profil A</option><option>Profil B</option></select></label><div className="modalActions"><button type="button" className="button secondary" onClick={() => setDialogOpen(false)}>Abbrechen</button><button type="submit" className="button">Account hinzufügen</button></div></form></div></div>}
+    {dialogOpen && <div className="modalBackdrop" role="presentation" onMouseDown={() => setDialogOpen(false)}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="add-account-title" onMouseDown={e => e.stopPropagation()}><div className="modalHead"><div><div className="eyebrow">Teamzentrale Odin</div><h2 id="add-account-title">Account hinzufügen</h2></div><button className="iconButton" onClick={() => setDialogOpen(false)} aria-label="Schließen">×</button></div><form onSubmit={addAccount}><label className="field">Accountname<input name="name" placeholder="z. B. Odin123" required autoFocus /></label><label className="field">Welt<input name="world" placeholder="z. B. Welt 201" required /></label><label className="field">Spieler<select name="member" defaultValue="Max"><option>Max</option><option>Lukas</option><option>Team Admin</option></select></label><label className="field">Netzwerkprofil<select name="network" defaultValue="Direkt"><option>Direkt</option><option>Profil A</option><option>Profil B</option></select></label><div className="modalActions"><button type="button" className="button secondary" onClick={() => setDialogOpen(false)}>Abbrechen</button><button type="submit" className="button">Account hinzufügen</button></div></form></div></div>}
   </div>;
 }
-function Metric({label,value,note,tone}:{label:string,value:string,note:string,tone?:string}){return <div className="card"><div className="muted">{label}</div><div className={'metric '+(tone||'')}>{value}</div><div className="muted">{note}</div></div>}
+function Metric({label,value,note,tone}:{label:string,value:string,note:string;tone?:string}){return <div className="card"><div className="muted">{label}</div><div className={'metric '+(tone||'')}>{value}</div><div className="muted">{note}</div></div>}
 function SectionHead({title,button,onClick}:{title:string;button?:string;onClick?:()=>void}){return <div className="sectionhead"><h2>{title}</h2>{button?<button className="button" onClick={onClick}>{button}</button>:<span className="muted">Heute</span>}</div>}
 function Row({icon,title,meta}:{icon:string;title:string;meta:string}){return <div className="event"><span>{icon}</span><div style={{flex:1}}><strong>{title}</strong><div className="muted">{meta}</div></div></div>}
 function Mini({title,meta,status}:{title:string;meta:string;status:string}){return <div className="card"><strong>{title}</strong><div className="muted" style={{margin:'6px 0'}}>{meta}</div><span className="pill">{status}</span></div>}
