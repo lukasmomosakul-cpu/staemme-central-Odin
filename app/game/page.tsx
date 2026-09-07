@@ -102,32 +102,13 @@ function GamePageContent() {
           <div className="sectionhead">
             <div>
               <h1 style={{ margin: 0, fontSize: 'clamp(24px,6vw,36px)' }}>🎮 Die Stämme</h1>
-              <div className="muted" style={{ marginTop: 5 }}>{email ? `Angemeldet als ${email}` : 'Nicht angemeldet'}</div>
+              <div className="muted" style={{ marginTop: 5 }}>{email ? 'Angemeldet' : 'Nicht angemeldet'}</div>
             </div>
-            <span className="pill">{accounts.length} Account{accounts.length === 1 ? '' : 's'}</span>
+            {selected && <span className="pill">{selected.name} · {selected.world}</span>}
           </div>
 
-          <p className="muted" style={{ marginTop: 8 }}>Wähle den Team-Spielaccount, mit dem du jetzt spielen möchtest.</p>
-
-          {accounts.length > 0 && (
-            <div style={{ display: 'grid', gap: 8, marginTop: 14 }}>
-              {accounts.map(account => (
-                <button
-                  key={account.id}
-                  type="button"
-                  onClick={() => setSelectedId(account.id)}
-                  className={account.id === selectedId ? 'button' : 'button secondary'}
-                  style={{ width: '100%', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}
-                >
-                  <span>👤 <strong>{account.name}</strong><span className="muted"> · {account.world}</span></span>
-                  <span>{account.id === selectedId ? '✓ Ausgewählt' : 'Auswählen'}</span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {loading && <div className="muted" style={{ marginTop: 14 }}>Accounts werden geladen …</div>}
-          {!loading && accounts.length === 0 && <div className="event" style={{ marginTop: 14 }}><span>ℹ️</span><div className="muted">Keine Spielaccounts vorhanden. Lege zuerst einen Account in der Teamzentrale an.</div></div>}
+          {loading && <div className="muted" style={{ marginTop: 14 }}>Account wird geladen …</div>}
+          {!loading && !selected && !error && <div className="event" style={{ marginTop: 14 }}><span>ℹ️</span><div className="muted">Kein Spielaccount ausgewählt. Bitte zuerst einen Account in der Teamzentrale öffnen.</div></div>}
           {error && <div className="event" style={{ marginTop: 12 }}><span>⚠️</span><div className="muted">{error}</div></div>}
 
           {selected && (
@@ -145,7 +126,7 @@ function GamePageContent() {
             <GameNativeButton url={normalizedUrl} />
           </div>
           <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
-            Das Spiel wird auf Android in einem In-App-WebView geöffnet. Der ausgewählte Account bleibt als letzter Spielaccount gespeichert.
+            Das Spiel wird auf Android in einem In-App-WebView geöffnet. Der Account wurde bereits in der Teamzentrale ausgewählt.
           </div>
         </section>
 
