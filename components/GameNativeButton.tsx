@@ -9,7 +9,7 @@ type Props = {
   onFallback?: () => void;
 };
 
-export default function GameNativeButton({ url, onFallback }: Props) {
+export default function GameNativeButton({ url, username, password, onFallback }: Props) {
   const [busy, setBusy] = useState(false);
 
   const openGame = async () => {
@@ -17,11 +17,12 @@ export default function GameNativeButton({ url, onFallback }: Props) {
     try {
       const native = typeof window !== 'undefined' && 'Capacitor' in window;
 
-      // In the Android app we deliberately navigate the existing WebView to the game.
-      // This is the most reliable way to keep Die Stämme inside Odin and avoids
-      // version-dependent behavior of external browser plugins.
       if (native) {
-        window.location.assign(url);
+        const { registerPlugin } = await import('@capacitor/core');
+        const GameWebView = registerPlugin<{
+          open: (options: { url: string; username?: string; password?: string }) => Promise<void>;
+        }>('GameWebView');
+        await GameWebView.open({ url, username, password });
         return;
       }
 
