@@ -19,5 +19,3 @@ create policy "users can insert own preferences" on public.user_preferences
 for insert with check (user_id = auth.uid());
 create policy "users can update own preferences" on public.user_preferences
 for update using (user_id = auth.uid()) with check (user_id = auth.uid());
-
-after_user_preferences_updated;
