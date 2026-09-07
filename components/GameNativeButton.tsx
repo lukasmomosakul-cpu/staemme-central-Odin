@@ -15,10 +15,9 @@ export default function GameNativeButton({ url, username, password, onFallback }
   const openGame = async () => {
     setBusy(true);
     try {
-      const native = typeof window !== 'undefined' && 'Capacitor' in window;
+      const { Capacitor, registerPlugin } = await import('@capacitor/core');
 
-      if (native) {
-        const { registerPlugin } = await import('@capacitor/core');
+      if (Capacitor.isNativePlatform()) {
         const GameWebView = registerPlugin<{
           open: (options: { url: string; username?: string; password?: string }) => Promise<void>;
         }>('GameWebView');
@@ -29,6 +28,17 @@ export default function GameNativeButton({ url, username, password, onFallback }
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch {
       onFallback?.();
+      // Never silently escape to the external browser from the Android app.
+      // If the native bridge is unavailable, keep the failure inside Odin.
+      try {
+        const { Capacitor } = await import('@capacitor/core');
+        if (Capacitor.isNativePlatform()) {
+          window.alert('Die Stämme konnte nicht innerhalb von Odin geöffnet werden. Bitte die aktuelle Odin-App installieren.');
+          return;
+        }
+      } catch {
+        // Fall through to normal web fallback.
+      }
       try {
         window.open(url, '_blank', 'noopener,noreferrer');
       } catch {
