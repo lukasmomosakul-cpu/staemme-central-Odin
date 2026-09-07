@@ -16,13 +16,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Enable pnpm
         run: corepack enable && corepack prepare pnpm@10.15.0 --activate
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+
+      - name: Prepare Capacitor web directory
+        run: |
+          mkdir -p out
+          printf '<!doctype html><html><body></body></html>' > out/index.html
 
       - name: Generate native Android project
         run: |
