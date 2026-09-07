@@ -6,36 +6,35 @@ Diese Komponente ist die serverseitige Grundlage für das Ziel, einen Spielaccou
 
 `Spielaccount -> Network Profile -> Egress Gateway -> feste öffentliche IP -> Zielserver`
 
-Die WebApp speichert bereits die Zuordnung des Spielaccounts zu einem `network_profile_id`. Die Egress-Schicht führt dazu eine eigene Gateway-Registry (`supabase/migrations/007_egress_nodes.sql`). Zugangsdaten und Proxy-Secrets bleiben ausschließlich serverseitig.
+Die WebApp speichert die Zuordnung des Spielaccounts zu einem `network_profile_id`. Die Egress-Schicht führt dazu eine eigene Gateway-Registry. Zugangsdaten und Proxy-Secrets bleiben ausschließlich serverseitig.
 
-## Was jetzt vorhanden ist
+## Provider-unabhängig
 
-- `egress/server.js`: kleiner Health-/Status-Dienst ohne zusätzliche Runtime-Abhängigkeiten.
-- `/health`: öffentlicher, nicht-sensitiver Health-Check.
-- `/status`: mit Bearer-Token geschützter Status-Check.
-- `.env.example`: Konfiguration für Port, Gateway-Name und Secret.
-- `egress_nodes`: Supabase-Tabelle für Gateway, Network Profile, Status und feste öffentliche IP.
+Die WebApp wird nicht an Oracle, NordVPN oder einen anderen Anbieter gekoppelt. Ein Gateway erhält Provider, öffentliche IP, Status und technische Kennung als Metadaten. Dadurch können wir den Infrastruktur-Anbieter später austauschen, ohne die Accountverwaltung neu zu bauen.
 
-## Feste IP
+## Sicherheitsprinzip
 
-Eine feste öffentliche IPv4 lässt sich nicht durch Supabase, Vercel oder einen normalen Browser erzwingen. Dafür braucht der Egress-Host eine persistente öffentliche IPv4. Oracle Cloud dokumentiert reservierte öffentliche IPv4-Adressen, die auch nach Neustarts bzw. Redeployments am zugewiesenen privaten Interface erhalten bleiben. Die Always-Free-Compute-Ressourcen können dafür als günstiger Startpunkt dienen; Kapazität und Kontingente sind jedoch nicht garantiert. citeturn0search3turn0search0
+- Keine Provider- oder Gateway-Secrets im Browser.
+- Die WebApp verwaltet nur Metadaten und Status.
+- Keine offene Proxy-Funktionalität ohne Authentifizierung.
+- Ein Gateway darf erst als aktiv gelten, wenn der Gateway selbst seinen Zustand bestätigt.
 
-## Sicherheitsgrenze
+## Geplanter Transport
 
-Der Dienst ist absichtlich **noch kein offener Proxy**. Zuerst wird ein einzelner Gateway-Host registriert und überwacht. Erst danach bauen wir die eigentliche Routing-Schicht für zugewiesene Network Profiles.
+Für Endgeräte wird ein VPN-/Tunnel-Ansatz (z. B. WireGuard) gegenüber einem offenen HTTP-Proxy bevorzugt. So kann der relevante Spielverkehr über das Gateway geführt werden, ohne Gateway-Geheimnisse in der WebApp zu speichern.
 
-Ein normaler Browser auf iOS/Android kann seinen gesamten Traffic nicht einfach durch eine WebApp auf diesen Gateway zwingen. Für den eigentlichen Spielverkehr brauchen wir später eine klar definierte Client-/Proxy-Lösung. Die feste IP wird dabei als stabile Netzwerkidentität behandelt, nicht als Umgehung von Bot-/Anti-Cheat-Systemen.
+## Feste IP – Realitätscheck
 
-## Start lokal
+Eine dauerhaft kostenlose und uneingeschränkte Quelle für beliebig viele dedizierte öffentliche IPv4-Adressen gibt es nicht. Kostenlose Cloud-Angebote haben Limits, Kapazitätsgrenzen oder Nutzungsbedingungen. Deshalb bleibt die Egress-Schicht austauschbar.
 
-```bash
-cd egress
-cp .env.example .env
-# GATEWAY_TOKEN in .env setzen
-node server.js
-```
+## Nächster Infrastruktur-Schritt
 
-Dann:
+1. Einen kleinen Gateway-Host mit fester öffentlicher IPv4 bereitstellen.
+2. WireGuard bzw. einen vergleichbaren sicheren Tunnel konfigurieren.
+3. Health-Check und sichere Gateway-Registrierung anbinden.
+4. Einen einzelnen Test-Account über das Gateway routen.
+5. Erst danach Account-spezifisches Routing und mehrere IPs untersuchen.
 
-- `GET /health` → Health-Check
-- `GET /status` mit `Authorization: Bearer <GATEWAY_TOKEN>` → geschützter Status
+Ein normaler Browser auf iOS/Android kann seinen gesamten Traffic nicht allein durch eine WebApp auf diesen Gateway zwingen. Für den eigentlichen Spielverkehr brauchen wir deshalb eine klar definierte Client-/Tunnel-Lösung.
+
+Die feste IP wird als stabile Netzwerkidentität behandelt und nicht als Mechanismus zur Umgehung von Bot-/Anti-Cheat-Systemen.
