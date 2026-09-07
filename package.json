@@ -18,6 +18,7 @@
     "lucide-react": "latest",
     "@supabase/supabase-js": "latest",
     "@capacitor/core": "latest",
+    "@capacitor/browser": "latest",
     "@capacitor/inappbrowser": "latest",
     "@capacitor/ios": "latest",
     "@capacitor/android": "latest"
