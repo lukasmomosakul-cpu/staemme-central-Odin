@@ -2,62 +2,22 @@
 
 import { useState } from 'react';
 
- type Props = {
+type Props = {
   url: string;
   username?: string;
   password?: string;
   onFallback?: () => void;
 };
 
-export default function GameNativeButton({ url, onFallback }: Props) {
+export default function GameNativeButton({ url }: Props) {
   const [busy, setBusy] = useState(false);
 
-  const openGame = async () => {
+  const openGame = () => {
     setBusy(true);
-    try {
-      const { Capacitor } = await import('@capacitor/core');
-
-      if (Capacitor.isNativePlatform()) {
-        const { InAppBrowser, DefaultWebViewOptions } = await import('@capacitor/inappbrowser');
-        await InAppBrowser.openInWebView({
-          url,
-          options: {
-            ...DefaultWebViewOptions,
-            showURL: false,
-            showToolbar: true,
-            closeButtonText: 'Odin schließen',
-            clearCache: false,
-            clearSessionCache: false,
-            mediaPlaybackRequiresUserAction: false,
-            android: {
-              isIsolated: false,
-            },
-          },
-        });
-        return;
-      }
-
-      window.open(url, '_blank', 'noopener,noreferrer');
-    } catch (error) {
-      onFallback?.();
-      try {
-        const { Capacitor } = await import('@capacitor/core');
-        if (Capacitor.isNativePlatform()) {
-          const message = error instanceof Error ? error.message : String(error);
-          window.alert(`Die Stämme konnte nicht innerhalb von Odin geöffnet werden.\n\nFehler: ${message}`);
-          return;
-        }
-      } catch {
-        // Fall through to normal web fallback.
-      }
-      try {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      } catch {
-        // Nothing else to do here.
-      }
-    } finally {
-      setBusy(false);
-    }
+    // Deliberately use the app's own WebView. This avoids any custom Capacitor
+    // plugin and therefore cannot fall back to an external browser or the old
+    // GameWebView plugin.
+    window.location.assign(url);
   };
 
   return (
