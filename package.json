@@ -20,6 +20,7 @@
     "@capacitor/core": "latest",
     "@capacitor/browser": "latest",
     "@capacitor/inappbrowser": "latest",
+    "@capawesome/capacitor-in-app-browser": "latest",
     "@capacitor/ios": "latest",
     "@capacitor/android": "latest"
   },
