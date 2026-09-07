@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import GameNativeButton from '../../components/GameNativeButton';
 
 const DEFAULT_GAME_URL = 'https://www.die-staemme.de/';
 
@@ -33,7 +34,7 @@ export default function GamePage() {
   const openGame = () => {
     setActiveUrl(normalizedUrl);
     setFrameKey((value) => value + 1);
-    setNotice('Die originale Spielseite wird im eingebetteten Bereich geladen. Wenn der Login dort nach dem Absenden abbricht, liegt das an der Browser-Sicherheits-/Cookie-Behandlung der eingebetteten Fremdseite.');
+    setNotice('Web-Fallback: Die iframe-Einbettung kann beim Login durch Cookie-, Redirect- oder Frame-Regeln der Spielseite eingeschränkt sein.');
   };
 
   return (
@@ -44,7 +45,7 @@ export default function GamePage() {
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
           <div style={{minWidth:0}}>
             <h1 style={{marginBottom:6,fontSize:'clamp(24px,6vw,36px)',lineHeight:1.1}}>🎮 Die Stämme in Odin</h1>
-            <p className="muted" style={{marginTop:0}}>Die originale Spielseite wird hier angezeigt.</p>
+            <p className="muted" style={{marginTop:0}}>Web-Fallback plus vorbereitete native Spielansicht.</p>
           </div>
           <span className="pill online">Normale IP</span>
         </div>
@@ -60,7 +61,8 @@ export default function GamePage() {
             </label>
           </div>
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}}>
-            <button className="button" onClick={openGame}>Spiel in Odin öffnen</button>
+            <GameNativeButton url={normalizedUrl} onFallback={() => setNotice('Native Spielansicht ist nur im Odin-Native-Container verfügbar. Der Browser-Fallback wurde geöffnet.')} />
+            <button className="button secondary" onClick={openGame}>Web-Fallback</button>
             <a className="button secondary" href={normalizedUrl} target="_blank" rel="noopener noreferrer">Extern öffnen</a>
           </div>
           {notice && <div className="toast" style={{marginTop:10}}>{notice}</div>}
@@ -68,7 +70,7 @@ export default function GamePage() {
 
         <section className="card" style={{marginTop:14,padding:0,overflow:'hidden'}}>
           <div style={{padding:'10px 12px',borderBottom:'1px solid rgba(255,255,255,.08)',display:'flex',justifyContent:'space-between',gap:8,alignItems:'center'}}>
-            <div style={{minWidth:0}}><strong>Spiel-Fenster</strong><div className="muted" style={{fontSize:11,marginTop:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'70vw'}}>{activeUrl}</div></div>
+            <div style={{minWidth:0}}><strong>Web-Fallback</strong><div className="muted" style={{fontSize:11,marginTop:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'70vw'}}>{activeUrl}</div></div>
             <button className="button secondary" onClick={openGame}>Neu laden</button>
           </div>
           <div style={{width:'100%',height:'calc(100vh - 250px)',minHeight:'min(620px,70vh)',background:'#111827'}}>
@@ -83,8 +85,9 @@ export default function GamePage() {
         </section>
 
         <section className="card section" style={{marginTop:14}}>
-          <div className="sectionhead"><h2>Hinweis zum Login</h2></div>
-          <p className="muted" style={{marginBottom:0}}>Die Einbettung selbst funktioniert nur, soweit der Spielserver das zulässt. Ein Login innerhalb einer fremden iframe-Seite kann durch Cookie-, Redirect- oder Frame-Sicherheitsregeln blockiert werden. Odin liest dabei keine Spielpasswörter oder Session-Cookies aus.</p>
+          <div className="sectionhead"><h2>Was wir jetzt geändert haben</h2></div>
+          <p className="muted" style={{marginBottom:8}}>Die Web-App bleibt als Fallback erhalten. Zusätzlich ist jetzt die native In-App-WebView-Schnittstelle vorbereitet. In einem Capacitor-Container kann Odin die Spielseite als eigene WebView öffnen, statt sie als Cross-Origin-iframe einzubetten.</p>
+          <p className="muted" style={{marginBottom:0}}>Das ist bewusst kein Proxy und keine Umgehung von Spielserver-Schutzmechanismen. Odin speichert weiterhin keine Spielpasswörter oder Session-Cookies.</p>
         </section>
 
         {!email && <p className="muted" style={{marginTop:14}}>Bitte zuerst in der Teamzentrale anmelden.</p>}
