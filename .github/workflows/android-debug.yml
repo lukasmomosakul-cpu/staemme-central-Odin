@@ -39,11 +39,12 @@ jobs:
       - name: Align Android minimum SDK
         working-directory: android
         run: |
-          if grep -Rqs 'minSdkVersion 24' .; then
-            grep -RIl 'minSdkVersion 24' . | xargs sed -i 's/minSdkVersion 24/minSdkVersion 26/g'
-          fi
+          # Capacitor's generated project normally stores this in variables.gradle.
+          # Patch both common forms so the InAppBrowser dependency (API 26+) is satisfied.
+          find . -type f \( -name '*.gradle' -o -name '*.gradle.kts' -o -name '*.xml' \) -print0 | \
+            xargs -0 sed -i -E 's/minSdkVersion[[:space:]]*=[[:space:]]*24/minSdkVersion = 26/g; s/minSdkVersion[[:space:]]+24/minSdkVersion 26/g'
           echo 'Effective minSdkVersion values:'
-          grep -RIn 'minSdkVersion' . --include='*.gradle' --include='*.gradle.kts' || true
+          grep -RIn 'minSdkVersion' . --include='*.gradle' --include='*.gradle.kts' --include='*.xml' || true
 
       - name: Setup Java
         uses: actions/setup-java@v4
