@@ -36,11 +36,61 @@ jobs:
           pnpm cap:add:android
           pnpm cap:sync
 
+      - name: Install Odin native browser bridge
+        run: |
+          mkdir -p android/app/src/main/java/de/teamzentrale/odin
+          cat > android/app/src/main/java/de/teamzentrale/odin/ExternalBrowserPlugin.kt <<'EOF'
+          package de.teamzentrale.odin
+
+          import android.content.ActivityNotFoundException
+          import android.content.Intent
+          import android.net.Uri
+          import com.getcapacitor.Plugin
+          import com.getcapacitor.PluginCall
+          import com.getcapacitor.annotation.CapacitorPlugin
+          import com.getcapacitor.PluginMethod
+
+          @CapacitorPlugin(name = "ExternalBrowser")
+          class ExternalBrowserPlugin : Plugin() {
+              @PluginMethod
+              fun open(call: PluginCall) {
+                  val url = call.getString("url")
+                  if (url.isNullOrBlank()) {
+                      call.reject("Missing URL")
+                      return
+                  }
+
+                  try {
+                      val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                          addCategory(Intent.CATEGORY_BROWSABLE)
+                      }
+                      activity.startActivity(intent)
+                      call.resolve()
+                  } catch (e: ActivityNotFoundException) {
+                      call.reject("No browser available", e)
+                  } catch (e: Exception) {
+                      call.reject("Could not open browser", e)
+                  }
+              }
+          }
+          EOF
+          cat > android/app/src/main/java/de/teamzentrale/odin/MainActivity.kt <<'EOF'
+          package de.teamzentrale.odin
+
+          import android.os.Bundle
+          import com.getcapacitor.BridgeActivity
+
+          class MainActivity : BridgeActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  registerPlugin(ExternalBrowserPlugin::class.java)
+                  super.onCreate(savedInstanceState)
+              }
+          }
+          EOF
+
       - name: Align Android minimum SDK
         working-directory: android
         run: |
-          # Capacitor's generated project normally stores this in variables.gradle.
-          # Patch both common forms so the InAppBrowser dependency (API 26+) is satisfied.
           find . -type f \( -name '*.gradle' -o -name '*.gradle.kts' -o -name '*.xml' \) -print0 | \
             xargs -0 sed -i -E 's/minSdkVersion[[:space:]]*=[[:space:]]*24/minSdkVersion = 26/g; s/minSdkVersion[[:space:]]+24/minSdkVersion 26/g'
           echo 'Effective minSdkVersion values:'
