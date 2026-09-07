@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 import GameNativeButton from '../../components/GameNativeButton';
@@ -9,7 +9,7 @@ const DEFAULT_GAME_URL = 'https://www.die-staemme.de/';
 const STORAGE_KEY = 'odin-selected-game-account';
 type Account = { id: string; name: string; world: string };
 
-export default function GamePage() {
+function GamePageContent() {
   const searchParams = useSearchParams();
   const requestedAccount = searchParams.get('account');
   const [email, setEmail] = useState<string | null>(null), [accounts, setAccounts] = useState<Account[]>([]), [selectedId, setSelectedId] = useState('');
@@ -19,4 +19,8 @@ export default function GamePage() {
   const selected=accounts.find(a=>a.id===selectedId)??null;
   const normalizedUrl=useMemo(()=>{try{const value=gameUrl.trim();if(!value)return DEFAULT_GAME_URL;const parsed=new URL(value);return parsed.protocol==='https:'?parsed.toString():DEFAULT_GAME_URL}catch{return DEFAULT_GAME_URL}},[gameUrl]);
   return <main style={{minHeight:'100vh',padding:'clamp(10px,3vw,16px)',background:'var(--bg,#0b1020)',color:'var(--text,#f5f7fb)'}}><div style={{maxWidth:900,margin:'0 auto',width:'100%'}}><a href="/" className="muted">← Zur Teamzentrale</a><div className="eyebrow" style={{marginTop:18}}>TEAMZENTRALE ODIN</div><section className="card section" style={{marginTop:14}}><div className="sectionhead"><div><h1 style={{margin:0,fontSize:'clamp(24px,6vw,36px)'}}>🎮 Die Stämme</h1><div className="muted" style={{marginTop:5}}>{email?`Angemeldet als ${email}`:'Nicht angemeldet'}</div></div></div><p className="muted" style={{marginTop:8}}>Alle Teammitglieder können jeden Team-Account auswählen.</p><label style={{display:'block',marginTop:14}}>Team-Spielaccount<select value={selectedId} onChange={e=>setSelectedId(e.target.value)} disabled={loading||accounts.length===0}>{accounts.length===0&&<option value="">{loading?'Accounts werden geladen …':'Keine Accounts vorhanden'}</option>}{accounts.map(a=><option value={a.id} key={a.id}>{a.name} · {a.world}</option>)}</select></label>{selected&&<div className="event" style={{marginTop:12}}><span>👤</span><div style={{flex:1}}><strong>{selected.name}</strong><div className="muted">{selected.world} · gemeinsamer Team-Account</div></div><span className="pill">ausgewählt</span></div>}{error&&<div className="event" style={{marginTop:12}}><span>⚠️</span><div className="muted">{error}</div></div>}<div style={{marginTop:16}}><GameNativeButton url={normalizedUrl}/></div></section><section className="card section" style={{marginTop:14}}><div className="sectionhead"><h2>Werkzeuge</h2><a className="button secondary" href="/scripts">🧩 Scripts</a></div><div className="muted">Script-Verwaltung, Benachrichtigungen und weitere Einstellungen werden zentral über Odin aufgebaut.</div></section></div></main>;
+}
+
+export default function GamePage() {
+  return <Suspense fallback={<main style={{minHeight:'100vh',padding:16,background:'var(--bg,#0b1020)',color:'var(--text,#f5f7fb)'}}><div className="muted">Spiel wird geladen …</div></main>}><GamePageContent /></Suspense>;
 }
