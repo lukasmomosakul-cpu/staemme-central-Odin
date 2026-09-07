@@ -36,9 +36,141 @@ jobs:
           pnpm cap:add:android
           pnpm cap:sync
 
-      - name: Install Odin native browser bridge
+      - name: Install Odin native game WebView
         run: |
           mkdir -p android/app/src/main/java/de/teamzentrale/odin
+          cat > android/app/src/main/java/de/teamzentrale/odin/GameWebViewPlugin.kt <<'EOF'
+          package de.teamzentrale.odin
+
+          import android.content.Intent
+          import com.getcapacitor.Plugin
+          import com.getcapacitor.PluginCall
+          import com.getcapacitor.annotation.CapacitorPlugin
+          import com.getcapacitor.PluginMethod
+
+          @CapacitorPlugin(name = "GameWebView")
+          class GameWebViewPlugin : Plugin() {
+              @PluginMethod
+              fun open(call: PluginCall) {
+                  val url = call.getString("url")
+                  if (url.isNullOrBlank()) {
+                      call.reject("Missing URL")
+                      return
+                  }
+
+                  val intent = Intent(activity, GameWebViewActivity::class.java).apply {
+                      putExtra("url", url)
+                      putExtra("username", call.getString("username") ?: "")
+                      putExtra("password", call.getString("password") ?: "")
+                  }
+                  activity.startActivity(intent)
+                  call.resolve()
+              }
+          }
+          EOF
+
+          cat > android/app/src/main/java/de/teamzentrale/odin/GameWebViewActivity.kt <<'EOF'
+          package de.teamzentrale.odin
+
+          import android.app.Activity
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.view.ViewGroup
+          import android.webkit.CookieManager
+          import android.webkit.WebChromeClient
+          import android.webkit.WebSettings
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class GameWebViewActivity : Activity() {
+              private lateinit var webView: WebView
+              private var username = ""
+              private var password = ""
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  username = intent.getStringExtra("username") ?: ""
+                  password = intent.getStringExtra("password") ?: ""
+                  val url = intent.getStringExtra("url") ?: "https://www.die-staemme.de/"
+
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(Color.BLACK)
+                  }
+
+                  val bar = TextView(this).apply {
+                      text = "  Die Stämme    ✕ Schließen"
+                      setTextColor(Color.WHITE)
+                      setBackgroundColor(Color.rgb(55, 43, 28))
+                      textSize = 16f
+                      setPadding(12, 18, 12, 18)
+                      setOnClickListener { finish() }
+                  }
+                  root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+                  webView = WebView(this)
+                  webView.settings.apply {
+                      javaScriptEnabled = true
+                      domStorageEnabled = true
+                      databaseEnabled = true
+                      loadsImagesAutomatically = true
+                      mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                      userAgentString = userAgentString + " OdinGameWebView/1.0"
+                  }
+                  CookieManager.getInstance().setAcceptCookie(true)
+                  CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+                  webView.webChromeClient = WebChromeClient()
+                  webView.webViewClient = object : WebViewClient() {
+                      override fun onPageFinished(view: WebView, pageUrl: String) {
+                          super.onPageFinished(view, pageUrl)
+                          fillLoginFields()
+                      }
+                  }
+
+                  root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                  setContentView(root)
+                  webView.loadUrl(url)
+              }
+
+              private fun fillLoginFields() {
+                  if (username.isBlank() && password.isBlank()) return
+
+                  val user = escapeJs(username)
+                  val pass = escapeJs(password)
+                  val script = """
+                      (() => {
+                        const u = '$user';
+                        const p = '$pass';
+                        const setValue = (el, value) => {
+                          if (!el) return;
+                          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                          if (setter) setter.call(el, value); else el.value = value;
+                          el.dispatchEvent(new Event('input', { bubbles: true }));
+                          el.dispatchEvent(new Event('change', { bubbles: true }));
+                          el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        };
+                        const userEl = document.querySelector('#user') || document.querySelector('input[name="username"]');
+                        const passEl = document.querySelector('#password') || document.querySelector('input[name="password"]');
+                        setValue(userEl, u);
+                        setValue(passEl, p);
+                        if (userEl) userEl.focus();
+                      })();
+                  """.trimIndent()
+
+                  webView.postDelayed({ webView.evaluateJavascript(script, null) }, 250)
+              }
+
+              private fun escapeJs(value: String): String = value
+                  .replace("\\", "\\\\")
+                  .replace("'", "\\'")
+                  .replace("\n", "\\n")
+                  .replace("\r", "\\r")
+          }
+          EOF
+
           cat > android/app/src/main/java/de/teamzentrale/odin/ExternalBrowserPlugin.kt <<'EOF'
           package de.teamzentrale.odin
 
@@ -59,12 +191,10 @@ jobs:
                       call.reject("Missing URL")
                       return
                   }
-
                   try {
-                      val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                      activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                           addCategory(Intent.CATEGORY_BROWSABLE)
-                      }
-                      activity.startActivity(intent)
+                      })
                       call.resolve()
                   } catch (e: ActivityNotFoundException) {
                       call.reject("No browser available", e)
@@ -74,6 +204,7 @@ jobs:
               }
           }
           EOF
+
           cat > android/app/src/main/java/de/teamzentrale/odin/MainActivity.kt <<'EOF'
           package de.teamzentrale.odin
 
@@ -83,6 +214,7 @@ jobs:
           class MainActivity : BridgeActivity() {
               override fun onCreate(savedInstanceState: Bundle?) {
                   registerPlugin(ExternalBrowserPlugin::class.java)
+                  registerPlugin(GameWebViewPlugin::class.java)
                   super.onCreate(savedInstanceState)
               }
           }
