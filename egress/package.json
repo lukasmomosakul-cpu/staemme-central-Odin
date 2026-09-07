@@ -1,0 +1,9 @@
+{
+  "name": "odin-egress-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sicherer Health-/Status-Dienst für Teamzentrale Odin Egress-Gateways",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
