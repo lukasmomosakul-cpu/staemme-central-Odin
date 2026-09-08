@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 
-const APP_VERSION='1.1.1';
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || 'dev';
 const GODBOT_URL = 'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js';
 const STORAGE_KEY = 'odin-script-library';
 
@@ -74,8 +74,8 @@ export default function ScriptsPage(){
   return <main style={{minHeight:'100vh',padding:'clamp(10px,3vw,18px)',background:'var(--bg,#0b1020)',color:'var(--text,#f5f7fb)'}}><div style={{maxWidth:900,margin:'0 auto'}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><a href="/" className="muted">← Zur Teamzentrale</a><span className="muted">Odin v{APP_VERSION}</span></div>
     <div className="eyebrow" style={{marginTop:18}}>TEAMZENTRALE ODIN</div>
-    <section className="card section" style={{marginTop:14}}><div className="sectionhead"><div><h1 style={{margin:0}}>🧩 Scripts</h1><div className="muted">Scripts werden jetzt teamweit in Supabase gespeichert und beim Öffnen des Spiels an die native WebView übergeben.</div></div><a href="/game" className="button secondary">🎮 Spiel</a></div>
-      <div className="event" style={{marginTop:14}}><span>🟢</span><div><strong>Ausführung aktiviert</strong><div className="muted">Aktivierte HTTPS-Scripts werden von Odin im Spiel-WebView geladen. GodBot ist standardmäßig aktiviert.</div></div></div>
+    <section className="card section" style={{marginTop:14}}><div className="sectionhead"><div><h1 style={{margin:0}}>🧩 Scripts</h1><div className="muted">Scripts werden teamweit in Supabase gespeichert und beim Öffnen des Spiels an die native WebView übergeben.</div></div><a href="/game" className="button secondary">🎮 Spiel</a></div>
+      <div className="event" style={{marginTop:14}}><span>🟢</span><div><strong>Ausführung aktiviert</strong><div className="muted">Aktivierte HTTPS-Scripts werden von Odin im Spiel-WebView geladen. GodBot kann hier vollständig aktiviert oder deaktiviert werden.</div></div></div>
     </section>
     <section className="card section" style={{marginTop:14}}><div className="sectionhead"><h2>Script-Bibliothek</h2><span className="muted">{scripts.length} Einträge</span></div>
       <div className="list">{scripts.map(s=><div className="event" key={s.id}><span>{s.enabled?'🟢':'⚪'}</span><div style={{flex:1,minWidth:0}}><strong>{s.name}</strong><div className="muted" style={{wordBreak:'break-all'}}>{s.type} · {s.source}</div></div><button className={'button '+(s.enabled?'':'secondary')} onClick={()=>toggle(s.id)}>{s.enabled?'Deaktivieren':'Aktivieren'}</button></div>)}</div>
