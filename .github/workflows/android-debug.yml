@@ -67,7 +67,6 @@ jobs:
           p = Path('app/build.gradle')
           s = p.read_text()
 
-          # Capacitor/plugin defaults must use API 26.
           s = re.sub(r'\bminSdkVersion\s*=\s*\d+', 'minSdkVersion = 26', s)
           s = re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', s)
           s = re.sub(r'\bminSdk\s*=\s*\d+', 'minSdk = 26', s)
@@ -85,7 +84,6 @@ jobs:
           if not re.search(r'\bminSdkVersion\s+26\b|\bminSdk\s+26\b', s):
               s = s.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 26', 1)
 
-          # Make the generated debug APK use the stable release key.
           signing = '''\n    signingConfigs {\n        odinRelease {\n            storeFile rootProject.file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }\n'''
           if 'odinRelease {' not in s:
               s = s.replace('android {', 'android {' + signing, 1)
@@ -101,7 +99,6 @@ jobs:
           p.write_text(s)
           PY
 
-          # Never allow a generated storeFile to point anywhere except the checked-out keystore.
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -130,8 +127,15 @@ jobs:
       - name: Build and verify APK
         working-directory: android
         shell: bash
+        env:
+          ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
+          ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
+          ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          test -n "$ODIN_KEYSTORE_PASSWORD"
+          test -n "$ODIN_KEY_ALIAS"
+          test -n "$ODIN_KEY_PASSWORD"
           ./gradlew assembleDebug -PminSdkVersion=26
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -F "versionName='${{ steps.version.outputs.version }}'"
