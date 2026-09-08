@@ -136,18 +136,21 @@ jobs:
               final String u=JSONObject.quote(username), p=JSONObject.quote(password);
               String js="javascript:(function(){"+
                 "var u="+u+",p="+p+";"+
-                "function setValue(el,val){if(!el)return;var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;if(setter)setter.call(el,val);else el.value=val;el.focus();el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));el.blur();}"+
+                "function setValue(el,val){if(!el)return;var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;if(setter)setter.call(el,val);else el.value=val;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}"+
                 "function fill(){"+
                 "var a=Array.prototype.slice.call(document.querySelectorAll('input'));"+
-                "var user=a.find(function(x){var n=(x.name||'').toLowerCase(),i=(x.id||'').toLowerCase(),c=(x.autocomplete||'').toLowerCase(),ph=(x.placeholder||'').toLowerCase();return x.type!=='hidden'&&(n==='username'||n==='user'||i==='username'||i==='user'||i.indexOf('login')>=0||c==='username'||ph.indexOf('benutzer')>=0||ph.indexOf('username')>=0||ph.indexOf('user')>=0);})||a.find(function(x){return x.type==='text'||x.type==='email';});"+
-                "var pass=a.find(function(x){var n=(x.name||'').toLowerCase(),i=(x.id||'').toLowerCase(),ph=(x.placeholder||'').toLowerCase();return x.type==='password'||n.indexOf('pass')>=0||i.indexOf('pass')>=0||ph.indexOf('pass')>=0;});"+
+                "var user=a.find(function(x){var n=(x.name||'').toLowerCase(),i=(x.id||'').toLowerCase(),c=(x.autocomplete||'').toLowerCase(),ph=(x.placeholder||'').toLowerCase();return x.type!=='hidden'&&(n==='username'||n==='user'||n==='login'||i==='username'||i==='user'||i.indexOf('login')>=0||c==='username'||ph.indexOf('benutzer')>=0||ph.indexOf('username')>=0||ph.indexOf('login')>=0||ph.indexOf('user')>=0);})||a.find(function(x){return x.type==='text'||x.type==='email';});"+
+                "var pass=a.find(function(x){var n=(x.name||'').toLowerCase(),i=(x.id||'').toLowerCase(),ph=(x.placeholder||'').toLowerCase(),a=(x.autocomplete||'').toLowerCase();return x.type==='password'||n.indexOf('pass')>=0||i.indexOf('pass')>=0||ph.indexOf('pass')>=0||a==='current-password';});"+
                 "if(user&&u)setValue(user,u);if(pass&&p)setValue(pass,p);return !!(user&&pass);}"+
-                "var n=0,t=setInterval(function(){if(fill()||++n>40)clearInterval(t);},500);fill();})()";
+                "var n=0,t=setInterval(function(){if(fill()||++n>60)clearInterval(t);},500);fill();})()";
               v.evaluateJavascript(js,null);
             }
 
             private void loadEnabledScripts(WebView v) {
               if (managedScripts.isEmpty()) return;
+              String path = v.getUrl() == null ? "" : v.getUrl();
+              boolean inWorld = path.matches("(?i).*[/]game[.]php(?:[/].*)?.*") || path.matches("(?i).*[?&]screen=[^&]+.*[?&]village=[^&]+.*");
+              if (!inWorld) return;
               for (String source : managedScripts) {
                 new Thread(() -> {
                   try {
