@@ -59,8 +59,11 @@ jobs:
         working-directory: android
         shell: bash
         run: |
+          set -euo pipefail
           MAIN=$(find app/src/main -type f -name 'MainActivity.java' | head -n 1)
+          test -n "$MAIN"
           PKG=$(sed -n 's/^package[[:space:]]\+\(.*\);/\1/p' "$MAIN" | head -n 1)
+          test -n "$PKG"
           DIR=$(dirname "$MAIN")
           mkdir -p "$DIR" app/src/main/assets app/src/main/res/xml
           cp ../native/game-scripts.js app/src/main/assets/game-scripts.js
@@ -162,12 +165,28 @@ jobs:
           EOF
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('app/src/main/AndroidManifest.xml'); s=p.read_text()
-          if 'android:fullBackupContent' not in s:
-              s=s.replace('<application', '<application android:allowBackup="true" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"', 1)
-          if 'GameWebViewActivity' not in s:
-              s=s.replace('</application>', '    <activity android:name=".GameWebViewActivity" android:exported="false" />\n    </application>')
-          p.write_text(s)
+          import re
+          import xml.etree.ElementTree as ET
+          p=Path('app/src/main/AndroidManifest.xml')
+          s=p.read_text(encoding='utf-8')
+          if 'android:allowBackup=' not in s:
+              m=re.search(r'<application\b', s)
+              if not m:
+                  raise SystemExit('Could not find <application> in AndroidManifest.xml')
+              end=s.find('>', m.start())
+              if end < 0:
+                  raise SystemExit('Malformed <application> opening tag')
+              s=s[:end]+' android:allowBackup="true" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"'+s[end:]
+          if 'android:name=".GameWebViewActivity"' not in s:
+              pos=s.rfind('</application>')
+              if pos < 0:
+                  raise SystemExit('Could not find </application> in AndroidManifest.xml')
+              s=s[:pos]+'    <activity android:name=".GameWebViewActivity" android:exported="false" />\n'+s[pos:]
+          p.write_text(s,encoding='utf-8')
+          ET.parse(p)
+          print('--- AndroidManifest.xml ---')
+          print(s)
+          print('--- XML VALID ---')
           PY
       - name: Align Android minimum SDK
         working-directory: android
@@ -220,8 +239,8 @@ jobs:
           echo '--- APK version ---'
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package:|versionCode=|versionName='
       - name: Give APK a unique filename
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${{ steps.version.outputs.version }}.apk"
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${GITHUB_RUN_NUMBER}.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: teamzentrale-odin-${{ steps.version.outputs.version }}
-          path: android/app/build/outputs/apk/debug/teamzentrale-odin-${{ steps.version.outputs.version }}.apk
+          name: teamzentrale-odin-debug-apk-${{ github.run_number }}
+          path: android/app/build/outputs/apk/debug/teamzentrale-odin-${{ github.run_number }}.apk
