@@ -1,18 +1,15 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
 
 const GAME_URL = 'https://www.die-staemme.de/';
 
 export default function GameTopPage() {
-  const searchParams = useSearchParams();
-
   useEffect(() => {
-    const account = searchParams.get('account');
+    const account = new URLSearchParams(window.location.search).get('account');
     if (account) localStorage.setItem('odin-selected-game-account', account);
     window.location.replace(GAME_URL);
-  }, [searchParams]);
+  }, []);
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0b1020', color: '#f5f7fb', fontFamily: 'system-ui, sans-serif' }}>
