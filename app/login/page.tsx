@@ -1,20 +1,36 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 
 export default function LoginPage() {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  useEffect(() => {
+    try {
+      const native = (window as any).Android;
+      if (!native?.getSavedAppLogin) return;
+      const raw = native.getSavedAppLogin();
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved?.email) setEmail(String(saved.email));
+      if (saved?.password) setPassword(String(saved.password));
+    } catch {}
+  }, []);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMessage('');
     setBusy(true);
     const form = new FormData(e.currentTarget);
-    const email = String(form.get('user') || '').trim();
-    const password = String(form.get('password') || '');
+    const nextEmail = String(form.get('user') || '').trim();
+    const nextPassword = String(form.get('password') || '');
+    setEmail(nextEmail);
+    setPassword(nextPassword);
 
     if (!supabase) {
       setMessage('Supabase ist noch nicht verbunden. Bitte die Umgebungsvariablen setzen.');
@@ -23,11 +39,15 @@ export default function LoginPage() {
     }
 
     if (mode === 'login') {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) setMessage(error.message);
-      else window.location.href = '/';
+      const { error } = await supabase.auth.signInWithPassword({ email: nextEmail, password: nextPassword });
+      if (error) {
+        setMessage(error.message);
+      } else {
+        try { (window as any).Android?.saveAppLogin?.(nextEmail, nextPassword); } catch {}
+        window.location.href = '/';
+      }
     } else {
-      const { error } = await supabase.auth.signUp({ email, password });
+      const { error } = await supabase.auth.signUp({ email: nextEmail, password: nextPassword });
       setMessage(error ? error.message : 'Registrierung erfolgreich. Prüfe ggf. deine E-Mail zur Bestätigung.');
       if (!error) setMode('login');
     }
@@ -60,11 +80,11 @@ export default function LoginPage() {
         <form onSubmit={submit} className="authForm">
           <label className="authField">
             <span>E-Mail-Adresse</span>
-            <input name="user" type="email" autoComplete="email" required placeholder="name@beispiel.de" />
+            <input name="user" type="email" autoComplete="email" required placeholder="name@beispiel.de" value={email} onChange={e => setEmail(e.target.value)} />
           </label>
           <label className="authField">
             <span>Passwort</span>
-            <input name="password" type="password" autoComplete={isLogin ? 'current-password' : 'new-password'} minLength={6} required placeholder="Mindestens 6 Zeichen" />
+            <input name="password" type="password" autoComplete={isLogin ? 'current-password' : 'new-password'} minLength={6} required placeholder="Mindestens 6 Zeichen" value={password} onChange={e => setPassword(e.target.value)} />
           </label>
           <button className="button authButton" type="submit" disabled={busy}>
             {busy ? 'Bitte warten…' : isLogin ? 'Anmelden' : 'Konto erstellen'}
