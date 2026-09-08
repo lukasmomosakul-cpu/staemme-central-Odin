@@ -58,32 +58,45 @@ jobs:
           test -n "$ODIN_KEY_PASSWORD"
           echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
+
+          # The native generator historically contained over-escaped Python regexes.
+          # Normalize only those regex literals before executing the generator.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('../native/build-android.sh')
+          s = p.read_text()
+          replacements = {
+              r"r'<manifest\\b'": r"r'<manifest\b'",
+              r"r'<manifest\\b[^>]*>'": r"r'<manifest\b[^>]*>'",
+              r"r'<uses-sdk\\b[^>]*/>'": r"r'<uses-sdk\b[^>]*/>'",
+              r"r'\\bversionCode\\s+\\d+'": r"r'\bversionCode\s+\d+'",
+              r"r'\\bversionName\\s+\"[^\"]+\"'": r"r'\bversionName\s+\"[^\"]+\"'",
+              r"r'\\bminSdkVersion\\s+\\d+'": r"r'\bminSdkVersion\s+\d+'",
+              r"r'\\bminSdk\\s+\\d+'": r"r'\bminSdk\s+\d+'",
+          }
+          for old, new in replacements.items():
+              s = s.replace(old, new)
+          p.write_text(s)
+          PY
+
           bash ../native/build-android.sh
 
           python3 - <<'PY'
           from pathlib import Path
-          import re
-
           main = next(Path('app/src/main').rglob('MainActivity.java'))
-          s = main.read_text()
-          old = 'Context.RECEIVER_NOT_EXPORTED'
-          if old in s:
-              s = s.replace(old, 'Context.RECEIVER_EXPORTED')
+          s = main.read_text().replace('Context.RECEIVER_NOT_EXPORTED', 'Context.RECEIVER_EXPORTED')
           main.write_text(s)
           PY
 
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           p = Path('app/build.gradle')
           s = p.read_text()
-
           s = re.sub(r'\bminSdkVersion\s*=\s*\d+', 'minSdkVersion = 26', s)
           s = re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', s)
           s = re.sub(r'\bminSdk\s*=\s*\d+', 'minSdk = 26', s)
           s = re.sub(r'\bminSdk\s+\d+', 'minSdk 26', s)
-
           v = Path('variables.gradle')
           if v.exists():
               t = v.read_text()
@@ -92,14 +105,20 @@ jobs:
               t = re.sub(r'\bminSdk\s*=\s*\d+', 'minSdk = 26', t)
               t = re.sub(r'\bminSdk\s+\d+', 'minSdk 26', t)
               v.write_text(t)
-
           if not re.search(r'\bminSdkVersion\s+26\b|\bminSdk\s+26\b', s):
               s = s.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 26', 1)
-
-          signing = '''\n    signingConfigs {\n        odinRelease {\n            storeFile rootProject.file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }\n'''
+          signing = '''
+    signingConfigs {
+        odinRelease {
+            storeFile rootProject.file("odin-release.jks")
+            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")
+            keyAlias System.getenv("ODIN_KEY_ALIAS")
+            keyPassword System.getenv("ODIN_KEY_PASSWORD")
+        }
+    }
+'''
           if 'odinRelease {' not in s:
               s = s.replace('android {', 'android {' + signing, 1)
-
           if re.search(r'buildTypes\s*\{', s):
               if re.search(r'debug\s*\{[^}]*signingConfig', s, re.S):
                   s = re.sub(r'(debug\s*\{[^}]*?signingConfig\s+)[^\s}]+', r'\1signingConfigs.odinRelease', s, count=1, flags=re.S)
@@ -107,7 +126,6 @@ jobs:
                   s = s.replace('buildTypes {', 'buildTypes {\n        debug { signingConfig signingConfigs.odinRelease }', 1)
           else:
               s += '\nandroid { buildTypes { debug { signingConfig signingConfigs.odinRelease } } }\n'
-
           p.write_text(s)
           PY
 
