@@ -10,17 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Enable pnpm
         run: corepack enable && corepack prepare pnpm@10.15.0 --activate
-
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
-
       - name: Read app version
         id: version
         run: |
@@ -29,122 +25,79 @@ jobs:
           echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "ODIN VERSION: $VERSION"
-
       - name: Build web app
         env:
           NEXT_PUBLIC_APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           rm -rf .next
-          echo "Building web app with NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION"
           pnpm build
-          test -n "$NEXT_PUBLIC_APP_VERSION"
           grep -R -F -m1 -- "$NEXT_PUBLIC_APP_VERSION" .next >/dev/null 2>&1
-          echo "Verified web build contains app version: $NEXT_PUBLIC_APP_VERSION"
-
       - name: Generate Capacitor Android project
         run: pnpm cap:add:android && pnpm cap:sync
-
-      - name: Verify Capacitor web assets version
+      - name: Verify Android web assets version
         working-directory: android
         env:
           ODIN_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          grep -R -F -m1 -- "$ODIN_VERSION" app/src/main/assets/public >/dev/null 2>&1
-          echo "Verified Android web assets contain app version: $ODIN_VERSION"
-
+        run: grep -R -F -m1 -- "$ODIN_VERSION" app/src/main/assets/public >/dev/null 2>&1
       - name: Configure Android app version
         working-directory: android
         env:
           ODIN_VERSION: ${{ steps.version.outputs.version }}
-        shell: bash
         run: |
-          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import os, re
+          import os,re
           p=Path('app/build.gradle'); s=p.read_text(); v=os.environ['ODIN_VERSION']; a=v.split('.'); code=int(a[0])*1000000+int(a[1])*1000+int(a[2])
-          if not re.search(r'\bversionCode\s+\d+',s): raise SystemExit('Could not find versionCode')
-          if not re.search(r'\bversionName\s+"[^"]+"',s): raise SystemExit('Could not find versionName')
           s=re.sub(r'\bversionCode\s+\d+',f'versionCode {code}',s,count=1)
           s=re.sub(r'\bversionName\s+"[^"]+"',f'versionName "{v}"',s,count=1)
           p.write_text(s)
           PY
-
       - name: Configure embedded Die-Stämme WebView
         working-directory: android
-        shell: bash
         run: |
           set -euo pipefail
-          MAIN=$(find app/src/main -type f -name 'MainActivity.java' | head -n 1)
+          MAIN=$(find app/src/main -type f -name 'MainActivity.java' | head -n1)
           test -n "$MAIN"
-          PKG=$(sed -n 's/^package[[:space:]]\+\(.*\);/\1/p' "$MAIN" | head -n 1)
-          test -n "$PKG"
+          PKG=$(sed -n 's/^package[[:space:]]\+\(.*\);/\1/p' "$MAIN" | head -n1)
           DIR=$(dirname "$MAIN")
           mkdir -p "$DIR" app/src/main/assets app/src/main/res/xml
           cp ../native/game-scripts.js app/src/main/assets/game-scripts.js
           cat > app/src/main/res/xml/backup_rules.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <full-backup-content>
-              <include domain="sharedpref" path="odin_app_login.xml" />
-          </full-backup-content>
+          <full-backup-content><include domain="sharedpref" path="odin_app_login.xml" /></full-backup-content>
           EOF
           cat > app/src/main/res/xml/data_extraction_rules.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <data-extraction-rules>
-              <cloud-backup><include domain="sharedpref" path="odin_app_login.xml" /></cloud-backup>
-              <device-transfer><include domain="sharedpref" path="odin_app_login.xml" /></device-transfer>
-          </data-extraction-rules>
+          <data-extraction-rules><cloud-backup><include domain="sharedpref" path="odin_app_login.xml" /></cloud-backup><device-transfer><include domain="sharedpref" path="odin_app_login.xml" /></device-transfer></data-extraction-rules>
           EOF
           cat > "$DIR/GameWebViewActivity.java" <<EOF
           package $PKG;
-          import android.app.Activity;
-          import android.content.Intent;
-          import android.os.Bundle;
-          import android.graphics.Color;
-          import android.webkit.CookieManager;
-          import android.webkit.JavascriptInterface;
-          import android.webkit.WebChromeClient;
-          import android.webkit.WebResourceRequest;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-          import android.widget.LinearLayout;
-          import android.widget.TextView;
-          import org.json.JSONArray;
-          import org.json.JSONObject;
-          import java.io.*;
-          import java.net.HttpURLConnection;
-          import java.net.URL;
-          import java.util.*;
+          import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.graphics.Color; import android.webkit.*; import android.widget.*; import org.json.*; import java.io.*; import java.net.*; import java.util.*;
           public class GameWebViewActivity extends Activity {
-            private static final String GAME_URL="https://www.die-staemme.de/";
             private WebView webView; private String username="",password=""; private final List<String> managedScripts=new ArrayList<>();
             @Override public void onCreate(Bundle state){super.onCreate(state); username=getIntent().getStringExtra("username"); password=getIntent().getStringExtra("password"); if(username==null)username=""; if(password==null)password=""; String sj=getIntent().getStringExtra("scriptsJson"); if(sj!=null)try{JSONArray a=new JSONArray(sj);for(int i=0;i<a.length();i++){String src=a.getJSONObject(i).optString("source","");if(src.startsWith("https://"))managedScripts.add(src);}}catch(Exception ignored){}
-              LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); TextView toolbar=new TextView(this); toolbar.setText("  Odin  •  Die Stämme     ↓ Minimieren"); toolbar.setTextColor(Color.WHITE); toolbar.setTextSize(16); toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL); toolbar.setBackgroundColor(Color.rgb(11,16,32)); toolbar.setPadding(16,0,16,0); toolbar.setOnClickListener(v->minimizeToApp());
-              root.addView(toolbar,new LinearLayout.LayoutParams(-1,52));
-              webView=new WebView(this); WebSettings ws=webView.getSettings(); ws.setJavaScriptEnabled(true); ws.setDomStorageEnabled(true); ws.setDatabaseEnabled(true); ws.setSupportZoom(false); ws.setBuiltInZoomControls(false); ws.setDisplayZoomControls(false); ws.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW); CookieManager cm=CookieManager.getInstance(); cm.setAcceptCookie(true); cm.setAcceptThirdPartyCookies(webView,true); webView.setWebChromeClient(new WebChromeClient()); webView.addJavascriptInterface(new OdinBridge(),"OdinNative"); webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;} @Override public void onPageFinished(WebView v,String url){injectManagedScripts(v);prefillLogin(v);loadEnabledScripts(v);}}); root.addView(webView,new LinearLayout.LayoutParams(-1,0,1)); setContentView(root); webView.loadUrl(GAME_URL); }
-            private void minimizeToApp(){getSharedPreferences("odin_game_state",MODE_PRIVATE).edit().putBoolean("minimized",true).apply(); Intent i=new Intent(this,MainActivity.class); i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT); startActivity(i);}
+              LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);TextView toolbar=new TextView(this);toolbar.setText("  Odin  •  Die Stämme     ↓ Minimieren");toolbar.setTextColor(Color.WHITE);toolbar.setTextSize(16);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setBackgroundColor(Color.rgb(11,16,32));toolbar.setPadding(16,0,16,0);toolbar.setOnClickListener(v->minimizeToApp());root.addView(toolbar,new LinearLayout.LayoutParams(-1,52));
+              webView=new WebView(this);WebSettings ws=webView.getSettings();ws.setJavaScriptEnabled(true);ws.setDomStorageEnabled(true);ws.setDatabaseEnabled(true);ws.setSupportZoom(false);ws.setBuiltInZoomControls(false);ws.setDisplayZoomControls(false);CookieManager cm=CookieManager.getInstance();cm.setAcceptCookie(true);cm.setAcceptThirdPartyCookies(webView,true);webView.setWebChromeClient(new WebChromeClient());webView.addJavascriptInterface(new OdinBridge(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}@Override public void onPageFinished(WebView v,String url){injectManagedScripts(v);prefillLogin(v);loadEnabledScripts(v);}});root.addView(webView,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);webView.loadUrl("https://www.die-staemme.de/");}
+            private void minimizeToApp(){getSharedPreferences("odin_game_state",MODE_PRIVATE).edit().putBoolean("minimized",true).apply();Intent i=new Intent(this,MainActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);startActivity(i);}
             private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript("(function(){"+b+"})()",null);}catch(Exception ignored){}}
-            private void prefillLogin(WebView v){if(username.isEmpty()&&password.isEmpty())return;final String u=JSONObject.quote(username),p=JSONObject.quote(password);String js="(function(){var U="+u+",P="+p+";function put(e,val){if(!e)return;try{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');if(d&&d.set)d.set.call(e,val);else e.value=val;}catch(x){e.value=val;}['input','change','blur'].forEach(function(n){e.dispatchEvent(new Event(n,{bubbles:true}));});}function fu(){var s=['input[name=\"username\"]','input[name=\"user\"]','input[name=\"login\"]','input[id=\"username\"]','input[id=\"user\"]','input[autocomplete=\"username\"]','input[type=\"email\"]','input[type=\"text\"]'];for(var i=0;i<s.length;i++){var e=document.querySelector(s[i]);if(e)return e;}return null;}function fp(){var s=['input[type=\"password\"]','input[name*=\"pass\" i]','input[id*=\"pass\" i]','input[autocomplete=\"current-password\"]'];for(var i=0;i<s.length;i++){var e=document.querySelector(s[i]);if(e)return e;}return null;}function f(){var a=fu(),b=fp();if(a&&U)put(a,U);if(b&&P)put(b,P);return !!(a&&b);}var n=0;function l(){if(f()||++n>=120)clearInterval(t);}var t=setInterval(l,250);f();[100,500,1000,2000,4000].forEach(function(ms){setTimeout(f,ms);});})()"; v.evaluateJavascript(js,null);}
-            private void loadEnabledScripts(WebView v){if(managedScripts.isEmpty())return;String path=v.getUrl()==null?"":v.getUrl();boolean inWorld=path.matches("(?i).*[/]game[.]php(?:[/].*)?.*")||path.matches("(?i).*[?&]screen=[^&]+.*[?&]village=[^&]+.*");if(!inWorld)return;for(String source:managedScripts)new Thread(()->{try{String code=downloadScript(source);if(code==null||code.isEmpty())return;String q=JSONObject.quote(code);runOnUiThread(()->v.evaluateJavascript("(function(){try{eval("+q+");}catch(e){console.error('[Odin] Scriptfehler',e);}})()",null));}catch(Exception ignored){}}).start();}
-            private String downloadScript(String source){HttpURLConnection c=null;try{c=(HttpURLConnection)new URL(source).openConnection();c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Teamzentrale-Odin/1.0 Android WebView");c.setRequestProperty("Accept","*/*");int st=c.getResponseCode();if(st<200||st>=300)return null;InputStream in=new BufferedInputStream(c.getInputStream());ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);in.close();return out.toString("UTF-8");}catch(Exception e){return null;}finally{if(c!=null)c.disconnect();}}
+            private void prefillLogin(WebView v){if(username.isEmpty()&&password.isEmpty())return;String u=JSONObject.quote(username),p=JSONObject.quote(password);String js="(function(){var U="+u+",P="+p+";function put(e,val){if(!e)return;try{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');if(d&&d.set)d.set.call(e,val);else e.value=val;}catch(x){e.value=val;}['input','change','blur'].forEach(function(n){e.dispatchEvent(new Event(n,{bubbles:true}));});}function f(){var a=document.querySelector('input[name=\"username\"],input[name=\"user\"],input[id=\"username\"],input[autocomplete=\"username\"],input[type=\"email\"],input[type=\"text\"]'),b=document.querySelector('input[type=\"password\"],input[name*=\"pass\" i],input[id*=\"pass\" i]');if(a&&U)put(a,U);if(b&&P)put(b,P);return !!(a&&b);}var n=0;function l(){if(f()||++n>120)clearInterval(t);}var t=setInterval(l,250);f();})();";v.evaluateJavascript(js,null);}
+            private void loadEnabledScripts(WebView v){if(managedScripts.isEmpty())return;String path=v.getUrl()==null?"":v.getUrl();if(!path.matches("(?i).*[/]game[.]php.*"))return;for(String source:managedScripts)new Thread(()->{try{HttpURLConnection c=(HttpURLConnection)new URL(source).openConnection();c.setConnectTimeout(15000);c.setReadTimeout(30000);if(c.getResponseCode()<200||c.getResponseCode()>=300)return;BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream()));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();String q=JSONObject.quote(b.toString());runOnUiThread(()->v.evaluateJavascript("(function(){try{eval("+q+")}catch(e){}})()",null));}catch(Exception ignored){}}).start();}
             @Override public void onBackPressed(){if(webView!=null&&webView.canGoBack())webView.goBack();else minimizeToApp();}
             private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
           }
           EOF
           cat > "$MAIN" <<EOF
           package $PKG;
-          import android.app.DownloadManager; import android.content.*; import android.net.Uri; import android.os.*; import android.webkit.*; import com.getcapacitor.BridgeActivity; import org.json.JSONObject;
-          public class MainActivity extends BridgeActivity {
+          import android.app.DownloadManager;import android.content.*;import android.net.Uri;import android.os.*;import android.webkit.*;import com.getcapacitor.BridgeActivity;import org.json.*;
+          public class MainActivity extends BridgeActivity{
             private static final String PREFS="odin_app_login",GAME_STATE="odin_game_state";
-            @Override public void onCreate(Bundle state){super.onCreate(state); WebView v=getBridge().getWebView(); WebSettings s=v.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);CookieManager cm=CookieManager.getInstance();cm.setAcceptCookie(true);cm.setAcceptThirdPartyCookies(v,true);v.addJavascriptInterface(new Object(){
+            @Override public void onCreate(Bundle state){super.onCreate(state);WebView v=getBridge().getWebView();WebSettings s=v.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);CookieManager cm=CookieManager.getInstance();cm.setAcceptCookie(true);cm.setAcceptThirdPartyCookies(v,true);v.addJavascriptInterface(new Object(){
               @JavascriptInterface public String getSavedAppLogin(){try{SharedPreferences p=getSharedPreferences(PREFS,MODE_PRIVATE);JSONObject o=new JSONObject();o.put("email",p.getString("email",""));o.put("password",p.getString("password",""));return o.toString();}catch(Exception e){return "";}}
               @JavascriptInterface public void saveAppLogin(String e,String p){getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString("email",e==null?"":e).putString("password",p==null?"":p).apply();}
               @JavascriptInterface public void clearSavedAppLogin(){getSharedPreferences(PREFS,MODE_PRIVATE).edit().clear().apply();}
               @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){getSharedPreferences(GAME_STATE,MODE_PRIVATE).edit().putBoolean("minimized",false).apply();Intent i=new Intent(MainActivity.this,GameWebViewActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);i.putExtra("accountId",accountId);i.putExtra("username",username==null?"":username);i.putExtra("password",password==null?"":password);i.putExtra("scriptsJson",scriptsJson==null?"[]":scriptsJson);startActivity(i);}
-              @JavascriptInterface public void updateApk(){try{String url="https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk";DownloadManager dm=(DownloadManager)getSystemService(Context.DOWNLOAD_SERVICE);if(dm==null)return;DownloadManager.Request req=new DownloadManager.Request(Uri.parse(url));req.setTitle("Odin wird aktualisiert");req.setDescription("Neueste Version wird heruntergeladen");req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);req.setMimeType("application/vnd.android.package-archive");req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"odin-update.apk");long id=dm.enqueue(req);Handler h=new Handler(Looper.getMainLooper());Runnable check=new Runnable(){public void run(){DownloadManager.Query q=new DownloadManager.Query();q.setFilterById(id);android.database.Cursor c=dm.query(q);if(c!=null)try{if(c.moveToFirst()){int st=c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));if(st==DownloadManager.STATUS_SUCCESSFUL){Uri u=dm.getUriForDownloadedFile(id);if(u!=null){Intent in=new Intent(Intent.ACTION_VIEW);in.setDataAndType(u,"application/vnd.android.package-archive");in.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK);startActivity(in);}return;}if(st==DownloadManager.STATUS_FAILED)return;}}finally{c.close();}h.postDelayed(this,500);}};h.post(check);}catch(Exception ignored){}}
+              @JavascriptInterface public void updateApk(){try{DownloadManager dm=(DownloadManager)getSystemService(Context.DOWNLOAD_SERVICE);DownloadManager.Request r=new DownloadManager.Request(Uri.parse("https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk"));r.setTitle("Odin wird aktualisiert");r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);r.setMimeType("application/vnd.android.package-archive");r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"odin-update.apk");dm.enqueue(r);}catch(Exception ignored){}}
             },"Android");}
           }
           EOF
@@ -153,24 +106,18 @@ jobs:
           import re,xml.etree.ElementTree as ET
           p=Path('app/src/main/AndroidManifest.xml');s=p.read_text()
           if 'android.permission.REQUEST_INSTALL_PACKAGES' not in s:
-            m=re.search(r'<manifest\b',s); e=s.find('>',m.start()); s=s[:e+1]+'\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'+s[e+1:]
-          if 'android:allowBackup=' not in s:
-            m=re.search(r'<application\b',s);e=s.find('>',m.start());s=s[:e]+' android:allowBackup="true" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"'+s[e:]
+            m=re.search(r'<manifest\b',s);e=s.find('>',m.start());s=s[:e+1]+'\n<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'+s[e+1:]
           if 'android:name=".GameWebViewActivity"' not in s:
-            pos=s.rfind('</application>');s=s[:pos]+'    <activity android:name=".GameWebViewActivity" android:exported="false" />\n'+s[pos:]
+            pos=s.rfind('</application>');s=s[:pos]+'<activity android:name=".GameWebViewActivity" android:exported="false" />\n'+s[pos:]
           p.write_text(s);ET.parse(p)
           PY
-
       - name: Align Android minimum SDK
         working-directory: android
-        run: |
-          find . -type f \( -name '*.gradle' -o -name '*.gradle.kts' -o -name '*.xml' \) -print0 | xargs -0 sed -i -E 's/minSdkVersion[[:space:]]*=[[:space:]]*24/minSdkVersion = 26/g; s/minSdkVersion[[:space:]]+24/minSdkVersion 26/g'
-
+        run: find . -type f \( -name '*.gradle' -o -name '*.gradle.kts' \) -print0 | xargs -0 sed -i -E 's/minSdkVersion[[:space:]]*=[[:space:]]*24/minSdkVersion = 26/g; s/minSdkVersion[[:space:]]+24/minSdkVersion 26/g'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
-
       - name: Configure stable Android signing
         working-directory: android
         env:
@@ -178,35 +125,44 @@ jobs:
           ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
           ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
           ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
-        shell: bash
         run: |
           set -euo pipefail
           test -n "$ODIN_KEYSTORE_BASE64"; test -n "$ODIN_KEYSTORE_PASSWORD"; test -n "$ODIN_KEY_ALIAS"; test -n "$ODIN_KEY_PASSWORD"
-          printf '%s' "$ODIN_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > odin-release.jks
-          keytool -list -keystore odin-release.jks -storepass "$ODIN_KEYSTORE_PASSWORD" -alias "$ODIN_KEY_ALIAS" >/dev/null
-          cp odin-release.jks app/odin-release.jks
+          echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           python3 - <<'PY'
           from pathlib import Path
-          import re
           p=Path('app/build.gradle');s=p.read_text()
-          if 'storeFile file("odin-release.jks")' not in s:s=s.replace('android {','''android {\n    signingConfigs {\n        release {\n            storeFile file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }''',1)
-          if 'debug {' not in s:s=s.replace('buildTypes {','''buildTypes {\n        debug { signingConfig signingConfigs.release }''',1)
-          if re.search(r'release\s*\{[^}]*signingConfig\s+signingConfigs\.release',s,re.S) is None:s=s.replace('buildTypes {','''buildTypes {\n        release { signingConfig signingConfigs.release }''',1)
+          if 'storeFile file("odin-release.jks")' not in s:
+            s=s.replace('android {','''android {
+    signingConfigs {
+        release {
+            storeFile file("odin-release.jks")
+            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")
+            keyAlias System.getenv("ODIN_KEY_ALIAS")
+            keyPassword System.getenv("ODIN_KEY_PASSWORD")
+        }
+    }''',1)
+          if 'signingConfig signingConfigs.release' not in s:
+            s=s.replace('buildTypes {','''buildTypes {
+        debug {
+            signingConfig signingConfigs.release
+        }''',1)
           p.write_text(s)
           PY
-
-      - name: Build update-safe APK
+      - name: Build and verify APK
         working-directory: android
+        env:
+          ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
+          ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
+          ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           ./gradlew assembleDebug
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -F "versionName='${{ steps.version.outputs.version }}'"
-
-      - name: Give APK a unique filename
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${GITHUB_RUN_NUMBER}.apk"
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: teamzentrale-odin-debug-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/debug/teamzentrale-odin-${{ github.run_number }}.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
