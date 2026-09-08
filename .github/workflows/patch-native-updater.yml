@@ -1,0 +1,62 @@
+name: Patch native updater
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, 'native updater patch applied') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Android build workflow
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/android-debug.yml')
+          s = p.read_text()
+          marker = 'private static final String ODIN_NATIVE_UPDATER = "1";'
+          if marker in s:
+              print('Native updater already patched')
+              raise SystemExit(0)
+          s = s.replace(
+              'import android.content.Intent;\n          import android.content.SharedPreferences;\n          import android.os.Bundle;',
+              'import android.app.DownloadManager;\n          import android.content.Context;\n          import android.content.Intent;\n          import android.content.SharedPreferences;\n          import android.net.Uri;\n          import android.os.Bundle;\n          import android.os.Environment;\n          import android.os.Handler;\n          import android.os.Looper;'
+          )
+          old = '''            private static final String PREFS="odin_app_login";\n            @Override public void onCreate(Bundle state){super.onCreate(state);'''
+          new = '''            private static final String PREFS="odin_app_login";\n            private static final String ODIN_NATIVE_UPDATER = "1";\n            @Override public void onCreate(Bundle state){super.onCreate(state);'''
+          if old not in s:
+              raise SystemExit('MainActivity insertion point not found')
+          s = s.replace(old, new, 1)
+          old_method = '''              @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){Intent i=new Intent(MainActivity.this,GameWebViewActivity.class);i.putExtra("accountId",accountId);i.putExtra("username",username==null?"":username);i.putExtra("password",password==null?"":password);i.putExtra("scriptsJson",scriptsJson==null?"[]":scriptsJson);startActivity(i);}\n            },"Android");}'''
+          new_method = '''              @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){Intent i=new Intent(MainActivity.this,GameWebViewActivity.class);i.putExtra("accountId",accountId);i.putExtra("username",username==null?"":username);i.putExtra("password",password==null?"":password);i.putExtra("scriptsJson",scriptsJson==null?"[]":scriptsJson);startActivity(i);}\n              @JavascriptInterface public void updateApk(){\n                runOnUiThread(()->{\n                  try {\n                    String url="https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk";\n                    DownloadManager dm=(DownloadManager)getSystemService(Context.DOWNLOAD_SERVICE);\n                    DownloadManager.Request req=new DownloadManager.Request(Uri.parse(url));\n                    req.setTitle("Odin Update");\n                    req.setDescription("Neueste Odin-Version wird heruntergeladen…");\n                    req.setMimeType("application/vnd.android.package-archive");\n                    req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);\n                    req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"odin-update.apk");\n                    long id=dm.enqueue(req);\n                    Handler h=new Handler(Looper.getMainLooper());\n                    Runnable poll=new Runnable(){ public void run(){\n                      DownloadManager.Query q=new DownloadManager.Query().setFilterById(id);\n                      android.database.Cursor c=dm.query(q);\n                      if(c!=null&&c.moveToFirst()){\n                        int status=c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));\n                        if(status==DownloadManager.STATUS_SUCCESSFUL){\n                          Uri uri=dm.getUriForDownloadedFile(id);\n                          if(uri!=null){\n                            Intent install=new Intent(Intent.ACTION_VIEW);\n                            install.setDataAndType(uri,"application/vnd.android.package-archive");\n                            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK);\n                            startActivity(install);\n                          }\n                          c.close();\n                          return;\n                        }\n                        if(status==DownloadManager.STATUS_FAILED){ c.close(); return; }\n                      }\n                      if(c!=null)c.close();\n                      h.postDelayed(this,500);\n                    }};\n                    h.postDelayed(poll,500);\n                  } catch(Exception e) { }\n                });\n              }\n            },"Android");}'''
+          if old_method not in s:
+              raise SystemExit('MainActivity updateApk insertion point not found')
+          s = s.replace(old_method, new_method, 1)
+          manifest_old = '''          p=Path('app/src/main/AndroidManifest.xml')\n          s=p.read_text(encoding='utf-8')'''
+          manifest_new = '''          p=Path('app/src/main/AndroidManifest.xml')\n          s=p.read_text(encoding='utf-8')\n          if 'android.permission.REQUEST_INSTALL_PACKAGES' not in s:\n              s=s.replace('<manifest ', '<manifest ')\n              m=re.search(r'<manifest\\b[^>]*>', s)\n              if not m: raise SystemExit('Could not find <manifest>')\n              s=s[:m.end()]+'\\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'+s[m.end():]'''
+          if manifest_old not in s:
+              raise SystemExit('Manifest patch point not found')
+          s=s.replace(manifest_old, manifest_new, 1)
+          p.write_text(s)
+          PY
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/android-debug.yml
+          git commit -m "Apply native updater patch applied" || exit 0
+          git push
+      - name: Remove patch workflow
+        if: success()
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/patch-native-updater.yml
+          git commit -m "Remove temporary updater patch workflow"
+          git push
