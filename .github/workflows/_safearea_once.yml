@@ -1,0 +1,40 @@
+name: One-time toolbar safe-area fix
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch toolbar and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/android-debug.yml')
+          s = p.read_text()
+          old = '              root.addView(toolbar, new LinearLayout.LayoutParams(-1, 52));'
+          new = '''              LinearLayout.LayoutParams toolbarParams = new LinearLayout.LayoutParams(-1, 52);\n              toolbarParams.topMargin = (int) (32 * getResources().getDisplayMetrics().density);\n              root.addView(toolbar, toolbarParams);'''
+          if old not in s:
+              raise SystemExit('Toolbar line not found; refusing to modify workflow')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/android-debug.yml
+          git rm -f .github/workflows/_safearea_once.yml
+          git commit -m 'fix: move game toolbar below status bar'
+          git push origin HEAD:main
