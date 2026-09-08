@@ -9,6 +9,9 @@ const config: CapacitorConfig = {
     // The Android shell loads the same production frontend as the web app.
     url: 'https://staemme-central-odin.vercel.app/',
     cleartext: false,
+    // Die-Stämme must remain a top-level page inside Capacitor's Android WebView.
+    // Without this allow-list Capacitor may hand external navigation to the system browser.
+    allowNavigation: ['https://www.die-staemme.de', 'https://die-staemme.de'],
   },
 };
 
