@@ -27,7 +27,7 @@ jobs:
         run: |
           pnpm cap:add:android
           pnpm cap:sync
-      - name: Configure Android WebView for embedded game login
+      - name: Configure native embedded game WebView
         working-directory: android
         shell: bash
         run: |
@@ -35,13 +35,128 @@ jobs:
           test -n "$MAIN"
           PKG=$(sed -n 's/^package[[:space:]]\+\(.*\);/\1/p' "$MAIN" | head -n 1)
           test -n "$PKG"
+          MAIN_DIR=$(dirname "$MAIN")
+          mkdir -p "$MAIN_DIR"
+          mkdir -p app/src/main/assets
+          cp ../native/game-scripts.js app/src/main/assets/game-scripts.js
+          cat > "$MAIN_DIR/GameWebViewActivity.java" <<EOF
+          package $PKG;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.webkit.CookieManager;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.view.ViewGroup;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.graphics.Color;
+          import java.io.BufferedReader;
+          import java.io.InputStreamReader;
+
+          public class GameWebViewActivity extends Activity {
+              private static final String GAME_URL = "https://www.die-staemme.de/";
+              private WebView webView;
+
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+
+                  TextView toolbar = new TextView(this);
+                  toolbar.setText("  Odin  •  Die Stämme");
+                  toolbar.setTextColor(Color.WHITE);
+                  toolbar.setTextSize(16);
+                  toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                  toolbar.setBackgroundColor(Color.rgb(11, 16, 32));
+                  toolbar.setPadding(16, 0, 16, 0);
+                  toolbar.setOnClickListener(v -> finish());
+                  root.addView(toolbar, new LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT, 52));
+
+                  webView = new WebView(this);
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+                  settings.setSupportZoom(false);
+                  settings.setBuiltInZoomControls(false);
+                  settings.setDisplayZoomControls(false);
+                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+
+                  CookieManager cookies = CookieManager.getInstance();
+                  cookies.setAcceptCookie(true);
+                  cookies.setAcceptThirdPartyCookies(webView, true);
+
+                  webView.setWebChromeClient(new WebChromeClient());
+                  webView.addJavascriptInterface(new OdinBridge(), "OdinNative");
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          return false;
+                      }
+
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          injectManagedScripts(view);
+                      }
+                  });
+
+                  setContentView(root);
+                  root.addView(webView, new LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+                  webView.loadUrl(GAME_URL);
+              }
+
+              private void injectManagedScripts(WebView view) {
+                  try {
+                      StringBuilder source = new StringBuilder();
+                      BufferedReader reader = new BufferedReader(
+                          new InputStreamReader(getAssets().open("game-scripts.js")));
+                      String line;
+                      while ((line = reader.readLine()) != null) {
+                          source.append(line).append('\n');
+                      }
+                      reader.close();
+                      view.evaluateJavascript("javascript:(function(){" + source + "})()", null);
+                  } catch (Exception ignored) {
+                      // Script injection must never prevent the game itself from loading.
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+
+              private class OdinBridge {
+                  @JavascriptInterface
+                  public void minimize() {
+                      runOnUiThread(() -> finish());
+                  }
+              }
+          }
+          EOF
+
           cat > "$MAIN" <<EOF
           package $PKG;
 
+          import android.content.Intent;
           import android.os.Bundle;
           import android.webkit.CookieManager;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
+          import android.webkit.JavascriptInterface;
 
           import com.getcapacitor.BridgeActivity;
 
@@ -58,10 +173,29 @@ jobs:
                   CookieManager cookieManager = CookieManager.getInstance();
                   cookieManager.setAcceptCookie(true);
                   cookieManager.setAcceptThirdPartyCookies(webView, true);
+
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void openGame(String accountId) {
+                          Intent intent = new Intent(MainActivity.this, GameWebViewActivity.class);
+                          intent.putExtra("accountId", accountId);
+                          startActivity(intent);
+                      }
+                  }, "Android");
               }
           }
           EOF
-          echo "Configured embedded WebView cookies in $MAIN"
+
+          MANIFEST=app/src/main/AndroidManifest.xml
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/AndroidManifest.xml')
+          s = p.read_text()
+          if 'GameWebViewActivity' not in s:
+              s = s.replace('</application>', '    <activity android:name=".GameWebViewActivity" android:exported="false" />\n    </application>')
+              p.write_text(s)
+          PY
+          echo "Configured native embedded game WebView in $MAIN"
       - name: Align Android minimum SDK
         working-directory: android
         run: |
