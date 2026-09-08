@@ -18,8 +18,10 @@ jobs:
           fetch-depth: 1
 
       - name: Patch generated game toolbar
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python3 - <<'PY'
           from pathlib import Path
 
           p = Path('.github/workflows/android-debug.yml')
@@ -48,6 +50,7 @@ jobs:
 
           p.write_text(s, encoding='utf-8')
           print('toolbar safe-area patch applied')
+          PY
 
       - name: Commit patch
         shell: bash
