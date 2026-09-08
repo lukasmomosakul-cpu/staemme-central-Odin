@@ -28,9 +28,32 @@ jobs:
       - name: Build web app
         env:
           NEXT_PUBLIC_APP_VERSION: ${{ steps.version.outputs.version }}
-        run: pnpm build
+        run: |
+          set -euo pipefail
+          rm -rf .next
+          echo "Building web app with NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION"
+          pnpm build
+          echo '--- VERIFY WEB VERSION ---'
+          test -n "$NEXT_PUBLIC_APP_VERSION"
+          if ! grep -R -F -m1 -- "$NEXT_PUBLIC_APP_VERSION" .next >/dev/null 2>&1; then
+            echo "ERROR: app version $NEXT_PUBLIC_APP_VERSION was NOT embedded into the Next.js build"
+            exit 1
+          fi
+          echo "Verified web build contains app version: $NEXT_PUBLIC_APP_VERSION"
       - name: Generate Capacitor Android project
         run: pnpm cap:add:android && pnpm cap:sync
+      - name: Verify Capacitor web assets version
+        working-directory: android
+        env:
+          ODIN_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$ODIN_VERSION"
+          if ! grep -R -F -m1 -- "$ODIN_VERSION" app/src/main/assets/public >/dev/null 2>&1; then
+            echo "ERROR: app version $ODIN_VERSION was NOT copied into Capacitor Android web assets"
+            exit 1
+          fi
+          echo "Verified Android web assets contain app version: $ODIN_VERSION"
       - name: Configure Android app version
         working-directory: android
         env:
@@ -238,6 +261,9 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
           echo '--- APK version ---'
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package:|versionCode=|versionName='
+          echo '--- APK VERSION HARD CHECK ---'
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -F "versionName='${{ steps.version.outputs.version }}'"
+          echo '--- APK VERSION VERIFIED ---'
       - name: Give APK a unique filename
         run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${GITHUB_RUN_NUMBER}.apk"
       - uses: actions/upload-artifact@v4
