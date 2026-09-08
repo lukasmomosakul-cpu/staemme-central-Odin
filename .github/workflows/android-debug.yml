@@ -18,6 +18,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
       - name: Build web app
+        env:
+          NEXT_PUBLIC_APP_VERSION: "1.1.${{ github.run_number }}"
         run: pnpm build
       - name: Generate Capacitor Android project
         run: pnpm cap:add:android && pnpm cap:sync
@@ -25,15 +27,25 @@ jobs:
         working-directory: android
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import os
+          import os, re
           p = Path('app/build.gradle')
           s = p.read_text()
-          run_number = os.environ['GITHUB_RUN_NUMBER']
-          s = s.replace('versionCode 1', 'versionCode ' + run_number)
-          s = s.replace('versionName "1.0"', 'versionName "1.1.' + run_number + '"')
+          run_number = int(os.environ['GITHUB_RUN_NUMBER'])
+          version_name = f'1.1.{run_number}'
+          code_matches = re.findall(r'\bversionCode\s+\d+', s)
+          name_matches = re.findall(r'\bversionName\s+"[^"]+"', s)
+          if not code_matches or not name_matches:
+              raise SystemExit('Could not find versionCode/versionName in android/app/build.gradle')
+          s = re.sub(r'\bversionCode\s+\d+', f'versionCode {run_number}', s, count=1)
+          s = re.sub(r'\bversionName\s+"[^"]+"', f'versionName "{version_name}"', s, count=1)
           p.write_text(s)
+          print(f'ODIN VERSION: {version_name} / versionCode {run_number}')
+          print([x for x in s.splitlines() if 'versionCode' in x or 'versionName' in x][:4])
+          if f'versionName "{version_name}"' not in s or f'versionCode {run_number}' not in s:
+              raise SystemExit('VERSION VERIFICATION FAILED')
           PY
       - name: Configure embedded Die-Stämme WebView
         working-directory: android
@@ -99,7 +111,7 @@ jobs:
             private void loadEnabledScripts(WebView v){ if(managedScripts.isEmpty())return; String path=v.getUrl()==null?"":v.getUrl(); boolean inWorld=path.matches("(?i).*[/]game[.]php(?:[/].*)?.*")||path.matches("(?i).*[?&]screen=[^&]+.*[?&]village=[^&]+.*"); if(!inWorld)return; for(String source:managedScripts)new Thread(()->{try{String code=downloadScript(source);if(code==null||code.isEmpty())return;final String q=JSONObject.quote(code);runOnUiThread(()->v.evaluateJavascript("(function(){try{eval("+q+");}catch(e){console.error('[Odin] Scriptfehler',e);}})()",null));}catch(Exception ignored){}}).start(); }
             private String downloadScript(String source){HttpURLConnection c=null;try{c=(HttpURLConnection)new URL(source).openConnection();c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Teamzentrale-Odin/1.0 Android WebView");c.setRequestProperty("Accept","*/*");int status=c.getResponseCode();if(status<200||status>=300)return null;BufferedInputStream in=new BufferedInputStream(c.getInputStream());ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);in.close();return out.toString("UTF-8");}catch(Exception e){return null;}finally{if(c!=null)c.disconnect();}}
             @Override public void onBackPressed(){if(webView!=null&&webView.canGoBack())webView.goBack();else super.onBackPressed();}
-            private class OdinBridge{ @JavascriptInterface public void minimize(){runOnUiThread(()->finish());} }
+            private class OdinBridge{ @JavascriptInterface public void minimize(){runOnUiThread(()->finish()); } }
           }
           EOF
           cat > "$MAIN" <<EOF
@@ -150,20 +162,32 @@ jobs:
           keytool -list -keystore odin-release.jks -storepass "$ODIN_KEYSTORE_PASSWORD" -alias "$ODIN_KEY_ALIAS" >/dev/null
           python3 - <<'PY'
           from pathlib import Path
+          import re
           p=Path('app/build.gradle'); s=p.read_text()
           if 'storeFile file("odin-release.jks")' not in s:
               s=s.replace('android {','android {\n    signingConfigs {\n        release {\n            storeFile file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }',1)
-          if 'signingConfig signingConfigs.release' not in s:
-              s=s.replace('buildTypes {\n','buildTypes {\n        release {\n            signingConfig signingConfigs.release\n        }\n',1)
+          # Ensure BOTH debug and release variants use the stable key.
+          if 'debug {\n            signingConfig signingConfigs.release' not in s:
+              s=s.replace('buildTypes {\n', 'buildTypes {\n        debug {\n            signingConfig signingConfigs.release\n        }\n', 1)
+          if re.search(r'release\s*\{[^}]*signingConfig\s+signingConfigs\.release', s, re.S) is None:
+              s=s.replace('buildTypes {\n', 'buildTypes {\n        release {\n            signingConfig signingConfigs.release\n        }\n', 1)
           p.write_text(s)
           PY
+          echo '--- signing/buildTypes ---'
+          grep -n -A5 -B2 'signingConfigs\|buildTypes' app/build.gradle
       - name: Build update-safe APK
         working-directory: android
         env:
           ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
           ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
           ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
-        run: ./gradlew assembleDebug
+        run: |
+          set -euo pipefail
+          ./gradlew assembleDebug
+          echo '--- APK identity ---'
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          echo '--- APK version ---'
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package:|versionCode=|versionName='
       - name: Give APK a unique filename
         run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${GITHUB_RUN_NUMBER}.apk"
       - uses: actions/upload-artifact@v4
