@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   window.OdinGameBridge = window.OdinGameBridge || {};
-  window.OdinGameBridge.version = '5';
+  window.OdinGameBridge.version = '6';
 
   window.OdinGameBridge.minimize = function () {
     if (window.OdinNative && typeof window.OdinNative.minimize === 'function') window.OdinNative.minimize();
@@ -81,25 +81,4 @@
       return { abort: function () { try { xhr.abort(); } catch (_) {} } };
     };
   } catch (_) {}
-
-  // Do not install an eval guard here: Tampermonkey scripts can legitimately run
-  // on the Die Stämme login/start page before the game world is entered.
-
-  // GodBot historically initialized on the login/start page. The native loader
-  // still loads managed scripts on game.php; this bootstrap covers the login page
-  // as well so the script survives the same navigation flow as Tampermonkey.
-  try {
-    var host = String(window.location.hostname || '').toLowerCase();
-    var isGameDomain = host === 'die-staemme.de' || /\.die-staemme\.de$/.test(host);
-    if (isGameDomain && !window.OdinGameBridge.isInWorld() && !window.__ODIN_GODBOT_LOGIN_LOADED__) {
-      window.__ODIN_GODBOT_LOGIN_LOADED__ = true;
-      fetch('https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js', { credentials: 'omit' })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-        .then(function (code) {
-          try { (0, eval)(code); console.info('[Odin] GodBot loaded on login/start page'); }
-          catch (e) { console.error('[Odin] GodBot login execution failed', e); }
-        })
-        .catch(function (e) { console.error('[Odin] GodBot login download failed', e); });
-    }
-  } catch (e) { console.error('[Odin] GodBot login bootstrap failed', e); }
 })();
