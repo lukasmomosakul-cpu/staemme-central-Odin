@@ -1,23 +1,14 @@
 'use client';
 
-import { useState } from 'react';
-
 type Props = {
-  url: string;
-  username?: string;
-  password?: string;
-  onFallback?: () => void;
+  accountId: string;
 };
 
-export default function GameNativeButton({ url }: Props) {
-  const [busy, setBusy] = useState(false);
-
+export default function GameNativeButton({ accountId }: Props) {
   const openGame = () => {
-    setBusy(true);
-    // Deliberately use the app's own WebView. This avoids any custom Capacitor
-    // plugin and therefore cannot fall back to an external browser or the old
-    // GameWebView plugin.
-    window.location.assign(url);
+    // Always enter Odin's internal game route. The external game page is
+    // rendered by app/game/page.tsx inside its iframe.
+    window.location.assign(`/game/?account=${encodeURIComponent(accountId)}`);
   };
 
   return (
@@ -25,11 +16,10 @@ export default function GameNativeButton({ url }: Props) {
       type="button"
       className="gameIconButton"
       onClick={openGame}
-      disabled={busy}
       title="Die Stämme in Odin öffnen"
       aria-label="Die Stämme in Odin öffnen"
     >
-      {busy ? '…' : '🎮'}
+      🎮
     </button>
   );
 }
