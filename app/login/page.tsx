@@ -11,15 +11,32 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
 
   useEffect(() => {
-    try {
-      const native = (window as any).Android;
-      if (!native?.getSavedAppLogin) return;
-      const raw = native.getSavedAppLogin();
-      if (!raw) return;
-      const saved = JSON.parse(raw);
-      if (saved?.email) setEmail(String(saved.email));
-      if (saved?.password) setPassword(String(saved.password));
-    } catch {}
+    let cancelled = false;
+    async function restoreLogin() {
+      try {
+        const native = (window as any).Android;
+        if (!native?.getSavedAppLogin || !supabase) return;
+        const raw = native.getSavedAppLogin();
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        const savedEmail = saved?.email ? String(saved.email) : '';
+        const savedPassword = saved?.password ? String(saved.password) : '';
+        if (!savedEmail || !savedPassword || cancelled) return;
+        setEmail(savedEmail);
+        setPassword(savedPassword);
+        setBusy(true);
+        const { error } = await supabase.auth.signInWithPassword({ email: savedEmail, password: savedPassword });
+        if (!cancelled && error) {
+          native.clearSavedAppLogin?.();
+          setMessage('Gespeicherte Anmeldung ist nicht mehr gültig. Bitte erneut anmelden.');
+        } else if (!cancelled && !error) {
+          window.location.href = '/';
+        }
+      } catch {}
+      if (!cancelled) setBusy(false);
+    }
+    restoreLogin();
+    return () => { cancelled = true; };
   }, []);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
