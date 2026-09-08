@@ -2,6 +2,7 @@
 
 import { Browser } from '@capacitor/browser';
 
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.1.3';
 const APK_URL = 'https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk';
 
 export default function VersionUpdater() {
@@ -14,8 +15,8 @@ export default function VersionUpdater() {
   };
 
   return (
-    <button type="button" onClick={update} title="Auf die neueste Odin-Version aktualisieren" aria-label="Auf die neueste Odin-Version aktualisieren" style={{border:0,background:'transparent',padding:0,margin:0,color:'inherit',font: 'inherit',cursor:'pointer',textDecoration:'underline',textUnderlineOffset:3}}>
-      <span>Odin aktualisieren</span>
+    <button type="button" onClick={update} title="Neueste Odin-Version herunterladen" aria-label="Neueste Odin-Version herunterladen" style={{border:0,background:'transparent',padding:0,margin:0,color:'#64748b',font:'700 12px inherit',cursor:'pointer',textDecoration:'underline',textUnderlineOffset:3,whiteSpace:'nowrap'}}>
+      v{APP_VERSION}
     </button>
   );
 }
