@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="de"><body>{children}</body></html>;
+  return <html lang="de"><head><style>{`header.top > div > span.muted { display: none !important; }`}</style></head><body>{children}</body></html>;
 }
