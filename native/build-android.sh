@@ -73,6 +73,14 @@ p=Path('app/build.gradle');s=p.read_text();v=os.environ.get('ODIN_VERSION','')
 a=v.split('.');code=int(a[0])*1000000+int(a[1])*1000+int(a[2])
 s=re.sub(r'\bversionCode\s+\d+',f'versionCode {code}',s,count=1)
 s=re.sub(r'\bversionName\s+"[^"]+"',f'versionName "{v}"',s,count=1)
+if 'minSdkVersion 26' in s:
+ pass
+elif re.search(r'\bminSdkVersion\s+\d+',s):
+ s=re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', s, count=1)
+elif re.search(r'\bminSdk\s+\d+',s):
+ s=re.sub(r'\bminSdk\s+\d+', 'minSdk 26', s, count=1)
+else:
+ s=s.replace('defaultConfig {','defaultConfig {\n        minSdkVersion 26',1)
 if 'storeFile file("odin-release.jks")' not in s:
  s=s.replace('android {','''android {
  signingConfigs { release { storeFile file("odin-release.jks"); storePassword System.getenv("ODIN_KEYSTORE_PASSWORD"); keyAlias System.getenv("ODIN_KEY_ALIAS"); keyPassword System.getenv("ODIN_KEY_PASSWORD") } }''',1)
