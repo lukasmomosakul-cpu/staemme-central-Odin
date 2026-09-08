@@ -48,7 +48,7 @@ public class MainActivity extends BridgeActivity{
  @Override public void onCreate(Bundle state){super.onCreate(state);WebView v=getBridge().getWebView();WebSettings s=v.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);CookieManager cm=CookieManager.getInstance();cm.setAcceptCookie(true);cm.setAcceptThirdPartyCookies(v,true);v.addJavascriptInterface(new Object(){
   @JavascriptInterface public String getSavedAppLogin(){try{SharedPreferences p=getSharedPreferences(PREFS,MODE_PRIVATE);JSONObject o=new JSONObject();o.put("email",p.getString("email",""));o.put("password",p.getString("password",""));return o.toString();}catch(Exception e){return "";}}
   @JavascriptInterface public void saveAppLogin(String e,String p){getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString("email",e==null?"":e).putString("password",p==null?"":p).apply();}
-  @JavascriptInterface public void clearSavedAppLogin(){getSharedPreferences(PREFS,MODE_PRIVATE).clear().apply();}
+  @JavascriptInterface public void clearSavedAppLogin(){getSharedPreferences(PREFS,MODE_PRIVATE).edit().clear().apply();}
   @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){getSharedPreferences(GAME_STATE,MODE_PRIVATE).edit().putBoolean("minimized",false).apply();Intent i=new Intent(MainActivity.this,GameWebViewActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);i.putExtra("accountId",accountId);i.putExtra("username",username==null?"":username);i.putExtra("password",password==null?"":password);i.putExtra("scriptsJson",scriptsJson==null?"[]":scriptsJson);startActivity(i);}
   @JavascriptInterface public void updateApk(){try{DownloadManager dm=(DownloadManager)getSystemService(Context.DOWNLOAD_SERVICE);if(dm==null)return;DownloadManager.Request r=new DownloadManager.Request(Uri.parse("https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk"));r.setTitle("Odin wird aktualisiert");r.setDescription("Neueste Version wird heruntergeladen");r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);r.setMimeType("application/vnd.android.package-archive");r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"odin-update.apk");dm.enqueue(r);}catch(Exception ignored){}}
  },"Android");}
@@ -61,6 +61,10 @@ import re,xml.etree.ElementTree as ET
 p=Path('app/src/main/AndroidManifest.xml');s=p.read_text()
 if 'android.permission.REQUEST_INSTALL_PACKAGES' not in s:
  m=re.search(r'<manifest\b',s);e=s.find('>',m.start());s=s[:e+1]+'\n<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'+s[e+1:]
+if '<uses-sdk' in s:
+ s=re.sub(r'<uses-sdk\b[^>]*/>', '<uses-sdk android:minSdkVersion="26" />', s, count=1)
+else:
+ m=re.search(r'<manifest\b[^>]*>',s);s=s[:m.end()]+'\n<uses-sdk android:minSdkVersion="26" />'+s[m.end():]
 if 'android:name=".GameWebViewActivity"' not in s:
  pos=s.rfind('</application>');s=s[:pos]+'<activity android:name=".GameWebViewActivity" android:exported="false" />\n'+s[pos:]
 p.write_text(s);ET.parse(p)
