@@ -1,0 +1,64 @@
+name: Patch toolbar safe area
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/workflows/_patch-toolbar-safearea.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch generated game toolbar
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('.github/workflows/android-debug.yml')
+          s = p.read_text(encoding='utf-8')
+
+          old = '''          import android.widget.LinearLayout;
+          import android.widget.TextView;
+'''
+          new = '''          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.view.ViewGroup;
+'''
+          if old not in s:
+              raise SystemExit('toolbar imports not found')
+          s = s.replace(old, new, 1)
+
+          old = '''          root.addView(toolbar, new LinearLayout.LayoutParams(-1, 52));
+'''
+          new = '''          LinearLayout.LayoutParams toolbarParams = new LinearLayout.LayoutParams(-1, 52);
+          toolbarParams.topMargin = (int) (32 * getResources().getDisplayMetrics().density);
+          root.addView(toolbar, toolbarParams);
+'''
+          if old not in s:
+              raise SystemExit('toolbar layout line not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+          print('toolbar safe-area patch applied')
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/android-debug.yml
+          if git diff --cached --quiet; then
+            echo 'No changes needed'
+            exit 0
+          fi
+          git commit -m 'fix: move game toolbar below status bar'
+          git push
