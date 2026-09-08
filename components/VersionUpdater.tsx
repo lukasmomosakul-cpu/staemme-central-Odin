@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.1.17';
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.1.20';
 
 export default function VersionUpdater() {
   const [busy, setBusy] = useState(false);
