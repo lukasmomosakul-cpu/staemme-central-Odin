@@ -1,5 +1,8 @@
 {
   "rewrites": [
-    { "source": "/login/index.html", "destination": "/login/" }
+    { "source": "/login/index.html", "destination": "/login/" },
+    { "source": "/scripts/index.html", "destination": "/scripts/" },
+    { "source": "/team/index.html", "destination": "/team/" },
+    { "source": "/network/index.html", "destination": "/network/" }
   ]
 }
