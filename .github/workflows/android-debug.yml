@@ -1,5 +1,6 @@
 name: Android debug build
 
+# Trigger a fresh APK build whenever the main branch changes.
 on:
   workflow_dispatch:
   push:
