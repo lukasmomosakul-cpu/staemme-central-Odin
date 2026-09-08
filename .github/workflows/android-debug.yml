@@ -59,25 +59,30 @@ jobs:
           echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           bash ../native/build-android.sh
 
-          # Capacitor keeps the effective SDK values in variables.gradle in some templates.
-          # Force every generated SDK declaration to API 26 so ioninappbrowser-android 2.0.2 can merge.
-          if [ -f variables.gradle ]; then
-            sed -Ei 's/(minSdkVersion[[:space:]]*=[[:space:]]*)[0-9]+/\126/' variables.gradle
-            sed -Ei 's/(minSdkVersion[[:space:]]+)[0-9]+/\126/' variables.gradle
-            sed -Ei 's/(minSdk[[:space:]]*=[[:space:]]*)[0-9]+/\126/' variables.gradle
-            sed -Ei 's/(minSdk[[:space:]]+)[0-9]+/\126/' variables.gradle
-          fi
-
+          # Capacitor's generated project can source minSdk from variables.gradle or app/build.gradle.
+          # Rewrite both deterministically; do not rely on sed backreferences, which can turn \1 + 26 into an invalid reference.
           python3 - <<'PY'
           from pathlib import Path
           import re
+
+          def force_sdk(path: Path):
+              if not path.exists():
+                  return
+              s = path.read_text()
+              s = re.sub(r'\bminSdkVersion\s*=\s*\d+', 'minSdkVersion = 26', s)
+              s = re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', s)
+              s = re.sub(r'\bminSdk\s*=\s*\d+', 'minSdk = 26', s)
+              s = re.sub(r'\bminSdk\s+\d+', 'minSdk 26', s)
+              path.write_text(s)
+
+          force_sdk(Path('variables.gradle'))
+          force_sdk(Path('app/build.gradle'))
+
           p = Path('app/build.gradle')
           s = p.read_text()
-          s = re.sub(r'\bminSdkVersion\s*=?\s*\d+', 'minSdkVersion 26', s)
-          s = re.sub(r'\bminSdk\s*=?\s*\d+', 'minSdk 26', s)
           if not re.search(r'\bminSdkVersion\s+26\b|\bminSdk\s+26\b', s):
               s = s.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 26', 1)
-          p.write_text(s)
+              p.write_text(s)
           PY
 
           echo '--- Android SDK configuration ---'
@@ -98,7 +103,7 @@ jobs:
           ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug -PminSdkVersion=26
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -F "versionName='${{ steps.version.outputs.version }}'"
       - name: Upload APK artifact
