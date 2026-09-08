@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   window.OdinGameBridge = window.OdinGameBridge || {};
-  window.OdinGameBridge.version = '4';
+  window.OdinGameBridge.version = '5';
 
   window.OdinGameBridge.minimize = function () {
     if (window.OdinNative && typeof window.OdinNative.minimize === 'function') window.OdinNative.minimize();
@@ -59,8 +59,6 @@
       } catch (_) {}
     };
 
-    // Best-effort userscript-compatible XHR. GitHub/raw script hosts expose CORS;
-    // for same-origin requests this behaves like a normal XMLHttpRequest.
     window.GM_xmlhttpRequest = window.GM_xmlhttpRequest || function (details) {
       details = details || {};
       var method = String(details.method || 'GET').toUpperCase();
@@ -84,19 +82,24 @@
     };
   } catch (_) {}
 
-  // Userscripts are downloaded by the native loader. This guard prevents accidental
-  // execution on the login/start page and allows execution once a real game page exists.
+  // Do not install an eval guard here: Tampermonkey scripts can legitimately run
+  // on the Die Stämme login/start page before the game world is entered.
+
+  // GodBot historically initialized on the login/start page. The native loader
+  // still loads managed scripts on game.php; this bootstrap covers the login page
+  // as well so the script survives the same navigation flow as Tampermonkey.
   try {
-    var originalEval = window.eval;
-    if (!window.OdinGameBridge._evalGuardInstalled) {
-      window.OdinGameBridge._evalGuardInstalled = true;
-      window.eval = function (code) {
-        if (!window.OdinGameBridge.isInWorld()) {
-          console.debug('[Odin] Managed script skipped outside game world:', window.location.href);
-          return undefined;
-        }
-        return originalEval(code);
-      };
+    var host = String(window.location.hostname || '').toLowerCase();
+    var isGameDomain = host === 'die-staemme.de' || /\.die-staemme\.de$/.test(host);
+    if (isGameDomain && !window.OdinGameBridge.isInWorld() && !window.__ODIN_GODBOT_LOGIN_LOADED__) {
+      window.__ODIN_GODBOT_LOGIN_LOADED__ = true;
+      fetch('https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js', { credentials: 'omit' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function (code) {
+          try { (0, eval)(code); console.info('[Odin] GodBot loaded on login/start page'); }
+          catch (e) { console.error('[Odin] GodBot login execution failed', e); }
+        })
+        .catch(function (e) { console.error('[Odin] GodBot login download failed', e); });
     }
-  } catch (_) {}
+  } catch (e) { console.error('[Odin] GodBot login bootstrap failed', e); }
 })();
