@@ -27,6 +27,41 @@ jobs:
         run: |
           pnpm cap:add:android
           pnpm cap:sync
+      - name: Configure Android WebView for embedded game login
+        working-directory: android
+        shell: bash
+        run: |
+          MAIN=$(find app/src/main -type f -name 'MainActivity.java' | head -n 1)
+          test -n "$MAIN"
+          PKG=$(sed -n 's/^package[[:space:]]\+\(.*\);/\1/p' "$MAIN" | head -n 1)
+          test -n "$PKG"
+          cat > "$MAIN" <<EOF
+package $PKG;
+
+import android.os.Bundle;
+import android.webkit.CookieManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        WebView webView = getBridge().getWebView();
+        WebSettings settings = webView.getSettings();
+        settings.setDomStorageEnabled(true);
+        settings.setJavaScriptEnabled(true);
+
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        cookieManager.setAcceptThirdPartyCookies(webView, true);
+    }
+}
+EOF
+          echo "Configured embedded WebView cookies in $MAIN"
       - name: Align Android minimum SDK
         working-directory: android
         run: |
