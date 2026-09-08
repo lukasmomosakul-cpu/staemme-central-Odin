@@ -52,15 +52,29 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-          p = Path('app/build.gradle')
-          s = p.read_text()
-          s, n = re.subn(r'(?m)^(\s*)minSdkVersion\s+.*$', r'\1minSdkVersion 26', s, count=1)
-          if n == 0:
-              s, n = re.subn(r'(?m)^(\s*)minSdk\s+.*$', r'\1minSdk 26', s, count=1)
-          if n == 0:
-              raise SystemExit('Could not locate Android minSdk declaration in app/build.gradle')
-          p.write_text(s)
-          print('Normalized app/build.gradle minSdk to 26')
+
+          # Capacitor owns the root SDK variable and can re-apply it after
+          # the app module is configured. Force both levels to the library's
+          # required API so the manifest merger cannot fall back to 24.
+          candidates = [Path('variables.gradle'), Path('app/build.gradle')]
+          found = []
+          for p in candidates:
+              if not p.exists():
+                  continue
+              s = p.read_text()
+              original = s
+              s = re.sub(r'(?m)^(\s*)minSdkVersion\s*(?:=\s*)?.*$', r'\1minSdkVersion = 26' if p.name == 'variables.gradle' else r'\1minSdkVersion 26', s)
+              s = re.sub(r'(?m)^(\s*)minSdk\s*(?:=\s*)?.*$', r'\1minSdk = 26' if p.name == 'variables.gradle' else r'\1minSdk 26', s)
+              if s != original:
+                  p.write_text(s)
+              if 'minSdkVersion = 26' in s or re.search(r'(?m)^\s*minSdkVersion 26\s*$', s) or 'minSdk = 26' in s or re.search(r'(?m)^\s*minSdk 26\s*$', s):
+                  found.append(str(p))
+          if 'variables.gradle' in found:
+              print('Forced Capacitor variables.gradle minSdk to 26')
+          if 'app/build.gradle' in found:
+              print('Forced app/build.gradle minSdk to 26')
+          if not found:
+              raise SystemExit('Could not locate an Android minSdk declaration')
           PY
       - uses: actions/setup-java@v4
         with:
@@ -84,4 +98,4 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-# build trigger: verify current VERSION/minSdk fixes on a fresh runner
+# build trigger: force Capacitor's generated SDK configuration to 26
