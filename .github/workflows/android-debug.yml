@@ -159,14 +159,16 @@ jobs:
           set -euo pipefail
           CLEAN_B64=$(printf '%s' "$ODIN_KEYSTORE_BASE64" | tr -d '[:space:]')
           printf '%s' "$CLEAN_B64" | base64 --decode > odin-release.jks
+          test -s odin-release.jks
           keytool -list -keystore odin-release.jks -storepass "$ODIN_KEYSTORE_PASSWORD" -alias "$ODIN_KEY_ALIAS" >/dev/null
+          cp odin-release.jks app/odin-release.jks
+          test -s app/odin-release.jks
           python3 - <<'PY'
           from pathlib import Path
           import re
           p=Path('app/build.gradle'); s=p.read_text()
           if 'storeFile file("odin-release.jks")' not in s:
               s=s.replace('android {','android {\n    signingConfigs {\n        release {\n            storeFile file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }',1)
-          # Ensure BOTH debug and release variants use the stable key.
           if 'debug {\n            signingConfig signingConfigs.release' not in s:
               s=s.replace('buildTypes {\n', 'buildTypes {\n        debug {\n            signingConfig signingConfigs.release\n        }\n', 1)
           if re.search(r'release\s*\{[^}]*signingConfig\s+signingConfigs\.release', s, re.S) is None:
