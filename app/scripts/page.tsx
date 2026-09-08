@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 
-const APP_VERSION='1.1.0';
+const APP_VERSION='1.1.1';
 const GODBOT_URL = 'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js';
 const STORAGE_KEY = 'odin-script-library';
 
