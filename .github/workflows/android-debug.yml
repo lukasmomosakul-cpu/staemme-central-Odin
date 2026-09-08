@@ -21,6 +21,19 @@ jobs:
         run: pnpm build
       - name: Generate Capacitor Android project
         run: pnpm cap:add:android && pnpm cap:sync
+      - name: Configure Android app version
+        working-directory: android
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          s = s.replace('versionCode 1', 'versionCode ' + __import__('os').environ['GITHUB_RUN_NUMBER'])
+          s = s.replace('versionName "1.0"', 'versionName "1.1.1"')
+          p.write_text(s)
+          print('Configured versionCode=' + __import__('os').environ['GITHUB_RUN_NUMBER'] + ' versionName=1.1.1')
+          PY
       - name: Configure embedded Die-Stämme WebView
         working-directory: android
         shell: bash
