@@ -1,16 +1,19 @@
 name: Android debug build
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Enable pnpm
@@ -19,12 +22,15 @@ jobs:
         run: pnpm install --no-frozen-lockfile
       - name: Read version
         id: version
+        shell: bash
         run: |
           set -euo pipefail
           VERSION=$(tr -d '[:space:]' < VERSION)
           echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "ODIN VERSION: $VERSION"
       - name: Build web app
+        shell: bash
         env:
           NEXT_PUBLIC_APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -33,9 +39,11 @@ jobs:
           pnpm build
           grep -R -F -m1 -- "$NEXT_PUBLIC_APP_VERSION" .next >/dev/null
       - name: Generate Android project
+        shell: bash
         run: pnpm cap:add:android && pnpm cap:sync
       - name: Configure Android
         working-directory: android
+        shell: bash
         env:
           ODIN_VERSION: ${{ steps.version.outputs.version }}
           ODIN_KEYSTORE_BASE64: ${{ secrets.ODIN_KEYSTORE_BASE64 }}
@@ -51,12 +59,14 @@ jobs:
           echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           bash ../native/build-android.sh
           grep -R -F -m1 -- "$ODIN_VERSION" app/src/main/assets/public >/dev/null
-      - uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
       - name: Build and verify APK
         working-directory: android
+        shell: bash
         env:
           ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
           ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
