@@ -60,76 +60,67 @@ jobs:
           test -s odin-release.jks
           bash ../native/build-android.sh
 
-          # Capacitor's generated project can source minSdk from variables.gradle or app/build.gradle.
-          # Rewrite both deterministically; do not rely on sed backreferences, which can turn \1 + 26 into an invalid reference.
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          def force_sdk(path: Path):
-              if not path.exists():
-                  return
-              s = path.read_text()
-              s = re.sub(r'\bminSdkVersion\s*=\s*\d+', 'minSdkVersion = 26', s)
-              s = re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', s)
-              s = re.sub(r'\bminSdk\s*=\s*\d+', 'minSdk = 26', s)
-              s = re.sub(r'\bminSdk\s+\d+', 'minSdk 26', s)
-              path.write_text(s)
-
-          force_sdk(Path('variables.gradle'))
-          force_sdk(Path('app/build.gradle'))
-
           p = Path('app/build.gradle')
           s = p.read_text()
+
+          # Capacitor/plugin defaults must use API 26.
+          s = re.sub(r'\bminSdkVersion\s*=\s*\d+', 'minSdkVersion = 26', s)
+          s = re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', s)
+          s = re.sub(r'\bminSdk\s*=\s*\d+', 'minSdk = 26', s)
+          s = re.sub(r'\bminSdk\s+\d+', 'minSdk 26', s)
+
+          v = Path('variables.gradle')
+          if v.exists():
+              t = v.read_text()
+              t = re.sub(r'\bminSdkVersion\s*=\s*\d+', 'minSdkVersion = 26', t)
+              t = re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', t)
+              t = re.sub(r'\bminSdk\s*=\s*\d+', 'minSdk = 26', t)
+              t = re.sub(r'\bminSdk\s+\d+', 'minSdk 26', t)
+              v.write_text(t)
+
           if not re.search(r'\bminSdkVersion\s+26\b|\bminSdk\s+26\b', s):
               s = s.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 26', 1)
 
-          # Normalize every signing store path. Generated Capacitor/Capacitor-plugin
-          # signing blocks must never be allowed to point at a secret-derived path.
-          s = re.sub(r'(?m)^\s*storeFile\s+.*$', '        storeFile rootProject.file("odin-release.jks")', s)
+          # Make the generated debug APK use the stable release key.
+          signing = '''\n    signingConfigs {\n        odinRelease {\n            storeFile rootProject.file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }\n'''
+          if 'odinRelease {' not in s:
+              s = s.replace('android {', 'android {' + signing, 1)
 
-          # Ensure a release signing config exists with the expected credentials.
-          if 'signingConfigs {' not in s:
-              s = s.replace(
-                  'android {',
-                  '''android {
-    signingConfigs {
-        release {
-            storeFile rootProject.file("odin-release.jks")
-            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")
-            keyAlias System.getenv("ODIN_KEY_ALIAS")
-            keyPassword System.getenv("ODIN_KEY_PASSWORD")
-        }
-    }''',
-                  1,
-              )
-          elif 'signingConfigs { release {' not in s and 'release {' not in s[s.find('signingConfigs {'):s.find('signingConfigs {') + 2000]:
-              s = s.replace(
-                  'signingConfigs {',
-                  '''signingConfigs {
-        release {
-            storeFile rootProject.file("odin-release.jks")
-            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")
-            keyAlias System.getenv("ODIN_KEY_ALIAS")
-            keyPassword System.getenv("ODIN_KEY_PASSWORD")
-        }''',
-                  1,
-              )
+          if re.search(r'buildTypes\s*\{', s):
+              if re.search(r'debug\s*\{[^}]*signingConfig', s, re.S):
+                  s = re.sub(r'(debug\s*\{[^}]*?signingConfig\s+)[^\s}]+', r'\1signingConfigs.odinRelease', s, count=1, flags=re.S)
+              else:
+                  s = s.replace('buildTypes {', 'buildTypes {\n        debug { signingConfig signingConfigs.odinRelease }', 1)
+          else:
+              s += '\nandroid { buildTypes { debug { signingConfig signingConfigs.odinRelease } } }\n'
 
-          # The debug APK is intentionally signed with the stable release key so
-          # in-app updates work without uninstalling the previous build.
-          if 'signingConfig signingConfigs.release' not in s:
-              s = s.replace('buildTypes {', 'buildTypes {\n        debug { signingConfig signingConfigs.release }', 1)
+          p.write_text(s)
+          PY
 
+          # Never allow a generated storeFile to point anywhere except the checked-out keystore.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          s = re.sub(r'(?m)^\s*storeFile\s+.*$', '            storeFile rootProject.file("odin-release.jks")', s)
+          s = re.sub(r'(?m)^\s*storePassword\s+.*$', '            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")', s)
+          s = re.sub(r'(?m)^\s*keyAlias\s+.*$', '            keyAlias System.getenv("ODIN_KEY_ALIAS")', s)
+          s = re.sub(r'(?m)^\s*keyPassword\s+.*$', '            keyPassword System.getenv("ODIN_KEY_PASSWORD")', s)
           p.write_text(s)
           PY
 
           echo '--- Android SDK configuration ---'
           grep -R -nE 'minSdk(Version)?|targetSdk' variables.gradle app/build.gradle 2>/dev/null || true
           echo '--- Android signing configuration ---'
-          grep -nE 'signingConfigs|storeFile|storePassword|keyAlias|keyPassword|signingConfig' app/build.gradle || true
+          grep -nE 'odinRelease|signingConfigs|storeFile|storePassword|keyAlias|keyPassword|signingConfig' app/build.gradle || true
           ls -lh odin-release.jks
-          grep -R -E -n 'storeFile[[:space:]].*odin-release\.jks' app/build.gradle >/dev/null
+          grep -F -m1 'storeFile rootProject.file("odin-release.jks")' app/build.gradle >/dev/null
+          grep -F -m1 'signingConfig signingConfigs.odinRelease' app/build.gradle >/dev/null
           grep -R -F -m1 -- "$ODIN_VERSION" app/src/main/assets/public >/dev/null
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -139,10 +130,6 @@ jobs:
       - name: Build and verify APK
         working-directory: android
         shell: bash
-        env:
-          ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
-          ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
-          ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           ./gradlew assembleDebug -PminSdkVersion=26
