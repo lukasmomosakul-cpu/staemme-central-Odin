@@ -58,6 +58,31 @@ jobs:
           test -n "$ODIN_KEY_PASSWORD"
           echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           bash ../native/build-android.sh
+
+          # Capacitor keeps the effective SDK values in variables.gradle in some templates.
+          # Force every generated SDK declaration to API 26 so ioninappbrowser-android 2.0.2 can merge.
+          if [ -f variables.gradle ]; then
+            sed -Ei 's/(minSdkVersion[[:space:]]*=[[:space:]]*)[0-9]+/\126/' variables.gradle
+            sed -Ei 's/(minSdkVersion[[:space:]]+)[0-9]+/\126/' variables.gradle
+            sed -Ei 's/(minSdk[[:space:]]*=[[:space:]]*)[0-9]+/\126/' variables.gradle
+            sed -Ei 's/(minSdk[[:space:]]+)[0-9]+/\126/' variables.gradle
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          s = re.sub(r'\bminSdkVersion\s*=?\s*\d+', 'minSdkVersion 26', s)
+          s = re.sub(r'\bminSdk\s*=?\s*\d+', 'minSdk 26', s)
+          if not re.search(r'\bminSdkVersion\s+26\b|\bminSdk\s+26\b', s):
+              s = s.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 26', 1)
+          p.write_text(s)
+          PY
+
+          echo '--- Android SDK configuration ---'
+          grep -R -nE 'minSdk(Version)?|targetSdk' variables.gradle app/build.gradle 2>/dev/null || true
+          grep -R -nE 'minSdkVersion[[:space:]]+26|minSdk[[:space:]]+26' variables.gradle app/build.gradle >/dev/null
           grep -R -F -m1 -- "$ODIN_VERSION" app/src/main/assets/public >/dev/null
       - name: Setup Java
         uses: actions/setup-java@v4
