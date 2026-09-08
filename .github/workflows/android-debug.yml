@@ -54,8 +54,6 @@ jobs:
           import re
           p = Path('app/build.gradle')
           s = p.read_text()
-          # Capacitor can generate minSdkVersion as a literal or expression.
-          # Normalize the actual DSL declaration, not just the manifest.
           s, n = re.subn(r'(?m)^(\s*)minSdkVersion\s+.*$', r'\1minSdkVersion 26', s, count=1)
           if n == 0:
               s, n = re.subn(r'(?m)^(\s*)minSdk\s+.*$', r'\1minSdk 26', s, count=1)
@@ -85,3 +83,5 @@ jobs:
           name: teamzentrale-odin-debug-apk-${{ github.run_number }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+# build trigger: verify current VERSION/minSdk fixes on a fresh runner
