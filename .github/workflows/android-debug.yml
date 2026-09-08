@@ -30,8 +30,9 @@ jobs:
           import os
           p = Path('app/build.gradle')
           s = p.read_text()
-          s = s.replace('versionCode 1', 'versionCode ' + os.environ['GITHUB_RUN_NUMBER'])
-          s = s.replace('versionName "1.0"', 'versionName "1.1.1"')
+          run_number = os.environ['GITHUB_RUN_NUMBER']
+          s = s.replace('versionCode 1', 'versionCode ' + run_number)
+          s = s.replace('versionName "1.0"', 'versionName "1.1.' + run_number + '"')
           p.write_text(s)
           PY
       - name: Configure embedded Die-Stämme WebView
