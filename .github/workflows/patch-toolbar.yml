@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - VERSION
+      - components/VersionUpdater.tsx
 
 permissions:
   contents: write
