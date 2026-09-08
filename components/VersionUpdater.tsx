@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 
+// Keep a safe native fallback aligned with VERSION for Android builds.
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.1.10';
 
 export default function VersionUpdater() {
