@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
-import GameNativeButton from '../../components/GameNativeButton';
 
 const DEFAULT_GAME_URL = 'https://www.die-staemme.de/';
 const STORAGE_KEY = 'odin-selected-game-account';
@@ -15,7 +14,6 @@ function GamePageContent() {
   const [email, setEmail] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [gameUrl] = useState(DEFAULT_GAME_URL);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -83,60 +81,31 @@ function GamePageContent() {
   }, [selectedId]);
 
   const selected = accounts.find(a => a.id === selectedId) ?? null;
-  const normalizedUrl = useMemo(() => {
-    try {
-      const parsed = new URL(gameUrl.trim() || DEFAULT_GAME_URL);
-      return parsed.protocol === 'https:' ? parsed.toString() : DEFAULT_GAME_URL;
-    } catch {
-      return DEFAULT_GAME_URL;
-    }
-  }, [gameUrl]);
+  const gameUrl = useMemo(() => DEFAULT_GAME_URL, []);
 
   return (
-    <main style={{ minHeight: '100vh', padding: 'clamp(10px,3vw,16px)', background: 'var(--bg,#0b1020)', color: 'var(--text,#f5f7fb)' }}>
-      <div style={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
-        <a href="/" className="muted">← Zur Teamzentrale</a>
-        <div className="eyebrow" style={{ marginTop: 18 }}>TEAMZENTRALE ODIN</div>
+    <main style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#0b1020', color: '#f5f7fb', overflow: 'hidden' }}>
+      <header style={{ flex: '0 0 auto', minHeight: 52, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,.12)', background: '#111827', zIndex: 2 }}>
+        <a href="/" className="button secondary" style={{ whiteSpace: 'nowrap' }}>← Odin</a>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <strong style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>🎮 Die Stämme</strong>
+          <span style={{ fontSize: 12, opacity: .7 }}>{selected ? `${selected.name} · Welt ${selected.world}` : email ? 'Angemeldet' : 'Nicht angemeldet'}</span>
+        </div>
+        <a href="/scripts" className="button secondary" style={{ whiteSpace: 'nowrap' }}>🧩 Scripts</a>
+      </header>
 
-        <section className="card section" style={{ marginTop: 14 }}>
-          <div className="sectionhead">
-            <div>
-              <h1 style={{ margin: 0, fontSize: 'clamp(24px,6vw,36px)' }}>🎮 Die Stämme</h1>
-              <div className="muted" style={{ marginTop: 5 }}>{email ? 'Angemeldet' : 'Nicht angemeldet'}</div>
-            </div>
-            {selected && <span className="pill">{selected.name} · {selected.world}</span>}
-          </div>
+      {loading && <div style={{ padding: 10, fontSize: 13, opacity: .75 }}>Account wird geladen …</div>}
+      {error && <div style={{ padding: 10, fontSize: 13 }}>⚠️ {error}</div>}
+      {!loading && !selected && !error && <div style={{ padding: 10, fontSize: 13, opacity: .75 }}>Kein Spielaccount ausgewählt. Das Spiel kann trotzdem geöffnet werden.</div>}
 
-          {loading && <div className="muted" style={{ marginTop: 14 }}>Account wird geladen …</div>}
-          {!loading && !selected && !error && <div className="event" style={{ marginTop: 14 }}><span>ℹ️</span><div className="muted">Kein Spielaccount ausgewählt. Bitte zuerst einen Account in der Teamzentrale öffnen.</div></div>}
-          {error && <div className="event" style={{ marginTop: 12 }}><span>⚠️</span><div className="muted">{error}</div></div>}
-
-          {selected && (
-            <div className="event" style={{ marginTop: 14 }}>
-              <span>🎮</span>
-              <div style={{ flex: 1 }}>
-                <strong>{selected.name}</strong>
-                <div className="muted">Welt {selected.world} · gemeinsamer Team-Account</div>
-              </div>
-              <span className="pill">bereit</span>
-            </div>
-          )}
-
-          <div style={{ marginTop: 16 }}>
-            <GameNativeButton url={normalizedUrl} />
-          </div>
-          <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
-            Das Spiel wird auf Android in einem In-App-WebView geöffnet. Der Account wurde bereits in der Teamzentrale ausgewählt.
-          </div>
-        </section>
-
-        <section className="card section" style={{ marginTop: 14 }}>
-          <div className="sectionhead">
-            <h2>Werkzeuge</h2>
-            <a className="button secondary" href="/scripts">🧩 Scripts</a>
-          </div>
-          <div className="muted">Script-Verwaltung, Benachrichtigungen und weitere Einstellungen werden zentral über Odin aufgebaut.</div>
-        </section>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff' }}>
+        <iframe
+          src={gameUrl}
+          title="Die Stämme"
+          allow="fullscreen"
+          referrerPolicy="strict-origin-when-cross-origin"
+          style={{ display: 'block', width: '100%', height: '100%', border: 0 }}
+        />
       </div>
     </main>
   );
@@ -144,7 +113,7 @@ function GamePageContent() {
 
 export default function GamePage() {
   return (
-    <Suspense fallback={<main style={{ minHeight: '100vh', padding: 16, background: 'var(--bg,#0b1020)', color: 'var(--text,#f5f7fb)' }}><div className="muted">Spiel wird geladen …</div></main>}>
+    <Suspense fallback={<main style={{ minHeight: '100vh', padding: 16, background: '#0b1020', color: '#f5f7fb' }}><div>Spiel wird geladen …</div></main>}>
       <GamePageContent />
     </Suspense>
   );
