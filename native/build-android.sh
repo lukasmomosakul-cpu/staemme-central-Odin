@@ -11,16 +11,11 @@ cp ../native/game-scripts.js app/src/main/assets/game-scripts.js
 
 cat > app/src/main/res/xml/backup_rules.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
-<full-backup-content>
-  <include domain="sharedpref" path="odin_app_login.xml" />
-</full-backup-content>
+<full-backup-content><include domain="sharedpref" path="odin_app_login.xml" /></full-backup-content>
 EOF
 cat > app/src/main/res/xml/data_extraction_rules.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
-<data-extraction-rules>
-  <cloud-backup><include domain="sharedpref" path="odin_app_login.xml" /></cloud-backup>
-  <device-transfer><include domain="sharedpref" path="odin_app_login.xml" /></device-transfer>
-</data-extraction-rules>
+<data-extraction-rules><cloud-backup><include domain="sharedpref" path="odin_app_login.xml" /></cloud-backup><device-transfer><include domain="sharedpref" path="odin_app_login.xml" /></device-transfer></data-extraction-rules>
 EOF
 
 cat > "$DIR/GameWebViewActivity.java" <<EOF
@@ -42,7 +37,7 @@ EOF
 
 cat > "$MAIN" <<EOF
 package $PKG;
-import android.app.DownloadManager; import android.content.*; import android.net.Uri; import android.os.*; import android.webkit.*; import com.getcapacitor.BridgeActivity; import org.json.*;
+import android.app.DownloadManager; import android.content.*; import android.net.Uri; import android.os.*; import android.provider.Settings; import android.webkit.*; import android.widget.Toast; import com.getcapacitor.BridgeActivity; import org.json.*;
 public class MainActivity extends BridgeActivity{
  private static final String PREFS="odin_app_login",GAME_STATE="odin_game_state";
  @Override public void onCreate(Bundle state){super.onCreate(state);WebView v=getBridge().getWebView();WebSettings s=v.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);android.webkit.CookieManager cm=android.webkit.CookieManager.getInstance();cm.setAcceptCookie(true);cm.setAcceptThirdPartyCookies(v,true);v.addJavascriptInterface(new Object(){
@@ -50,43 +45,33 @@ public class MainActivity extends BridgeActivity{
   @JavascriptInterface public void saveAppLogin(String e,String p){getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString("email",e==null?"":e).putString("password",p==null?"":p).apply();}
   @JavascriptInterface public void clearSavedAppLogin(){getSharedPreferences(PREFS,MODE_PRIVATE).edit().clear().apply();}
   @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){getSharedPreferences(GAME_STATE,MODE_PRIVATE).edit().putBoolean("minimized",false).apply();Intent i=new Intent(MainActivity.this,GameWebViewActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);i.putExtra("accountId",accountId);i.putExtra("username",username==null?"":username);i.putExtra("password",password==null?"":password);i.putExtra("scriptsJson",scriptsJson==null?"[]":scriptsJson);startActivity(i);}
-  @JavascriptInterface public void updateApk(){try{DownloadManager dm=(DownloadManager)getSystemService(Context.DOWNLOAD_SERVICE);if(dm==null)return;DownloadManager.Request r=new DownloadManager.Request(Uri.parse("https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk"));r.setTitle("Odin wird aktualisiert");r.setDescription("Neueste Version wird heruntergeladen");r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);r.setMimeType("application/vnd.android.package-archive");r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"odin-update.apk");dm.enqueue(r);}catch(Exception ignored){}}
+  @JavascriptInterface public void updateApk(){try{if(Build.VERSION.SDK_INT>=26&&!getPackageManager().canRequestPackageInstalls()){Toast.makeText(MainActivity.this,"Bitte Installation aus dieser Quelle erlauben",Toast.LENGTH_LONG).show();startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+getPackageName())));return;}DownloadManager dm=(DownloadManager)getSystemService(Context.DOWNLOAD_SERVICE);if(dm==null){Toast.makeText(MainActivity.this,"Updater nicht verfügbar",Toast.LENGTH_LONG).show();return;}Uri uri=Uri.parse("https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk?odin="+System.currentTimeMillis());DownloadManager.Request r=new DownloadManager.Request(uri);r.setTitle("Odin wird aktualisiert");r.setDescription("Neueste Version wird heruntergeladen");r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);r.setMimeType("application/vnd.android.package-archive");r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"odin-update.apk");dm.enqueue(r);Toast.makeText(MainActivity.this,"Update wird heruntergeladen",Toast.LENGTH_SHORT).show();}catch(Exception e){Toast.makeText(MainActivity.this,"Update fehlgeschlagen: "+e.getClass().getSimpleName(),Toast.LENGTH_LONG).show();}}
  },"Android");}
 }
 EOF
 
 python3 - <<'PY'
 from pathlib import Path
-import re,xml.etree.ElementTree as ET
+import re
 p=Path('app/src/main/AndroidManifest.xml');s=p.read_text()
 if 'android.permission.REQUEST_INSTALL_PACKAGES' not in s:
  m=re.search(r'<manifest\b',s);e=s.find('>',m.start());s=s[:e+1]+'\n<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'+s[e+1:]
-if '<uses-sdk' in s:
- s=re.sub(r'<uses-sdk\b[^>]*/>', '<uses-sdk android:minSdkVersion="26" />', s, count=1)
+if '<uses-sdk' in s:s=re.sub(r'<uses-sdk\b[^>]*/>','<uses-sdk android:minSdkVersion="26" />',s,count=1)
 else:
  m=re.search(r'<manifest\b[^>]*>',s);s=s[:m.end()]+'\n<uses-sdk android:minSdkVersion="26" />'+s[m.end():]
 if 'android:name=".GameWebViewActivity"' not in s:
  pos=s.rfind('</application>');s=s[:pos]+'<activity android:name=".GameWebViewActivity" android:exported="false" />\n'+s[pos:]
-p.write_text(s);ET.parse(s if False else p)
+p.write_text(s)
 PY
 
 python3 - <<'PY'
 from pathlib import Path
 import os,re
-p=Path('app/build.gradle');s=p.read_text();v=os.environ.get('ODIN_VERSION','')
-a=v.split('.');code=int(a[0])*1000000+int(a[1])*1000+int(a[2])
-s=re.sub(r'\bversionCode\s+\d+',f'versionCode {code}',s,count=1)
-s=re.sub(r'\bversionName\s+"[^"]+"',f'versionName "{v}"',s,count=1)
-if re.search(r'\bminSdkVersion\s+\d+',s):
- s=re.sub(r'\bminSdkVersion\s+\d+', 'minSdkVersion 26', s, count=1)
-elif re.search(r'\bminSdk\s+\d+',s):
- s=re.sub(r'\bminSdk\s+\d+', 'minSdk 26', s, count=1)
-else:
- s=s.replace('defaultConfig {','defaultConfig {\n        minSdkVersion 26',1)
-if 'storeFile file("odin-release.jks")' not in s:
- s=s.replace('android {','''android {
- signingConfigs { release { storeFile file("odin-release.jks"); storePassword System.getenv("ODIN_KEYSTORE_PASSWORD"); keyAlias System.getenv("ODIN_KEY_ALIAS"); keyPassword System.getenv("ODIN_KEY_PASSWORD") } }''',1)
-if 'signingConfig signingConfigs.release' not in s:
- s=s.replace('buildTypes {','''buildTypes { debug { signingConfig signingConfigs.release }''',1)
+p=Path('app/build.gradle');s=p.read_text();v=os.environ.get('ODIN_VERSION','');a=v.split('.');code=int(a[0])*1000000+int(a[1])*1000+int(a[2]);s=re.sub(r'\bversionCode\s+\d+',f'versionCode {code}',s,count=1);s=re.sub(r'\bversionName\s+"[^"]+"',f'versionName "{v}"',s,count=1)
+if re.search(r'\bminSdkVersion\s+\d+',s):s=re.sub(r'\bminSdkVersion\s+\d+','minSdkVersion 26',s,count=1)
+elif re.search(r'\bminSdk\s+\d+',s):s=re.sub(r'\bminSdk\s+\d+','minSdk 26',s,count=1)
+else:s=s.replace('defaultConfig {','defaultConfig {\n        minSdkVersion 26',1)
+if 'storeFile file("odin-release.jks")' not in s:s=s.replace('android {','android {\n signingConfigs { release { storeFile file("odin-release.jks"); storePassword System.getenv("ODIN_KEYSTORE_PASSWORD"); keyAlias System.getenv("ODIN_KEY_ALIAS"); keyPassword System.getenv("ODIN_KEY_PASSWORD") } }',1)
+if 'signingConfig signingConfigs.release' not in s:s=s.replace('buildTypes {','buildTypes { debug { signingConfig signingConfigs.release }',1)
 p.write_text(s)
 PY
