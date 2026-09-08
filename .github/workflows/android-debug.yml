@@ -17,14 +17,24 @@ jobs:
         run: corepack enable && corepack prepare pnpm@10.15.0 --activate
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+      - name: Read app version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "ODIN VERSION: $VERSION"
       - name: Build web app
         env:
-          NEXT_PUBLIC_APP_VERSION: "1.1.${{ github.run_number }}"
+          NEXT_PUBLIC_APP_VERSION: ${{ steps.version.outputs.version }}
         run: pnpm build
       - name: Generate Capacitor Android project
         run: pnpm cap:add:android && pnpm cap:sync
       - name: Configure Android app version
         working-directory: android
+        env:
+          ODIN_VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -33,18 +43,16 @@ jobs:
           import os, re
           p = Path('app/build.gradle')
           s = p.read_text()
-          run_number = int(os.environ['GITHUB_RUN_NUMBER'])
-          version_name = f'1.1.{run_number}'
-          code_matches = re.findall(r'\bversionCode\s+\d+', s)
-          name_matches = re.findall(r'\bversionName\s+"[^"]+"', s)
-          if not code_matches or not name_matches:
+          version_name = os.environ['ODIN_VERSION']
+          parts = version_name.split('.')
+          version_code = int(parts[0]) * 1000000 + int(parts[1]) * 1000 + int(parts[2])
+          if not re.search(r'\bversionCode\s+\d+', s) or not re.search(r'\bversionName\s+"[^"]+"', s):
               raise SystemExit('Could not find versionCode/versionName in android/app/build.gradle')
-          s = re.sub(r'\bversionCode\s+\d+', f'versionCode {run_number}', s, count=1)
+          s = re.sub(r'\bversionCode\s+\d+', f'versionCode {version_code}', s, count=1)
           s = re.sub(r'\bversionName\s+"[^"]+"', f'versionName "{version_name}"', s, count=1)
           p.write_text(s)
-          print(f'ODIN VERSION: {version_name} / versionCode {run_number}')
-          print([x for x in s.splitlines() if 'versionCode' in x or 'versionName' in x][:4])
-          if f'versionName "{version_name}"' not in s or f'versionCode {run_number}' not in s:
+          print(f'ODIN VERSION: {version_name} / versionCode {version_code}')
+          if f'versionName "{version_name}"' not in s or f'versionCode {version_code}' not in s:
               raise SystemExit('VERSION VERIFICATION FAILED')
           PY
       - name: Configure embedded Die-Stämme WebView
@@ -54,8 +62,25 @@ jobs:
           MAIN=$(find app/src/main -type f -name 'MainActivity.java' | head -n 1)
           PKG=$(sed -n 's/^package[[:space:]]\+\(.*\);/\1/p' "$MAIN" | head -n 1)
           DIR=$(dirname "$MAIN")
-          mkdir -p "$DIR" app/src/main/assets
+          mkdir -p "$DIR" app/src/main/assets app/src/main/res/xml
           cp ../native/game-scripts.js app/src/main/assets/game-scripts.js
+          cat > app/src/main/res/xml/backup_rules.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <full-backup-content>
+              <include domain="sharedpref" path="odin_app_login.xml" />
+          </full-backup-content>
+          EOF
+          cat > app/src/main/res/xml/data_extraction_rules.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <data-extraction-rules>
+              <cloud-backup>
+                  <include domain="sharedpref" path="odin_app_login.xml" />
+              </cloud-backup>
+              <device-transfer>
+                  <include domain="sharedpref" path="odin_app_login.xml" />
+              </device-transfer>
+          </data-extraction-rules>
+          EOF
           cat > "$DIR/GameWebViewActivity.java" <<EOF
           package $PKG;
           import android.app.Activity;
@@ -138,7 +163,11 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('app/src/main/AndroidManifest.xml'); s=p.read_text()
-          if 'GameWebViewActivity' not in s: p.write_text(s.replace('</application>','    <activity android:name=".GameWebViewActivity" android:exported="false" />\n    </application>'))
+          if 'android:fullBackupContent' not in s:
+              s=s.replace('<application', '<application android:allowBackup="true" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"', 1)
+          if 'GameWebViewActivity' not in s:
+              s=s.replace('</application>', '    <activity android:name=".GameWebViewActivity" android:exported="false" />\n    </application>')
+          p.write_text(s)
           PY
       - name: Align Android minimum SDK
         working-directory: android
@@ -191,8 +220,8 @@ jobs:
           echo '--- APK version ---'
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package:|versionCode=|versionName='
       - name: Give APK a unique filename
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${GITHUB_RUN_NUMBER}.apk"
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${{ steps.version.outputs.version }}.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: teamzentrale-odin-debug-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/debug/teamzentrale-odin-${{ github.run_number }}.apk
+          name: teamzentrale-odin-${{ steps.version.outputs.version }}
+          path: android/app/build/outputs/apk/debug/teamzentrale-odin-${{ steps.version.outputs.version }}.apk
