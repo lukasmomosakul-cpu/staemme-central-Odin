@@ -93,27 +93,14 @@ jobs:
           if not re.search(r'\bversionName\s+"[^"]+"', s):
               raise SystemExit('Could not find versionName in android/app/build.gradle')
 
-          s = re.sub(
-              r'\bversionCode\s+\d+',
-              f'versionCode {version_code}',
-              s,
-              count=1
-          )
-
-          s = re.sub(
-              r'\bversionName\s+"[^"]+"',
-              f'versionName "{version_name}"',
-              s,
-              count=1
-          )
-
+          s = re.sub(r'\bversionCode\s+\d+', f'versionCode {version_code}', s, count=1)
+          s = re.sub(r'\bversionName\s+"[^"]+"', f'versionName "{version_name}"', s, count=1)
           p.write_text(s)
 
           print(f'ODIN VERSION: {version_name} / versionCode {version_code}')
 
           if f'versionName "{version_name}"' not in s:
               raise SystemExit('VERSION NAME VERIFICATION FAILED')
-
           if f'versionCode {version_code}' not in s:
               raise SystemExit('VERSION CODE VERIFICATION FAILED')
           PY
@@ -161,6 +148,7 @@ jobs:
           package $PKG;
 
           import android.app.Activity;
+          import android.content.Intent;
           import android.os.Bundle;
           import android.graphics.Color;
           import android.webkit.CookieManager;
@@ -211,14 +199,10 @@ jobs:
               if (scriptsJson != null) {
                 try {
                   JSONArray a = new JSONArray(scriptsJson);
-
                   for (int i = 0; i < a.length(); i++) {
                     JSONObject o = a.getJSONObject(i);
                     String source = o.optString("source", "");
-
-                    if (source.startsWith("https://")) {
-                      managedScripts.add(source);
-                    }
+                    if (source.startsWith("https://")) managedScripts.add(source);
                   }
                 } catch (Exception ignored) {
                 }
@@ -228,19 +212,15 @@ jobs:
               root.setOrientation(LinearLayout.VERTICAL);
 
               TextView toolbar = new TextView(this);
-              toolbar.setText("  Odin  •  Die Stämme");
+              toolbar.setText("  Odin  •  Die Stämme     ↓ Minimieren");
               toolbar.setTextColor(Color.WHITE);
               toolbar.setTextSize(16);
               toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL);
               toolbar.setBackgroundColor(Color.rgb(11, 16, 32));
               toolbar.setPadding(16, 0, 16, 0);
+              toolbar.setOnClickListener(v -> minimizeToApp());
 
-              toolbar.setOnClickListener(v -> finish());
-
-              root.addView(
-                  toolbar,
-                  new LinearLayout.LayoutParams(-1, 52)
-              );
+              root.addView(toolbar, new LinearLayout.LayoutParams(-1, 52));
 
               webView = new WebView(this);
 
@@ -258,286 +238,121 @@ jobs:
               cm.setAcceptThirdPartyCookies(webView, true);
 
               webView.setWebChromeClient(new WebChromeClient());
-
-              webView.addJavascriptInterface(
-                  new OdinBridge(),
-                  "OdinNative"
-              );
+              webView.addJavascriptInterface(new OdinBridge(), "OdinNative");
 
               webView.setWebViewClient(new WebViewClient() {
-
                 @Override
-                public boolean shouldOverrideUrlLoading(
-                    WebView v,
-                    WebResourceRequest r
-                ) {
+                public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                   return false;
                 }
 
                 @Override
-                public void onPageFinished(
-                    WebView v,
-                    String url
-                ) {
+                public void onPageFinished(WebView v, String url) {
                   injectManagedScripts(v);
                   prefillLogin(v);
                   loadEnabledScripts(v);
                 }
               });
 
-              root.addView(
-                  webView,
-                  new LinearLayout.LayoutParams(-1, 0, 1)
-              );
-
+              root.addView(webView, new LinearLayout.LayoutParams(-1, 0, 1));
               setContentView(root);
-
               webView.loadUrl(GAME_URL);
+            }
+
+            private void minimizeToApp() {
+              getSharedPreferences("odin_game_state", MODE_PRIVATE)
+                  .edit().putBoolean("minimized", true).apply();
+
+              Intent i = new Intent(this, MainActivity.class);
+              i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+              startActivity(i);
             }
 
             private void injectManagedScripts(WebView v) {
               try {
                 StringBuilder b = new StringBuilder();
-
-                BufferedReader r =
-                    new BufferedReader(
-                        new InputStreamReader(
-                            getAssets().open("game-scripts.js")
-                        )
-                    );
-
+                BufferedReader r = new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));
                 String line;
-
-                while ((line = r.readLine()) != null) {
-                  b.append(line).append('\n');
-                }
-
+                while ((line = r.readLine()) != null) b.append(line).append('\n');
                 r.close();
-
-                v.evaluateJavascript(
-                    "(function(){"
-                    + b
-                    + "})()",
-                    null
-                );
-
+                v.evaluateJavascript("(function(){" + b + "})()", null);
               } catch (Exception ignored) {
               }
             }
 
             private void prefillLogin(WebView v) {
-
-              if (username.isEmpty() && password.isEmpty()) {
-                return;
-              }
+              if (username.isEmpty() && password.isEmpty()) return;
 
               final String u = JSONObject.quote(username);
               final String p = JSONObject.quote(password);
 
-              String js =
-                  "(function(){"
+              String js = "(function(){"
                   + "var U=" + u + ",P=" + p + ";"
-
-                  + "function put(el,val){"
-                  + "if(!el)return;"
-                  + "try{"
-                  + "var d=Object.getOwnPropertyDescriptor("
-                  + "HTMLInputElement.prototype,'value');"
-                  + "if(d&&d.set)d.set.call(el,val);"
-                  + "else el.value=val;"
-                  + "}catch(e){el.value=val;}"
-                  + "['input','change','blur'].forEach(function(n){"
-                  + "el.dispatchEvent(new Event(n,{bubbles:true}));"
-                  + "});"
-                  + "}"
-
-                  + "function findUser(){"
-                  + "var sels=["
-                  + "'input[name=\"username\"]',"
-                  + "'input[name=\"user\"]',"
-                  + "'input[name=\"login\"]',"
-                  + "'input[id=\"username\"]',"
-                  + "'input[id=\"user\"]',"
-                  + "'input[autocomplete=\"username\"]',"
-                  + "'input[type=\"email\"]',"
-                  + "'input[type=\"text\"]'"
-                  + "];"
-
-                  + "for(var i=0;i<sels.length;i++){"
-                  + "var e=document.querySelector(sels[i]);"
-                  + "if(e)return e;"
-                  + "}"
-                  + "return null;"
-                  + "}"
-
-                  + "function findPass(){"
-                  + "var sels=["
-                  + "'input[type=\"password\"]',"
-                  + "'input[name*=\"pass\" i]',"
-                  + "'input[id*=\"pass\" i]',"
-                  + "'input[autocomplete=\"current-password\"]'"
-                  + "];"
-
-                  + "for(var i=0;i<sels.length;i++){"
-                  + "var e=document.querySelector(sels[i]);"
-                  + "if(e)return e;"
-                  + "}"
-                  + "return null;"
-                  + "}"
-
-                  + "function fill(){"
-                  + "var user=findUser(),pass=findPass();"
-                  + "if(user&&U)put(user,U);"
-                  + "if(pass&&P)put(pass,P);"
-                  + "return !!(user&&pass);"
-                  + "}"
-
-                  + "var tries=0;"
-                  + "function loop(){"
-                  + "if(fill()||++tries>=120)clearInterval(t);"
-                  + "}"
-
-                  + "fill();"
-                  + "var t=setInterval(loop,250);"
-
-                  + "setTimeout(fill,100);"
-                  + "setTimeout(fill,500);"
-                  + "setTimeout(fill,1000);"
-                  + "setTimeout(fill,2000);"
-                  + "setTimeout(fill,4000);"
-
+                  + "function put(el,val){if(!el)return;try{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');if(d&&d.set)d.set.call(el,val);else el.value=val;}catch(e){el.value=val;}['input','change','blur'].forEach(function(n){el.dispatchEvent(new Event(n,{bubbles:true}));});}"
+                  + "function findUser(){var sels=['input[name=\"username\"]','input[name=\"user\"]','input[name=\"login\"]','input[id=\"username\"]','input[id=\"user\"]','input[autocomplete=\"username\"]','input[type=\"email\"]','input[type=\"text\"]'];for(var i=0;i<sels.length;i++){var e=document.querySelector(sels[i]);if(e)return e;}return null;}"
+                  + "function findPass(){var sels=['input[type=\"password\"]','input[name*=\"pass\" i]','input[id*=\"pass\" i]','input[autocomplete=\"current-password\"]'];for(var i=0;i<sels.length;i++){var e=document.querySelector(sels[i]);if(e)return e;}return null;}"
+                  + "function fill(){var user=findUser(),pass=findPass();if(user&&U)put(user,U);if(pass&&P)put(pass,P);return !!(user&&pass);}"
+                  + "var tries=0;function loop(){if(fill()||++tries>=120)clearInterval(t);}var t=setInterval(loop,250);fill();setTimeout(fill,100);setTimeout(fill,500);setTimeout(fill,1000);setTimeout(fill,2000);setTimeout(fill,4000);"
                   + "})()";
 
               v.evaluateJavascript(js, null);
             }
 
             private void loadEnabledScripts(WebView v) {
-
-              if (managedScripts.isEmpty()) {
-                return;
-              }
+              if (managedScripts.isEmpty()) return;
 
               String path = v.getUrl() == null ? "" : v.getUrl();
-
-              boolean inWorld =
-                  path.matches(
-                      "(?i).*[/]game[.]php(?:[/].*)?.*"
-                  )
-                  ||
-                  path.matches(
-                      "(?i).*[?&]screen=[^&]+.*[?&]village=[^&]+.*"
-                  );
-
-              if (!inWorld) {
-                return;
-              }
+              boolean inWorld = path.matches("(?i).*[/]game[.]php(?:[/].*)?.*")
+                  || path.matches("(?i).*[?&]screen=[^&]+.*[?&]village=[^&]+.*");
+              if (!inWorld) return;
 
               for (String source : managedScripts) {
-
                 new Thread(() -> {
-
                   try {
                     String code = downloadScript(source);
-
-                    if (code == null || code.isEmpty()) {
-                      return;
-                    }
-
+                    if (code == null || code.isEmpty()) return;
                     final String q = JSONObject.quote(code);
-
-                    runOnUiThread(() ->
-                        v.evaluateJavascript(
-                            "(function(){"
-                            + "try{eval(" + q + ");}"
-                            + "catch(e){"
-                            + "console.error('[Odin] Scriptfehler',e);"
-                            + "}"
-                            + "})()",
-                            null
-                        )
-                    );
-
+                    runOnUiThread(() -> v.evaluateJavascript("(function(){try{eval(" + q + ");}catch(e){console.error('[Odin] Scriptfehler',e);}})()", null));
                   } catch (Exception ignored) {
                   }
-
                 }).start();
               }
             }
 
             private String downloadScript(String source) {
-
               HttpURLConnection c = null;
-
               try {
-
-                c =
-                    (HttpURLConnection)
-                        new URL(source).openConnection();
-
+                c = (HttpURLConnection) new URL(source).openConnection();
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(30000);
-
-                c.setRequestProperty(
-                    "User-Agent",
-                    "Teamzentrale-Odin/1.0 Android WebView"
-                );
-
-                c.setRequestProperty(
-                    "Accept",
-                    "*/*"
-                );
-
+                c.setRequestProperty("User-Agent", "Teamzentrale-Odin/1.0 Android WebView");
+                c.setRequestProperty("Accept", "*/*");
                 int status = c.getResponseCode();
-
-                if (status < 200 || status >= 300) {
-                  return null;
-                }
-
-                BufferedInputStream in =
-                    new BufferedInputStream(c.getInputStream());
-
-                ByteArrayOutputStream out =
-                    new ByteArrayOutputStream();
-
+                if (status < 200 || status >= 300) return null;
+                BufferedInputStream in = new BufferedInputStream(c.getInputStream());
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
                 byte[] buf = new byte[8192];
-
                 int n;
-
-                while ((n = in.read(buf)) != -1) {
-                  out.write(buf, 0, n);
-                }
-
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
                 in.close();
-
                 return out.toString("UTF-8");
-
               } catch (Exception e) {
-
                 return null;
-
               } finally {
-
-                if (c != null) {
-                  c.disconnect();
-                }
+                if (c != null) c.disconnect();
               }
             }
 
             @Override
             public void onBackPressed() {
-
-              if (webView != null && webView.canGoBack()) {
-                webView.goBack();
-              } else {
-                super.onBackPressed();
-              }
+              if (webView != null && webView.canGoBack()) webView.goBack();
+              else minimizeToApp();
             }
 
             private class OdinBridge {
-
               @JavascriptInterface
               public void minimize() {
-                runOnUiThread(() -> finish());
+                runOnUiThread(() -> minimizeToApp());
               }
             }
           }
@@ -561,295 +376,117 @@ jobs:
           import android.webkit.WebView;
 
           import com.getcapacitor.BridgeActivity;
-
           import org.json.JSONObject;
 
           public class MainActivity extends BridgeActivity {
 
             private static final String PREFS = "odin_app_login";
+            private static final String GAME_STATE = "odin_game_state";
 
             @Override
             public void onCreate(Bundle state) {
-
               super.onCreate(state);
 
               WebView v = getBridge().getWebView();
-
               WebSettings s = v.getSettings();
-
               s.setJavaScriptEnabled(true);
               s.setDomStorageEnabled(true);
 
               CookieManager cm = CookieManager.getInstance();
-
               cm.setAcceptCookie(true);
               cm.setAcceptThirdPartyCookies(v, true);
 
-              v.addJavascriptInterface(
-                  new Object() {
+              v.addJavascriptInterface(new Object() {
+                @JavascriptInterface
+                public String getSavedAppLogin() {
+                  try {
+                    SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+                    JSONObject o = new JSONObject();
+                    o.put("email", p.getString("email", ""));
+                    o.put("password", p.getString("password", ""));
+                    return o.toString();
+                  } catch (Exception e) {
+                    return "";
+                  }
+                }
 
-                    @JavascriptInterface
-                    public String getSavedAppLogin() {
-
-                      try {
-
-                        SharedPreferences p =
-                            getSharedPreferences(
-                                PREFS,
-                                MODE_PRIVATE
-                            );
-
-                        JSONObject o = new JSONObject();
-
-                        o.put(
-                            "email",
-                            p.getString("email", "")
-                        );
-
-                        o.put(
-                            "password",
-                            p.getString("password", "")
-                        );
-
-                        return o.toString();
-
-                      } catch (Exception e) {
-
-                        return "";
-                      }
-                    }
-
-                    @JavascriptInterface
-                    public void saveAppLogin(
-                        String email,
-                        String password
-                    ) {
-
-                      getSharedPreferences(
-                          PREFS,
-                          MODE_PRIVATE
-                      )
-                      .edit()
-                      .putString(
-                          "email",
-                          email == null ? "" : email
-                      )
-                      .putString(
-                          "password",
-                          password == null ? "" : password
-                      )
+                @JavascriptInterface
+                public void saveAppLogin(String email, String password) {
+                  getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                      .putString("email", email == null ? "" : email)
+                      .putString("password", password == null ? "" : password)
                       .apply();
-                    }
+                }
 
-                    @JavascriptInterface
-                    public void clearSavedAppLogin() {
+                @JavascriptInterface
+                public void clearSavedAppLogin() {
+                  getSharedPreferences(PREFS, MODE_PRIVATE).edit().clear().apply();
+                }
 
-                      getSharedPreferences(
-                          PREFS,
-                          MODE_PRIVATE
-                      )
-                      .edit()
-                      .clear()
-                      .apply();
-                    }
+                @JavascriptInterface
+                public void openGame(String accountId, String username, String password, String scriptsJson) {
+                  getSharedPreferences(GAME_STATE, MODE_PRIVATE).edit().putBoolean("minimized", false).apply();
 
-                    @JavascriptInterface
-                    public void openGame(
-                        String accountId,
-                        String username,
-                        String password,
-                        String scriptsJson
-                    ) {
+                  Intent i = new Intent(MainActivity.this, GameWebViewActivity.class);
+                  i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                  i.putExtra("accountId", accountId);
+                  i.putExtra("username", username == null ? "" : username);
+                  i.putExtra("password", password == null ? "" : password);
+                  i.putExtra("scriptsJson", scriptsJson == null ? "[]" : scriptsJson);
+                  startActivity(i);
+                }
 
-                      Intent i =
-                          new Intent(
-                              MainActivity.this,
-                              GameWebViewActivity.class
-                          );
+                @JavascriptInterface
+                public void updateApk() {
+                  try {
+                    String url = "https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk";
+                    DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                    if (dm == null) return;
 
-                      i.putExtra(
-                          "accountId",
-                          accountId
-                      );
+                    DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+                    req.setTitle("Odin wird aktualisiert");
+                    req.setDescription("Neueste Version wird heruntergeladen");
+                    req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                    req.setMimeType("application/vnd.android.package-archive");
+                    req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "odin-update.apk");
 
-                      i.putExtra(
-                          "username",
-                          username == null
-                              ? ""
-                              : username
-                      );
+                    long downloadId = dm.enqueue(req);
+                    Handler handler = new Handler(Looper.getMainLooper());
 
-                      i.putExtra(
-                          "password",
-                          password == null
-                              ? ""
-                              : password
-                      );
-
-                      i.putExtra(
-                          "scriptsJson",
-                          scriptsJson == null
-                              ? "[]"
-                              : scriptsJson
-                      );
-
-                      startActivity(i);
-                    }
-
-                    @JavascriptInterface
-                    public void updateApk() {
-
-                      try {
-
-                        String url =
-                            "https://github.com/"
-                            + "lukasmomosakul-cpu/"
-                            + "staemme-central-Odin/"
-                            + "releases/latest/download/"
-                            + "odin-latest.apk";
-
-                        DownloadManager dm =
-                            (DownloadManager)
-                                getSystemService(
-                                    Context.DOWNLOAD_SERVICE
-                                );
-
-                        if (dm == null) {
-                          return;
-                        }
-
-                        DownloadManager.Request req =
-                            new DownloadManager.Request(
-                                Uri.parse(url)
-                            );
-
-                        req.setTitle(
-                            "Odin wird aktualisiert"
-                        );
-
-                        req.setDescription(
-                            "Neueste Version wird heruntergeladen"
-                        );
-
-                        req.setNotificationVisibility(
-                            DownloadManager.Request
-                                .VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-                        );
-
-                        req.setMimeType(
-                            "application/vnd.android.package-archive"
-                        );
-
-                        req.setDestinationInExternalPublicDir(
-                            Environment.DIRECTORY_DOWNLOADS,
-                            "odin-update.apk"
-                        );
-
-                        long downloadId =
-                            dm.enqueue(req);
-
-                        Handler handler =
-                            new Handler(
-                                Looper.getMainLooper()
-                            );
-
-                        Runnable checkDownload =
-                            new Runnable() {
-
-                              @Override
-                              public void run() {
-
-                                DownloadManager.Query query =
-                                    new DownloadManager.Query();
-
-                                query.setFilterById(
-                                    downloadId
-                                );
-
-                                android.database.Cursor c =
-                                    dm.query(query);
-
-                                if (c != null) {
-
-                                  try {
-
-                                    if (c.moveToFirst()) {
-
-                                      int status =
-                                          c.getInt(
-                                              c.getColumnIndexOrThrow(
-                                                  DownloadManager
-                                                      .COLUMN_STATUS
-                                              )
-                                          );
-
-                                      if (
-                                          status ==
-                                          DownloadManager
-                                              .STATUS_SUCCESSFUL
-                                      ) {
-
-                                        Uri uri =
-                                            dm.getUriForDownloadedFile(
-                                                downloadId
-                                            );
-
-                                        if (uri != null) {
-
-                                          Intent install =
-                                              new Intent(
-                                                  Intent.ACTION_VIEW
-                                              );
-
-                                          install.setDataAndType(
-                                              uri,
-                                              "application/vnd.android.package-archive"
-                                          );
-
-                                          install.addFlags(
-                                              Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                              |
-                                              Intent.FLAG_ACTIVITY_NEW_TASK
-                                          );
-
-                                          startActivity(install);
-                                        }
-
-                                        return;
-                                      }
-
-                                      if (
-                                          status ==
-                                          DownloadManager
-                                              .STATUS_FAILED
-                                      ) {
-
-                                        return;
-                                      }
-                                    }
-
-                                  } finally {
-
-                                    c.close();
-                                  }
+                    Runnable checkDownload = new Runnable() {
+                      @Override
+                      public void run() {
+                        DownloadManager.Query query = new DownloadManager.Query();
+                        query.setFilterById(downloadId);
+                        android.database.Cursor c = dm.query(query);
+                        if (c != null) {
+                          try {
+                            if (c.moveToFirst()) {
+                              int status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                              if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                                Uri uri = dm.getUriForDownloadedFile(downloadId);
+                                if (uri != null) {
+                                  Intent install = new Intent(Intent.ACTION_VIEW);
+                                  install.setDataAndType(uri, "application/vnd.android.package-archive");
+                                  install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                                  startActivity(install);
                                 }
-
-                                handler.postDelayed(
-                                    this,
-                                    500
-                                );
+                                return;
                               }
-                            };
-
-                        handler.post(checkDownload);
-
-                      } catch (Exception ignored) {
+                              if (status == DownloadManager.STATUS_FAILED) return;
+                            }
+                          } finally {
+                            c.close();
+                          }
+                        }
+                        handler.postDelayed(this, 500);
                       }
-                    }
-
-                  },
-                  "Android"
-              );
+                    };
+                    handler.post(checkDownload);
+                  } catch (Exception ignored) {
+                  }
+                }
+              }, "Android");
             }
           }
           EOF
@@ -860,98 +497,37 @@ jobs:
           import xml.etree.ElementTree as ET
 
           p = Path('app/src/main/AndroidManifest.xml')
-
           s = p.read_text(encoding='utf-8')
 
           if '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />' not in s:
               manifest_match = re.search(r'<manifest\b', s)
-
               if not manifest_match:
-                  raise SystemExit(
-                      'Could not find <manifest> in AndroidManifest.xml'
-                  )
-
+                  raise SystemExit('Could not find <manifest> in AndroidManifest.xml')
               manifest_end = s.find('>', manifest_match.start())
-
               if manifest_end < 0:
-                  raise SystemExit(
-                      'Malformed <manifest> opening tag'
-                  )
-
-              permission = (
-                  '\n'
-                  '    <uses-permission '
-                  'android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'
-              )
-
-              s = (
-                  s[:manifest_end + 1]
-                  + permission
-                  + s[manifest_end + 1:]
-              )
+                  raise SystemExit('Malformed <manifest> opening tag')
+              permission = '\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'
+              s = s[:manifest_end + 1] + permission + s[manifest_end + 1:]
 
           if 'android:allowBackup=' not in s:
-
-              m = re.search(
-                  r'<application\b',
-                  s
-              )
-
+              m = re.search(r'<application\b', s)
               if not m:
-                  raise SystemExit(
-                      'Could not find <application> in AndroidManifest.xml'
-                  )
-
-              end = s.find(
-                  '>',
-                  m.start()
-              )
-
+                  raise SystemExit('Could not find <application> in AndroidManifest.xml')
+              end = s.find('>', m.start())
               if end < 0:
-                  raise SystemExit(
-                      'Malformed <application> opening tag'
-                  )
-
-              attrs = (
-                  ' android:allowBackup="true"'
-                  ' android:fullBackupContent="@xml/backup_rules"'
-                  ' android:dataExtractionRules="@xml/data_extraction_rules"'
-              )
-
-              s = (
-                  s[:end]
-                  + attrs
-                  + s[end:]
-              )
+                  raise SystemExit('Malformed <application> opening tag')
+              attrs = ' android:allowBackup="true" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules"'
+              s = s[:end] + attrs + s[end:]
 
           if 'android:name=".GameWebViewActivity"' not in s:
-
               pos = s.rfind('</application>')
-
               if pos < 0:
-                  raise SystemExit(
-                      'Could not find </application>'
-                  )
+                  raise SystemExit('Could not find </application>')
+              activity = '    <activity android:name=".GameWebViewActivity" android:exported="false" />\n'
+              s = s[:pos] + activity + s[pos:]
 
-              activity = (
-                  '    <activity '
-                  'android:name=".GameWebViewActivity" '
-                  'android:exported="false" />\n'
-              )
-
-              s = (
-                  s[:pos]
-                  + activity
-                  + s[pos:]
-              )
-
-          p.write_text(
-              s,
-              encoding='utf-8'
-          )
-
+          p.write_text(s, encoding='utf-8')
           ET.parse(p)
-
           print('--- AndroidManifest.xml ---')
           print(s)
           print('--- XML VALID ---')
@@ -983,40 +559,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "$ODIN_KEYSTORE_BASE64" || {
-            echo "Missing ODIN_KEYSTORE_BASE64 GitHub secret"
-            exit 1
-          }
-
-          test -n "$ODIN_KEYSTORE_PASSWORD" || {
-            echo "Missing ODIN_KEYSTORE_PASSWORD GitHub secret"
-            exit 1
-          }
-
-          test -n "$ODIN_KEY_ALIAS" || {
-            echo "Missing ODIN_KEY_ALIAS GitHub secret"
-            exit 1
-          }
-
-          test -n "$ODIN_KEY_PASSWORD" || {
-            echo "Missing ODIN_KEY_PASSWORD GitHub secret"
-            exit 1
-          }
+          test -n "$ODIN_KEYSTORE_BASE64" || { echo "Missing ODIN_KEYSTORE_BASE64 GitHub secret"; exit 1; }
+          test -n "$ODIN_KEYSTORE_PASSWORD" || { echo "Missing ODIN_KEYSTORE_PASSWORD GitHub secret"; exit 1; }
+          test -n "$ODIN_KEY_ALIAS" || { echo "Missing ODIN_KEY_ALIAS GitHub secret"; exit 1; }
+          test -n "$ODIN_KEY_PASSWORD" || { echo "Missing ODIN_KEY_PASSWORD GitHub secret"; exit 1; }
 
           CLEAN_B64=$(printf '%s' "$ODIN_KEYSTORE_BASE64" | tr -d '[:space:]')
-
-          printf '%s' "$CLEAN_B64" |
-            base64 --decode > odin-release.jks
-
+          printf '%s' "$CLEAN_B64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
 
-          keytool -list \
-            -keystore odin-release.jks \
-            -storepass "$ODIN_KEYSTORE_PASSWORD" \
-            -alias "$ODIN_KEY_ALIAS" >/dev/null
-
+          keytool -list -keystore odin-release.jks -storepass "$ODIN_KEYSTORE_PASSWORD" -alias "$ODIN_KEY_ALIAS" >/dev/null
           cp odin-release.jks app/odin-release.jks
-
           test -s app/odin-release.jks
 
           python3 - <<'PY'
@@ -1027,9 +580,7 @@ jobs:
           s = p.read_text()
 
           if 'storeFile file("odin-release.jks")' not in s:
-              s = s.replace(
-                  'android {',
-                  '''android {
+              s = s.replace('android {', '''android {
               signingConfigs {
                   release {
                       storeFile file("odin-release.jks")
@@ -1037,43 +588,27 @@ jobs:
                       keyAlias System.getenv("ODIN_KEY_ALIAS")
                       keyPassword System.getenv("ODIN_KEY_PASSWORD")
                   }
-              }''',
-                  1
-              )
+              }''', 1)
 
           if 'debug {' not in s or 'signingConfig signingConfigs.release' not in s:
-              s = s.replace(
-                  'buildTypes {\n',
-                  '''buildTypes {
+              s = s.replace('buildTypes {\n', '''buildTypes {
                       debug {
                           signingConfig signingConfigs.release
                       }
-                  ''',
-                  1
-              )
+                  ''', 1)
 
-          if re.search(
-              r'release\s*\{[^}]*signingConfig\s+signingConfigs\.release',
-              s,
-              re.S
-          ) is None:
-              s = s.replace(
-                  'buildTypes {\n',
-                  '''buildTypes {
+          if re.search(r'release\s*\{[^}]*signingConfig\s+signingConfigs\.release', s, re.S) is None:
+              s = s.replace('buildTypes {\n', '''buildTypes {
                       release {
                           signingConfig signingConfigs.release
                       }
-                  ''',
-                  1
-              )
+                  ''', 1)
 
           p.write_text(s)
           PY
 
           echo '--- signing/buildTypes ---'
-          grep -n -A8 -B2 \
-            'signingConfigs\|buildTypes' \
-            app/build.gradle
+          grep -n -A8 -B2 'signingConfigs\|buildTypes' app/build.gradle
 
       - name: Build update-safe APK
         working-directory: android
@@ -1083,39 +618,22 @@ jobs:
           ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-
           ./gradlew assembleDebug
 
           echo '--- APK identity ---'
-
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" \
-            verify \
-            --verbose \
-            --print-certs \
-            app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
 
           echo '--- APK version ---'
-
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" \
-            dump badging \
-            app/build/outputs/apk/debug/app-debug.apk |
-            grep -E 'package:|versionCode=|versionName='
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package:|versionCode=|versionName='
 
           echo '--- APK VERSION HARD CHECK ---'
-
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" \
-            dump badging \
-            app/build/outputs/apk/debug/app-debug.apk |
-            grep -F \
-            "versionName='${{ steps.version.outputs.version }}'"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -F "versionName='${{ steps.version.outputs.version }}'"
 
           echo '--- APK VERSION VERIFIED ---'
 
       - name: Give APK a unique filename
         run: |
-          cp \
-            android/app/build/outputs/apk/debug/app-debug.apk \
-            "android/app/build/outputs/apk/debug/teamzentrale-odin-${GITHUB_RUN_NUMBER}.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "android/app/build/outputs/apk/debug/teamzentrale-odin-${GITHUB_RUN_NUMBER}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
