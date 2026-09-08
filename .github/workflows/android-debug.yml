@@ -33,7 +33,6 @@ jobs:
           s = s.replace('versionCode 1', 'versionCode ' + os.environ['GITHUB_RUN_NUMBER'])
           s = s.replace('versionName "1.0"', 'versionName "1.1.1"')
           p.write_text(s)
-          print('Configured versionCode=' + os.environ['GITHUB_RUN_NUMBER'] + ' versionName=1.1.1')
           PY
       - name: Configure embedded Die-Stämme WebView
         working-directory: android
@@ -46,7 +45,6 @@ jobs:
           cp ../native/game-scripts.js app/src/main/assets/game-scripts.js
           cat > "$DIR/GameWebViewActivity.java" <<EOF
           package $PKG;
-
           import android.app.Activity;
           import android.os.Bundle;
           import android.graphics.Color;
@@ -69,14 +67,12 @@ jobs:
           import java.net.URL;
           import java.util.ArrayList;
           import java.util.List;
-
           public class GameWebViewActivity extends Activity {
             private static final String GAME_URL = "https://www.die-staemme.de/";
             private WebView webView;
             private String username = "";
             private String password = "";
             private final List<String> managedScripts = new ArrayList<>();
-
             @Override public void onCreate(Bundle state) {
               super.onCreate(state);
               username = getIntent().getStringExtra("username");
@@ -84,105 +80,25 @@ jobs:
               if (username == null) username = "";
               if (password == null) password = "";
               String scriptsJson = getIntent().getStringExtra("scriptsJson");
-              if (scriptsJson != null) {
-                try {
-                  JSONArray a = new JSONArray(scriptsJson);
-                  for (int i=0;i<a.length();i++) {
-                    JSONObject o=a.getJSONObject(i);
-                    String source=o.optString("source","");
-                    if (source.startsWith("https://")) managedScripts.add(source);
-                  }
-                } catch(Exception ignored) {}
-              }
-              LinearLayout root = new LinearLayout(this);
-              root.setOrientation(LinearLayout.VERTICAL);
-              TextView toolbar = new TextView(this);
-              toolbar.setText("  Odin  •  Die Stämme");
-              toolbar.setTextColor(Color.WHITE);
-              toolbar.setTextSize(16);
-              toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL);
-              toolbar.setBackgroundColor(Color.rgb(11,16,32));
-              toolbar.setPadding(16,0,16,0);
-              toolbar.setOnClickListener(v -> finish());
-              root.addView(toolbar, new LinearLayout.LayoutParams(-1,52));
-              webView = new WebView(this);
-              WebSettings ws = webView.getSettings();
-              ws.setJavaScriptEnabled(true);
-              ws.setDomStorageEnabled(true);
-              ws.setDatabaseEnabled(true);
-              ws.setSupportZoom(false);
-              ws.setBuiltInZoomControls(false);
-              ws.setDisplayZoomControls(false);
-              ws.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-              CookieManager cm = CookieManager.getInstance();
-              cm.setAcceptCookie(true);
-              cm.setAcceptThirdPartyCookies(webView,true);
-              webView.setWebChromeClient(new WebChromeClient());
-              webView.addJavascriptInterface(new OdinBridge(),"OdinNative");
-              webView.setWebViewClient(new WebViewClient() {
-                @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) { return false; }
-                @Override public void onPageFinished(WebView v,String url) {
-                  injectManagedScripts(v);
-                  prefillLogin(v);
-                  loadEnabledScripts(v);
-                }
-              });
-              root.addView(webView,new LinearLayout.LayoutParams(-1,0,1));
-              setContentView(root);
-              webView.loadUrl(GAME_URL);
+              if (scriptsJson != null) try { JSONArray a=new JSONArray(scriptsJson); for(int i=0;i<a.length();i++){ JSONObject o=a.getJSONObject(i); String source=o.optString("source",""); if(source.startsWith("https://")) managedScripts.add(source); } } catch(Exception ignored) {}
+              LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
+              TextView toolbar=new TextView(this); toolbar.setText("  Odin  •  Die Stämme"); toolbar.setTextColor(Color.WHITE); toolbar.setTextSize(16); toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL); toolbar.setBackgroundColor(Color.rgb(11,16,32)); toolbar.setPadding(16,0,16,0); toolbar.setOnClickListener(v->finish()); root.addView(toolbar,new LinearLayout.LayoutParams(-1,52));
+              webView=new WebView(this); WebSettings ws=webView.getSettings(); ws.setJavaScriptEnabled(true); ws.setDomStorageEnabled(true); ws.setDatabaseEnabled(true); ws.setSupportZoom(false); ws.setBuiltInZoomControls(false); ws.setDisplayZoomControls(false); ws.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+              CookieManager cm=CookieManager.getInstance(); cm.setAcceptCookie(true); cm.setAcceptThirdPartyCookies(webView,true); webView.setWebChromeClient(new WebChromeClient()); webView.addJavascriptInterface(new OdinBridge(),"OdinNative");
+              webView.setWebViewClient(new WebViewClient(){ @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;} @Override public void onPageFinished(WebView v,String url){ injectManagedScripts(v); prefillLogin(v); loadEnabledScripts(v); }});
+              root.addView(webView,new LinearLayout.LayoutParams(-1,0,1)); setContentView(root); webView.loadUrl(GAME_URL);
             }
-            private void injectManagedScripts(WebView v) {
-              try {
-                StringBuilder b=new StringBuilder();
-                BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));
-                String line; while((line=r.readLine())!=null) b.append(line).append('\n');
-                r.close();
-                v.evaluateJavascript("javascript:(function(){"+b+"})()",null);
-              } catch(Exception ignored) {}
-            }
-            private void prefillLogin(WebView v) {
+            private void injectManagedScripts(WebView v){ try{ StringBuilder b=new StringBuilder(); BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js"))); String line; while((line=r.readLine())!=null)b.append(line).append('\n'); r.close(); v.evaluateJavascript("(function(){"+b+"})()",null);}catch(Exception ignored){} }
+            private void prefillLogin(WebView v){
               if(username.isEmpty() && password.isEmpty()) return;
               final String u=JSONObject.quote(username), p=JSONObject.quote(password);
-              String js="javascript:(function(){var u="+u+",p="+p+";function setValue(el,val){if(!el)return;var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;if(setter)setter.call(el,val);else el.value=val;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}function fill(){var a=Array.prototype.slice.call(document.querySelectorAll('input'));var user=a.find(function(x){var n=(x.name||'').toLowerCase(),i=(x.id||'').toLowerCase(),c=(x.autocomplete||'').toLowerCase(),ph=(x.placeholder||'').toLowerCase();return x.type!=='hidden'&&(n==='username'||n==='user'||n==='login'||i==='username'||i==='user'||i.indexOf('login')>=0||c==='username'||ph.indexOf('benutzer')>=0||ph.indexOf('username')>=0||ph.indexOf('login')>=0||ph.indexOf('user')>=0);})||a.find(function(x){return x.type==='text'||x.type==='email';});var pass=a.find(function(x){var n=(x.name||'').toLowerCase(),i=(x.id||'').toLowerCase(),ph=(x.placeholder||'').toLowerCase(),a=(x.autocomplete||'').toLowerCase();return x.type==='password'||n.indexOf('pass')>=0||i.indexOf('pass')>=0||ph.indexOf('pass')>=0||a==='current-password';});if(user&&u)setValue(user,u);if(pass&&p)setValue(pass,p);return !!(user&&pass);}var n=0,t=setInterval(function(){if(fill()||++n>60)clearInterval(t);},500);fill();})()";
+              String js="(function(){var U="+u+",P="+p+";function put(el,val){if(!el)return;try{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');if(d&&d.set)d.set.call(el,val);else el.value=val;}catch(e){el.value=val;}['input','change','blur'].forEach(function(n){el.dispatchEvent(new Event(n,{bubbles:true}));});}function findUser(){var sels=['input[name=\"username\"]','input[name=\"user\"]','input[name=\"login\"]','input[id=\"username\"]','input[id=\"user\"]','input[autocomplete=\"username\"]','input[type=\"email\"]','input[type=\"text\"]'];for(var i=0;i<sels.length;i++){var e=document.querySelector(sels[i]);if(e)return e;}return null;}function findPass(){var sels=['input[type=\"password\"]','input[name*=\"pass\" i]','input[id*=\"pass\" i]','input[autocomplete=\"current-password\"]'];for(var i=0;i<sels.length;i++){var e=document.querySelector(sels[i]);if(e)return e;}return null;}function fill(){var user=findUser(),pass=findPass();if(user&&U)put(user,U);if(pass&&P)put(pass,P);return !!(user&&pass);}var tries=0;function loop(){if(fill()||++tries>=120)clearInterval(t);}fill();var t=setInterval(loop,250);setTimeout(fill,100);setTimeout(fill,500);setTimeout(fill,1000);setTimeout(fill,2000);setTimeout(fill,4000);})()";
               v.evaluateJavascript(js,null);
             }
-            private void loadEnabledScripts(WebView v) {
-              if (managedScripts.isEmpty()) return;
-              String path = v.getUrl() == null ? "" : v.getUrl();
-              boolean inWorld = path.matches("(?i).*[/]game[.]php(?:[/].*)?.*") || path.matches("(?i).*[?&]screen=[^&]+.*[?&]village=[^&]+.*");
-              if (!inWorld) return;
-              for (String source : managedScripts) {
-                new Thread(() -> {
-                  try {
-                    String code = downloadScript(source);
-                    if (code == null || code.isEmpty()) return;
-                    final String quoted = JSONObject.quote(code);
-                    runOnUiThread(() -> {
-                      String js="javascript:(function(){try{var s="+quoted+";eval(s);console.log('[Odin] Script geladen: '+"+JSONObject.quote(source)+");}catch(e){console.error('[Odin] Scriptfehler '+"+JSONObject.quote(source)+",e);}})()";
-                      v.evaluateJavascript(js,null);
-                    });
-                  } catch(Exception ignored) {}
-                }).start();
-              }
-            }
-            private String downloadScript(String source) {
-              HttpURLConnection c=null;
-              try {
-                c=(HttpURLConnection)new URL(source).openConnection();
-                c.setConnectTimeout(15000); c.setReadTimeout(30000);
-                c.setRequestProperty("User-Agent","Teamzentrale-Odin/1.0 Android WebView");
-                c.setRequestProperty("Accept","*/*");
-                int status=c.getResponseCode();
-                if(status<200 || status>=300) return null;
-                BufferedInputStream in=new BufferedInputStream(c.getInputStream());
-                ByteArrayOutputStream out=new ByteArrayOutputStream();
-                byte[] buf=new byte[8192]; int n;
-                while((n=in.read(buf))!=-1) out.write(buf,0,n);
-                in.close(); return out.toString("UTF-8");
-              } catch(Exception e) { return null; } finally { if(c!=null)c.disconnect(); }
-            }
-            @Override public void onBackPressed() { if(webView!=null && webView.canGoBack()) webView.goBack(); else super.onBackPressed(); }
-            private class OdinBridge { @JavascriptInterface public void minimize() { runOnUiThread(() -> finish()); } }
+            private void loadEnabledScripts(WebView v){ if(managedScripts.isEmpty())return; String path=v.getUrl()==null?"":v.getUrl(); boolean inWorld=path.matches("(?i).*[/]game[.]php(?:[/].*)?.*")||path.matches("(?i).*[?&]screen=[^&]+.*[?&]village=[^&]+.*"); if(!inWorld)return; for(String source:managedScripts)new Thread(()->{try{String code=downloadScript(source);if(code==null||code.isEmpty())return;final String q=JSONObject.quote(code);runOnUiThread(()->v.evaluateJavascript("(function(){try{eval("+q+");}catch(e){console.error('[Odin] Scriptfehler',e);}})()",null));}catch(Exception ignored){}}).start(); }
+            private String downloadScript(String source){HttpURLConnection c=null;try{c=(HttpURLConnection)new URL(source).openConnection();c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Teamzentrale-Odin/1.0 Android WebView");c.setRequestProperty("Accept","*/*");int status=c.getResponseCode();if(status<200||status>=300)return null;BufferedInputStream in=new BufferedInputStream(c.getInputStream());ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);in.close();return out.toString("UTF-8");}catch(Exception e){return null;}finally{if(c!=null)c.disconnect();}}
+            @Override public void onBackPressed(){if(webView!=null&&webView.canGoBack())webView.goBack();else super.onBackPressed();}
+            private class OdinBridge{ @JavascriptInterface public void minimize(){runOnUiThread(()->finish());} }
           }
           EOF
           cat > "$MAIN" <<EOF
@@ -197,28 +113,19 @@ jobs:
           import com.getcapacitor.BridgeActivity;
           import org.json.JSONObject;
           public class MainActivity extends BridgeActivity {
-            private static final String PREFS = "odin_app_login";
-            @Override public void onCreate(Bundle state) {
-              super.onCreate(state);
-              WebView v=getBridge().getWebView();
-              WebSettings s=v.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
-              CookieManager cm=CookieManager.getInstance(); cm.setAcceptCookie(true); cm.setAcceptThirdPartyCookies(v,true);
-              v.addJavascriptInterface(new Object(){
-                @JavascriptInterface public String getSavedAppLogin(){ try { SharedPreferences p=getSharedPreferences(PREFS,MODE_PRIVATE); JSONObject o=new JSONObject(); o.put("email",p.getString("email","")); o.put("password",p.getString("password","")); return o.toString(); } catch(Exception e){return "";} }
-                @JavascriptInterface public void saveAppLogin(String email,String password){ getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString("email",email==null?"":email).putString("password",password==null?"":password).apply(); }
-                @JavascriptInterface public void clearSavedAppLogin(){ getSharedPreferences(PREFS,MODE_PRIVATE).edit().clear().apply(); }
-                @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){ Intent i=new Intent(MainActivity.this,GameWebViewActivity.class); i.putExtra("accountId",accountId); i.putExtra("username",username==null?"":username); i.putExtra("password",password==null?"":password); i.putExtra("scriptsJson",scriptsJson==null?"[]":scriptsJson); startActivity(i); }
-              },"Android");
-            }
+            private static final String PREFS="odin_app_login";
+            @Override public void onCreate(Bundle state){super.onCreate(state);WebView v=getBridge().getWebView();WebSettings s=v.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);CookieManager cm=CookieManager.getInstance();cm.setAcceptCookie(true);cm.setAcceptThirdPartyCookies(v,true);v.addJavascriptInterface(new Object(){
+              @JavascriptInterface public String getSavedAppLogin(){try{SharedPreferences p=getSharedPreferences(PREFS,MODE_PRIVATE);JSONObject o=new JSONObject();o.put("email",p.getString("email",""));o.put("password",p.getString("password",""));return o.toString();}catch(Exception e){return "";}}
+              @JavascriptInterface public void saveAppLogin(String email,String password){getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString("email",email==null?"":email).putString("password",password==null?"":password).apply();}
+              @JavascriptInterface public void clearSavedAppLogin(){getSharedPreferences(PREFS,MODE_PRIVATE).edit().clear().apply();}
+              @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){Intent i=new Intent(MainActivity.this,GameWebViewActivity.class);i.putExtra("accountId",accountId);i.putExtra("username",username==null?"":username);i.putExtra("password",password==null?"":password);i.putExtra("scriptsJson",scriptsJson==null?"[]":scriptsJson);startActivity(i);}
+            },"Android");}
           }
           EOF
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('app/src/main/AndroidManifest.xml')
-          s=p.read_text()
-          if 'GameWebViewActivity' not in s:
-              s=s.replace('</application>','    <activity android:name=".GameWebViewActivity" android:exported="false" />\n    </application>')
-              p.write_text(s)
+          p=Path('app/src/main/AndroidManifest.xml'); s=p.read_text()
+          if 'GameWebViewActivity' not in s: p.write_text(s.replace('</application>','    <activity android:name=".GameWebViewActivity" android:exported="false" />\n    </application>'))
           PY
       - name: Align Android minimum SDK
         working-directory: android
@@ -237,38 +144,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$ODIN_KEYSTORE_BASE64" || { echo "Missing ODIN_KEYSTORE_BASE64 GitHub secret"; exit 1; }
-          test -n "$ODIN_KEYSTORE_PASSWORD" || { echo "Missing ODIN_KEYSTORE_PASSWORD GitHub secret"; exit 1; }
-          test -n "$ODIN_KEY_ALIAS" || { echo "Missing ODIN_KEY_ALIAS GitHub secret"; exit 1; }
-          test -n "$ODIN_KEY_PASSWORD" || { echo "Missing ODIN_KEY_PASSWORD GitHub secret"; exit 1; }
           CLEAN_B64=$(printf '%s' "$ODIN_KEYSTORE_BASE64" | tr -d '[:space:]')
           printf '%s' "$CLEAN_B64" | base64 --decode > odin-release.jks
-          test -s odin-release.jks || { echo "Decoded keystore is empty"; exit 1; }
           keytool -list -keystore odin-release.jks -storepass "$ODIN_KEYSTORE_PASSWORD" -alias "$ODIN_KEY_ALIAS" >/dev/null
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('app/build.gradle')
-          s=p.read_text()
+          p=Path('app/build.gradle'); s=p.read_text()
           if 'storeFile file("odin-release.jks")' not in s:
-              marker='android {\n'
-              signing='''android {\n    signingConfigs {\n        release {\n            storeFile file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }\n'''
-              if marker not in s:
-                  raise SystemExit('android block not found')
-              s=s.replace(marker, signing, 1)
+              s=s.replace('android {','android {\n    signingConfigs {\n        release {\n            storeFile file("odin-release.jks")\n            storePassword System.getenv("ODIN_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ODIN_KEY_ALIAS")\n            keyPassword System.getenv("ODIN_KEY_PASSWORD")\n        }\n    }',1)
           if 'signingConfig signingConfigs.release' not in s:
-              marker='    buildTypes {\n'
-              replacement='    buildTypes {\n        release {\n            signingConfig signingConfigs.release\n'
-              if marker in s:
-                  tail=s.split(marker,1)[1]
-                  if tail.lstrip().startswith('release {'):
-                      tail=tail.lstrip()[len('release {'):]
-                      s=s.split(marker,1)[0]+replacement+tail
-                  else:
-                      s=s.replace(marker, marker+'        release {\n            signingConfig signingConfigs.release\n        }\n',1)
-              else:
-                  raise SystemExit('buildTypes block not found')
+              s=s.replace('buildTypes {\n','buildTypes {\n        release {\n            signingConfig signingConfigs.release\n        }\n',1)
           p.write_text(s)
-          print('Stable signing configured')
           PY
       - name: Build update-safe APK
         working-directory: android
