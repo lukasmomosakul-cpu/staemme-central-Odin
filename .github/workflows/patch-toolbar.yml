@@ -22,15 +22,21 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
           p = Path('.github/workflows/android-debug.yml')
           s = p.read_text()
           old = '              root.addView(toolbar, new LinearLayout.LayoutParams(-1, 52));'
-          new = '''              LinearLayout.LayoutParams toolbarParams = new LinearLayout.LayoutParams(-1, 52);\n              toolbarParams.topMargin = (int) (32 * getResources().getDisplayMetrics().density);\n              root.addView(toolbar, toolbarParams);'''
-          if old not in s:
-              raise SystemExit('Toolbar line not found; refusing to modify workflow')
-          if 'toolbarParams.topMargin' not in s:
+          new = '''              LinearLayout.LayoutParams toolbarParams = new LinearLayout.LayoutParams(-1, 52);\n              toolbarParams.topMargin = (int) (48 * getResources().getDisplayMetrics().density);\n              root.addView(toolbar, toolbarParams);'''
+          if old in s:
               s = s.replace(old, new, 1)
-              p.write_text(s)
+          elif 'toolbarParams.topMargin' in s:
+              s2 = re.sub(r'toolbarParams\.topMargin = \(int\) \(\d+ \* getResources\(\)\.getDisplayMetrics\(\)\.density\);', 'toolbarParams.topMargin = (int) (48 * getResources().getDisplayMetrics().density);', s, count=1)
+              if s2 == s:
+                  raise SystemExit('Existing toolbar margin could not be updated')
+              s = s2
+          else:
+              raise SystemExit('Toolbar line not found; refusing to modify workflow')
+          p.write_text(s)
           PY
 
       - name: Commit toolbar fix
@@ -43,7 +49,7 @@ jobs:
             echo 'Toolbar fix already present'
           else
             git add .github/workflows/android-debug.yml
-            git commit -m 'fix: move game toolbar below status bar'
+            git commit -m 'fix: add more top space above game toolbar'
             git push
           fi
 
