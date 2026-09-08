@@ -49,6 +49,21 @@ jobs:
           echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
           bash ../native/build-android.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          # Capacitor can generate minSdkVersion as a literal or expression.
+          # Normalize the actual DSL declaration, not just the manifest.
+          s, n = re.subn(r'(?m)^(\s*)minSdkVersion\s+.*$', r'\1minSdkVersion 26', s, count=1)
+          if n == 0:
+              s, n = re.subn(r'(?m)^(\s*)minSdk\s+.*$', r'\1minSdk 26', s, count=1)
+          if n == 0:
+              raise SystemExit('Could not locate Android minSdk declaration in app/build.gradle')
+          p.write_text(s)
+          print('Normalized app/build.gradle minSdk to 26')
+          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
