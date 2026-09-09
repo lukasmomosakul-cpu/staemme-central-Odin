@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import GameNativeButton from '../components/GameNativeButton';
 
-const APP_VERSION=process.env.NEXT_PUBLIC_APP_VERSION || '1.1.26';
+const APP_VERSION=process.env.NEXT_PUBLIC_APP_VERSION || '1.1.27';
 
 type Account = { id:string; name:string; world:string; status:string; network:string; networkProfileId:string|null; loginUsername:string };
 type Profile = { id:string; name:string; public_ip:string|null; status:string };
