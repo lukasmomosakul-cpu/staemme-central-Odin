@@ -62,17 +62,12 @@ EOF
 cat > "$JAVA_DIR/MainActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.app.Activity; import android.content.Intent; import android.os.Bundle;
-public class MainActivity { @Override protected void onCreate(Bundle b){ super.onCreate(b); startActivity(new Intent(this,GameWebViewActivity.class)); finish(); } }
-EOF
-cat > "$JAVA_DIR/MainActivity.java" <<'EOF'
-package de.teamzentrale.odin;
-import android.app.Activity; import android.content.Intent; import android.os.Bundle;
 public class MainActivity extends Activity { @Override protected void onCreate(Bundle b){ super.onCreate(b); startActivity(new Intent(this,GameWebViewActivity.class)); finish(); } }
 EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
-public class GameWebViewActivity {
+public class GameWebViewActivity extends Activity {
  private WebView webView;
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b);FrameLayout root=new FrameLayout(this);webView=new WebView(this);root.addView(webView,new FrameLayout.LayoutParams(-1,-1));setContentView(root);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}@Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});webView.loadUrl("https://www.die-staemme.de/");}
  private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
