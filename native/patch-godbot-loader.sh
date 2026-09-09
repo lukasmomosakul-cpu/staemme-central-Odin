@@ -3,6 +3,8 @@ set -euo pipefail
 
 TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
 test -n "$TARGET" && test -f "$TARGET"
+mkdir -p app/src/main/assets
+cp ../native/odin-test.user.js app/src/main/assets/odin-test.user.js
 test -s app/src/main/assets/odin-test.user.js
 
 python3 - "$TARGET" <<'PY'
@@ -20,7 +22,7 @@ new = r''' private void loadEnabledScripts(WebView v){
   if(!inWorld)return;
   new Thread(()->{
    try{
-    BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("odin-test.user.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();
+    BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("odin-test.user.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\\n');r.close();
     String source=b.toString();
     android.util.Log.i("ODIN_TEST_USERSCRIPT","source_loaded bytes="+source.length()+" url="+path);
     String q=JSONObject.quote(source);
