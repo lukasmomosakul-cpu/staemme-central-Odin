@@ -11,11 +11,11 @@ from pathlib import Path
 import re
 p=Path('app/src/main/assets/godbot.user.js')
 s=p.read_text()
-pat=r"Object\\.defineProperty\\(window,\\s*'[^']+',\\s*\\{ get:.*?\\}\\);"
+# Only make the bridge assignments tolerant when the GodBot source actually contains them.
+pat=r"Object\.defineProperty\(window,\s*'[^']+',\s*\{ get:.*?\}\);"
 s,n=re.subn(pat, lambda m: 'try{' + m.group(0) + '}catch(_odin_define){}', s)
-# The current GodBot build may no longer contain the old bridge definitions.
-# That is valid: do not fail the Android build merely because there is nothing to patch.
 p.write_text(s)
+print(f'GodBot defineProperty bridges patched: {n}')
 PY
 cp ../native/odin-test.user.js app/src/main/assets/odin-test.user.js
 python3 - "$TARGET" <<'PY'
@@ -32,9 +32,9 @@ new=r''' private void loadEnabledScripts(WebView v){
    v.evaluateJavascript(boot,null);
    if(v.getTag(0x0D1A0001)!=null) return;
    v.setTag(0x0D1A0001,Boolean.TRUE);
-   final String[] delays={"3000","6000","10000"};
-   for(final String delay:delays){
-    v.postDelayed(()->{ if(!isFinishing() && webView==v) executeGodBotWhenReady(v); },Long.parseLong(delay));
+   final long[] delays={3000L,6000L,10000L};
+   for(final long delay:delays){
+    v.postDelayed(()->{ if(!isFinishing() && webView==v) executeGodBotWhenReady(v); },delay);
    }
   }catch(Exception e){android.util.Log.e("ODIN_GODBOT","schedule_failed",e);}
  }
@@ -51,7 +51,7 @@ new=r''' private void loadEnabledScripts(WebView v){
   try{
    if(v.getTag(0x0D1A0002)!=null) return;
    v.setTag(0x0D1A0002,Boolean.TRUE);
-   BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("godbot.user.js"))); StringBuilder b=new StringBuilder(); String line; while((line=r.readLine())!=null)b.append(line).append('\\n'); r.close();
+   BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("godbot.user.js"))); StringBuilder b=new StringBuilder(); String line; while((line=r.readLine())!=null)b.append(line).append('\n'); r.close();
    String src=b.toString(); if(src.trim().isEmpty()) return;
    java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\s*//\\s*@require\\s+([^\\s]+)").matcher(src);
    final java.util.ArrayList<String> reqs=new java.util.ArrayList<>(); while(m.find()) reqs.add(m.group(1));
