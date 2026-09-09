@@ -8,6 +8,11 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    env:
+      ODIN_KEYSTORE_BASE64: ${{ secrets.ODIN_KEYSTORE_BASE64 }}
+      ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
+      ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
+      ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,21 +37,25 @@ jobs:
           grep -R -F -m1 -- "$NEXT_PUBLIC_APP_VERSION" .next >/dev/null
       - name: Generate Android project
         run: pnpm cap:add:android && pnpm cap:sync
+      - name: Validate signing secrets
+        run: |
+          set -euo pipefail
+          for name in ODIN_KEYSTORE_BASE64 ODIN_KEYSTORE_PASSWORD ODIN_KEY_ALIAS ODIN_KEY_PASSWORD; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "ERROR: GitHub Actions secret $name is NOT available to this workflow run."
+              echo "The secret may exist in Settings but was not injected into this run."
+              exit 1
+            fi
+            echo "$name is available (length ${#value})"
+          done
       - name: Configure Android
         working-directory: android
         env:
           ODIN_VERSION: ${{ steps.version.outputs.version }}
-          ODIN_KEYSTORE_BASE64: ${{ secrets.ODIN_KEYSTORE_BASE64 }}
-          ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
-          ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
-          ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          test -n "$ODIN_KEYSTORE_BASE64"
-          test -n "$ODIN_KEYSTORE_PASSWORD"
-          test -n "$ODIN_KEY_ALIAS"
-          test -n "$ODIN_KEY_PASSWORD"
-          echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
+          printf '%s' "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
           bash ../native/build-android.sh
           bash ../native/patch-godbot-loader.sh
@@ -80,10 +89,6 @@ jobs:
           java-version: 21
       - name: Build and verify APK
         working-directory: android
-        env:
-          ODIN_KEYSTORE_PASSWORD: ${{ secrets.ODIN_KEYSTORE_PASSWORD }}
-          ODIN_KEY_ALIAS: ${{ secrets.ODIN_KEY_ALIAS }}
-          ODIN_KEY_PASSWORD: ${{ secrets.ODIN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           ./gradlew assembleDebug -PminSdkVersion=26
@@ -96,4 +101,4 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-# build trigger: force Capacitor's generated SDK configuration to 26
+# build trigger: explicit repository-secret validation
