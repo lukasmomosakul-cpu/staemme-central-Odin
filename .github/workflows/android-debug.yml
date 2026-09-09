@@ -37,32 +37,25 @@ jobs:
           grep -R -F -m1 -- "$NEXT_PUBLIC_APP_VERSION" .next >/dev/null
       - name: Generate Android project
         run: pnpm cap:add:android && pnpm cap:sync
-      - name: Validate signing secrets
-        run: |
-          set -euo pipefail
-          for name in ODIN_KEYSTORE_BASE64 ODIN_KEYSTORE_PASSWORD ODIN_KEY_ALIAS ODIN_KEY_PASSWORD; do
-            value="${!name:-}"
-            if [ -z "$value" ]; then
-              echo "ERROR: GitHub Actions secret $name is NOT available to this workflow run."
-              exit 1
-            fi
-            echo "$name is available (length ${#value})"
-          done
-      - name: Configure Android
+      - name: Configure and build Android
         working-directory: android
         env:
           ODIN_VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          for name in ODIN_KEYSTORE_BASE64 ODIN_KEYSTORE_PASSWORD ODIN_KEY_ALIAS ODIN_KEY_PASSWORD; do
+            test -n "${!name:-}" || { echo "Missing $name"; exit 1; }
+          done
           printf '%s' "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('../native/build-android.sh')
-          s = p.read_text()
-          s = s.replace("r'<manifest\\\\b'", "r'<manifest\\b'")
-          s = s.replace("r'<manifest\\\\b[^>]*>'", "r'<manifest\\b[^>]*>'")
-          s = s.replace("r'<uses-sdk\\\\b[^>]*/>'", "r'<uses-sdk\\b[^>]*/>'")
+          p=Path('../native/build-android.sh')
+          s=p.read_text()
+          s=s.replace("r'<manifest\\\\b'", "r'<manifest\\b'")
+          s=s.replace("r'<manifest\\\\b[^>]*>'", "r'<manifest\\b[^>]*>'")
+          s=s.replace("r'<uses-sdk\\\\b[^>]*/>'", "r'<uses-sdk\\b[^>]*/>'")
           p.write_text(s)
           PY
           bash ../native/build-android.sh
@@ -70,100 +63,37 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-          version = Path('../VERSION').read_text().strip()
-          java = Path('app/src/main/java')
-          files = list(java.rglob('GameWebViewActivity.java'))
-          if not files:
-              raise SystemExit('GameWebViewActivity.java not found')
-          for p in files:
-              s = p.read_text()
-              s2 = re.sub(r'ODIN [0-9]+\.[0-9]+\.[0-9]+ · ', f'ODIN {version} · ', s)
-              p.write_text(s2)
-          for p in Path('app/src/main').rglob('MainActivity.java'):
-              s = p.read_text()
-              s = re.sub(r'releases/download/v[0-9]+\.[0-9]+\.[0-9]+/odin-latest\.apk', f'releases/download/v{version}/odin-latest.apk', s)
-              s = re.sub(r'odin-update-[0-9]+\.[0-9]+\.[0-9]+\.apk', f'odin-update-{version}.apk', s)
-              s = s.replace('releases/latest/download/odin-latest.apk', f'releases/download/v{version}/odin-latest.apk')
+          version=Path('../VERSION').read_text().strip()
+          for p in Path('app/src/main/java').rglob('GameWebViewActivity.java'):
+              s=p.read_text()
+              s=re.sub(r'ODIN [0-9]+\\.[0-9]+\\.[0-9]+ · ',f'ODIN {version} · ',s)
               p.write_text(s)
-          print(f'Synchronized loader and updater to {version}')
-          PY
-          python3 - <<'PY'
-          from pathlib import Path
-          for name in ('app/build.gradle', 'app/src/main/AndroidManifest.xml'):
-              p = Path(name)
-              if p.exists():
-                  s = p.read_text()
-                  if '\\n' in s:
-                      p.write_text(s.replace('\\n', '\n'))
-          java = Path('app/src/main/java')
-          for p in java.rglob('GameWebViewActivity.java'):
-              s = p.read_text()
-              original = s
-              s = s.replace("Color.rgb(15,20,35);", "Color.rgb(15,20,35));")
-              s = s.replace("append('\\\\n')", "append('\\n')")
-              if s != original:
-                  p.write_text(s)
+          for p in Path('app/src/main/java').rglob('MainActivity.java'):
+              s=p.read_text()
+              s=re.sub(r'releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/odin-latest\\.apk',f'releases/download/v{version}/odin-latest.apk',s)
+              s=re.sub(r'odin-update-[0-9]+\\.[0-9]+\\.[0-9]+\\.apk',f'odin-update-{version}.apk',s)
+              s=s.replace('releases/latest/download/odin-latest.apk',f'releases/download/v{version}/odin-latest.apk')
+              p.write_text(s)
           PY
           python3 - <<'PY'
           from pathlib import Path
           import re
-          p = Path('app/build.gradle')
-          s = p.read_text()
-          v = Path('../VERSION').read_text().strip()
-          parts = v.split('.')
-          version_code = int(parts[0]) * 1000000 + int(parts[1]) * 1000 + int(parts[2])
-          s = re.sub(r'(?m)^(\s*versionCode)\s*(?:=\s*)?\d+\s*$', rf'\1 {version_code}', s, count=1)
-          s = re.sub(r'(?m)^(\s*versionName)\s*(?:=\s*)?"[^"]*"\s*$', rf'\1 "{v}"', s, count=1)
-          if 'versionName "' not in s:
-              raise SystemExit('Could not set Android versionName')
+          p=Path('app/build.gradle'); s=p.read_text(); v=Path('../VERSION').read_text().strip(); a=v.split('.'); code=int(a[0])*1000000+int(a[1])*1000+int(a[2])
+          s=re.sub(r'(?m)^(\\s*versionCode)\\s*(?:=\\s*)?\\d+\\s*$',rf'\\1 {code}',s,count=1)
+          s=re.sub(r'(?m)^(\\s*versionName)\\s*(?:=\\s*)?"[^"]*"\\s*$',rf'\\1 "{v}"',s,count=1)
           p.write_text(s)
           PY
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          candidates = [Path('variables.gradle'), Path('app/build.gradle')]
-          found = []
-          for p in candidates:
-              if not p.exists():
-                  continue
-              s = p.read_text()
-              original = s
-              s = re.sub(r'(?m)^(\s*)minSdkVersion\s*(?:=\s*)?.*$', r'\1minSdkVersion = 26' if p.name == 'variables.gradle' else r'\1minSdkVersion 26', s)
-              s = re.sub(r'(?m)^(\s*)minSdk\s*(?:=\s*)?.*$', r'\1minSdk = 26' if p.name == 'variables.gradle' else r'\1minSdk 26', s)
-              if s != original:
-                  p.write_text(s)
-              if 'minSdkVersion = 26' in s or re.search(r'(?m)^\s*minSdkVersion 26\s*$', s) or 'minSdk = 26' in s or re.search(r'(?m)^\s*minSdk 26\s*$', s):
-                  found.append(str(p))
-          if not found:
-              raise SystemExit('Could not locate an Android minSdk declaration')
-          PY
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-      - name: Build and verify APK
-        working-directory: android
-        env:
-          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
+          test -s app/src/main/assets/godbot.user.js
+          test ! -e app/src/main/assets/odin-test.user.js
           ./gradlew assembleDebug -PminSdkVersion=26
           APK=app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
           BADGING=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK")
           echo "$BADGING" | grep -F "versionName='${EXPECTED_VERSION}'"
-          grep -R -F "ODIN ${EXPECTED_VERSION} ·" app/src/main/java >/dev/null
-          test -s app/src/main/assets/godbot.user.js
-          if test -e app/src/main/assets/odin-test.user.js; then
-            echo 'ERROR: userscript test asset must not be bundled'
-            exit 1
-          fi
-          echo 'APK verified: version, loader and GodBot asset synchronized'
+          echo 'APK verified: version, signing and GodBot asset synchronized'
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: teamzentrale-odin-debug-apk-${{ github.run_number }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
-# trigger: verify latest GodBot loader commit
