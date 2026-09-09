@@ -11,8 +11,7 @@ from pathlib import Path
 import re
 p=Path('app/src/main/assets/godbot.user.js')
 s=p.read_text()
-# WebView may already expose non-configurable game globals (notably Timing).
-pat=r"Object\.defineProperty\(window,\s*'[^']+',\s*\{ get:.*?\}\);"
+pat=r"Object\\.defineProperty\\(window,\\s*'[^']+',\\s*\\{ get:.*?\\}\\);"
 s,n=re.subn(pat, lambda m: 'try{' + m.group(0) + '}catch(_odin_define){}', s)
 if n == 0:
     raise SystemExit('No GodBot Object.defineProperty bridge found')
@@ -29,10 +28,10 @@ new=r''' private void loadEnabledScripts(WebView v){
   final String url=v.getUrl()==null?"":v.getUrl();
   if(!url.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
   try{
-   String boot="(function(){try{var e=document.getElementById('__odin_loader_status');if(!e){e=document.createElement('div');e.id='__odin_loader_status';e.style.cssText='position:fixed;bottom:8px;left:8px;right:8px;z-index:2147483647;background:#111;color:#fff;padding:7px 9px;border:1px solid #777;border-radius:4px;font:12px sans-serif;opacity:.95;white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto';(document.body||document.documentElement).appendChild(e)}e.textContent='ODIN 1.1.52 · Loader wartet auf Spielinitialisierung';}catch(x){}})()";
+   String boot="(function(){try{var e=document.getElementById('__odin_loader_status');if(!e){e=document.createElement('div');e.id='__odin_loader_status';e.style.cssText='position:fixed;bottom:8px;left:8px;right:8px;z-index:2147483647;background:#111;color:#fff;padding:7px 9px;border:1px solid #777;border-radius:4px;font:12px sans-serif;opacity:.95;white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto';(document.body||document.documentElement).appendChild(e)}e.textContent='ODIN 1.1.48 · Loader wartet auf Spielinitialisierung';}catch(x){}})()";
    v.evaluateJavascript(boot,null);
-   if(v.getTag(R.id.odin_godbot_loaded)!=null) return;
-   v.setTag(R.id.odin_godbot_loaded,Boolean.TRUE);
+   if(v.getTag(0x0D1A0001)!=null) return;
+   v.setTag(0x0D1A0001,Boolean.TRUE);
    final String[] delays={"3000","6000","10000"};
    for(final String delay:delays){
     v.postDelayed(()->{ if(!isFinishing() && webView==v) executeGodBotWhenReady(v); },Long.parseLong(delay));
@@ -45,13 +44,13 @@ new=r''' private void loadEnabledScripts(WebView v){
   String ready="(function(){try{return !!(document.body && (window.game_data || window.TribalWars || document.querySelector('#content_value')))}catch(e){return false}})()";
   v.evaluateJavascript(ready,result->{
    if("true".equals(result)){ injectGodBot(v); }
-   else { String wait="(function(){var e=document.getElementById('__odin_loader_status');if(e)e.textContent='ODIN 1.1.52 · Spiel noch nicht bereit – nächster Versuch folgt';})()"; v.evaluateJavascript(wait,null); }
+   else { String wait="(function(){var e=document.getElementById('__odin_loader_status');if(e)e.textContent='ODIN 1.1.48 · Spiel noch nicht bereit – nächster Versuch folgt';})()"; v.evaluateJavascript(wait,null); }
   });
  }
  private void injectGodBot(WebView v){
   try{
-   if(v.getTag(R.id.odin_godbot_injected)!=null) return;
-   v.setTag(R.id.odin_godbot_injected,Boolean.TRUE);
+   if(v.getTag(0x0D1A0002)!=null) return;
+   v.setTag(0x0D1A0002,Boolean.TRUE);
    BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("godbot.user.js"))); StringBuilder b=new StringBuilder(); String line; while((line=r.readLine())!=null)b.append(line).append('\\n'); r.close();
    String src=b.toString(); if(src.trim().isEmpty()) return;
    java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\s*//\\s*@require\\s+([^\\s]+)").matcher(src);
@@ -64,15 +63,12 @@ new=r''' private void loadEnabledScripts(WebView v){
     for(String req:reqs){try{deps.add(new OdinBridge().httpGet(req));}catch(Exception ignored){}}
     StringBuilder dq=new StringBuilder("["); for(int i=0;i<deps.size();i++){if(i>0)dq.append(',');dq.append(JSONObject.quote(deps.get(i)));} dq.append(']');
     final String qDeps=dq.toString();
-    runOnUiThread(()->{String js="try{new Function("+qShim+")();var d="+qDeps+";for(var i=0;i<d.length;i++){try{(0,eval)(d[i])}catch(e){console.error('ODIN_GODBOT_REQUIRE_ERROR',e&&e.stack?e.stack:e)}}(0,eval)("+qSrc+");var e=document.getElementById('__odin_loader_status');if(e)e.textContent='ODIN 1.1.52 · GodBot eval OK';console.log('ODIN_GODBOT_EVAL_OK')}catch(e){var msg=e&&e.stack?e.stack:(e&&e.message?e.message:String(e));console.error('ODIN_GODBOT_EVAL_ERROR',msg);var x=document.getElementById('__odin_loader_status');if(x){x.textContent='ODIN 1.1.52 · GodBot FEHLER\\n'+msg;x.style.color='#f55'}}";v.evaluateJavascript(js,null);});
+    runOnUiThread(()->{String js="try{new Function("+qShim+")();var d="+qDeps+";for(var i=0;i<d.length;i++){try{(0,eval)(d[i])}catch(e){console.error('ODIN_GODBOT_REQUIRE_ERROR',e&&e.stack?e.stack:e)}}(0,eval)("+qSrc+");var e=document.getElementById('__odin_loader_status');if(e)e.textContent='ODIN 1.1.48 · GodBot eval OK';console.log('ODIN_GODBOT_EVAL_OK')}catch(e){var msg=e&&e.stack?e.stack:(e&&e.message?e.message:String(e));console.error('ODIN_GODBOT_EVAL_ERROR',msg);var x=document.getElementById('__odin_loader_status');if(x){x.textContent='ODIN 1.1.48 · GodBot FEHLER\\n'+msg;x.style.color='#f55'}}";v.evaluateJavascript(js,null);});
    }catch(Exception e){android.util.Log.e("ODIN_GODBOT","dependency_failed",e);}}).start();
   }catch(Exception e){android.util.Log.e("ODIN_GODBOT","inject_failed",e);}
  }
 '''
 s=s[:a]+new+s[b:]
-# Add stable integer tags without changing runtime resources.
-if 'R.id.odin_godbot_loaded' in s or 'R.id.odin_godbot_injected' in s:
-    s=s.replace('R.id.odin_godbot_loaded','0x0D1A0001').replace('R.id.odin_godbot_injected','0x0D1A0002')
 needle='private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}'
 replacement='private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}'
 if needle not in s: raise SystemExit('OdinBridge pattern not found')
