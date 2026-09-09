@@ -4,7 +4,7 @@ TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
 test -n "$TARGET" || { echo 'GodBot loader: GameWebViewActivity.java not found'; exit 1; }
 mkdir -p app/src/main/assets
 URL='https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/'
-echo "GodBot loader: downloading source"
+echo 'GodBot loader: downloading source'
 curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 "$URL" -o app/src/main/assets/godbot.user.js
 test -s app/src/main/assets/godbot.user.js
 VERSION=$(tr -d '[:space:]' < ../VERSION)
@@ -41,14 +41,10 @@ new=f''' private void loadEnabledScripts(WebView v){{
    java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+([^\\\\s]+)").matcher(src);java.util.ArrayList<String> reqs=new java.util.ArrayList<>();while(m.find())reqs.add(m.group(1));
    final String qSrc=JSONObject.quote(src);
    final String shim=JSONObject.quote("(function(){{if(window.__odinGMShim)return;window.__odinGMShim=1;var p='odin_gm_';function g(k,d){{try{{var x=localStorage.getItem(p+k);return x===null?d:JSON.parse(x)}}catch(e){{return d}}}}function s(k,v){{try{{localStorage.setItem(p+k,JSON.stringify(v))}}catch(e){{}}}}window.unsafeWindow=window;window.GM_info=window.GM_info||{{script:{{name:'GodBot',version:'{version}'}}}};window.GM_getValue=window.GM_getValue||g;window.GM_setValue=window.GM_setValue||s;window.GM_deleteValue=window.GM_deleteValue||function(k){{try{{localStorage.removeItem(p+k)}}catch(e){{}}}};window.GM_listValues=window.GM_listValues||function(){{var a=[];try{{for(var i=0;i<localStorage.length;i++){{var k=localStorage.key(i);if(k&&k.indexOf(p)===0)a.push(k.slice(p.length))}}}}catch(e){{}}return a}};window.GM_addStyle=window.GM_addStyle||function(c){{var x=document.createElement('style');x.textContent=c;(document.head||document.documentElement).appendChild(x);return x}};window.GM_registerMenuCommand=window.GM_registerMenuCommand||function(){{}};window.GM_xmlhttpRequest=window.GM_xmlhttpRequest||function(o){{try{{var z={{status:200,responseText:OdinNative.httpGet(String(o.url)),response:''}};z.response=z.responseText;if(o.onload)o.onload(z);return z}}catch(e){{if(o.onerror)o.onerror({{status:0,error:e}});return{{abort:function(){{}}}}}}}};}})();");
-   new Thread(()->{{try{{java.util.ArrayList<String>d=new java.util.ArrayList<>();for(String x:reqs)try{{d.add(new OdinBridge().httpGet(x));}}catch(Exception ignored){{}}StringBuilder z=new StringBuilder("[");for(int i=0;i<d.size();i++){{if(i>0)z.append(',');z.append(JSONObject.quote(d.get(i)));}}z.append(']');final String qDeps=z.toString();runOnUiThread(()->{{String js="try{{new Function("+shim+")();var d="+qDeps+";for(var i=0;i<d.length;i++)try{{(0,eval)(d[i])}}catch(e){{console.error('ODIN_REQUIRE',e)}}(0,eval)("+qSrc+");"+{qUi}+"}}catch(e){{console.error('ODIN_GODBOT_EVAL_ERROR',e&&e.stack?e.stack:e)}}";v.evaluateJavascript(js,null);}});}}catch(Exception e){{android.util.Log.e("ODIN_GODBOT","dependency_failed",e);}}}}).start();
+   new Thread(()->{{try{{java.util.ArrayList<String>d=new java.util.ArrayList<>();for(String x:reqs)try{{d.add(new OdinNative().httpGet(x));}}catch(Exception ignored){{}}StringBuilder z=new StringBuilder("[");for(int i=0;i<d.size();i++){{if(i>0)z.append(',');z.append(JSONObject.quote(d.get(i)));}}z.append(']');final String qDeps=z.toString();runOnUiThread(()->{{String js="try{{new Function("+shim+")();var d="+qDeps+";for(var i=0;i<d.length;i++)try{{(0,eval)(d[i])}}catch(e){{console.error('ODIN_REQUIRE',e)}}(0,eval)("+qSrc+");"+{qUi}+"}}catch(e){{console.error('ODIN_GODBOT_EVAL_ERROR',e&&e.stack?e.stack:e)}}";v.evaluateJavascript(js,null);}});}}catch(Exception e){{android.util.Log.e("ODIN_GODBOT","dependency_failed",e);}}}}).start();
   }}catch(Exception e){{android.util.Log.e("ODIN_GODBOT","inject_failed",e);}}
  }}
 '''
 s=s[:a]+new+s[b:]
-needle='private class OdinBridge{{@JavascriptInterface public void minimize(){{runOnUiThread(()->minimizeToApp());}}}}'
-replacement='private class OdinBridge{{@JavascriptInterface public void minimize(){{runOnUiThread(()->minimizeToApp());}} @JavascriptInterface public String httpGet(String u){{try{{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}}catch(Exception e){{throw new RuntimeException(e);}}}}}}'
-if needle not in s: raise SystemExit('OdinBridge pattern not found')
-s=s.replace(needle,replacement)
 p.write_text(s)
 PY
