@@ -11,7 +11,6 @@ from pathlib import Path
 import re
 p=Path('app/src/main/assets/godbot.user.js')
 s=p.read_text()
-# Only make the bridge assignments tolerant when the GodBot source actually contains them.
 pat=r"Object\.defineProperty\(window,\s*'[^']+',\s*\{ get:.*?\}\);"
 s,n=re.subn(pat, lambda m: 'try{' + m.group(0) + '}catch(_odin_define){}', s)
 p.write_text(s)
@@ -28,7 +27,7 @@ new=r''' private void loadEnabledScripts(WebView v){
   final String url=v.getUrl()==null?"":v.getUrl();
   if(!url.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
   try{
-   String boot="(function(){try{var e=document.getElementById('__odin_loader_status');if(!e){e=document.createElement('div');e.id='__odin_loader_status';e.style.cssText='position:fixed;bottom:8px;left:8px;right:8px;z-index:2147483647;background:#111;color:#fff;padding:7px 9px;border:1px solid #777;border-radius:4px;font:12px sans-serif;opacity:.95;white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto';(document.body||document.documentElement).appendChild(e)}e.textContent='ODIN 1.1.48 · Loader wartet auf Spielinitialisierung';}catch(x){}})()";
+   String boot="(function(){try{var e=document.getElementById('__odin_loader_status');if(!e){e=document.createElement('div');e.id='__odin_loader_status';e.style.cssText='position:fixed;bottom:8px;left:8px;right:8px;z-index:2147483647;background:#111;color:#fff;padding:7px 9px;border:1px solid #777;border-radius:4px;font:12px sans-serif;opacity:.95;white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto';(document.body||document.documentElement).appendChild(e)}e.textContent='ODIN 1.1.48 · Loader aktiv · wartet auf Spielinitialisierung';}catch(x){}})()";
    v.evaluateJavascript(boot,null);
    if(v.getTag(0x0D1A0001)!=null) return;
    v.setTag(0x0D1A0001,Boolean.TRUE);
