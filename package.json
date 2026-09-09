@@ -7,7 +7,7 @@
     "start": "next start",
     "cap:sync": "cap sync",
     "cap:add:ios": "cap add ios",
-    "cap:add:android": "cap add android",
+    "cap:add:android": "cap add android && bash native/apply-android-icon.sh",
     "cap:ios": "cap open ios",
     "cap:android": "cap open android"
   },
