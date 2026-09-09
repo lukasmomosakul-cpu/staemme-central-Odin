@@ -57,6 +57,18 @@ jobs:
           set -euo pipefail
           printf '%s' "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
+          # build-android.sh historically used over-escaped Python regex word boundaries.
+          # Normalize those literals before executing the script so the manifest patch is robust.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('../native/build-android.sh')
+          s = p.read_text()
+          s = s.replace("r'<manifest\\\\b'", "r'<manifest\\b'")
+          s = s.replace("r'<manifest\\\\b[^>]*>'", "r'<manifest\\b[^>]*>'")
+          s = s.replace("r'<uses-sdk\\\\b[^>]*/>'", "r'<uses-sdk\\b[^>]*/>'")
+          p.write_text(s)
+          print('Normalized build-android.sh Python regex literals')
+          PY
           bash ../native/build-android.sh
           bash ../native/patch-godbot-loader.sh
           python3 - <<'PY'
