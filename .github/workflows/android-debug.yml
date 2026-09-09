@@ -91,6 +91,24 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
+          version = Path('../VERSION').read_text().strip()
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
+              raise SystemExit(f'Invalid VERSION: {version!r}')
+          java = Path('app/src/main/java')
+          files = list(java.rglob('GameWebViewActivity.java'))
+          if not files:
+              raise SystemExit('GameWebViewActivity.java not found')
+          for p in files:
+              s = p.read_text()
+              s2 = re.sub(r'ODIN [0-9]+\.[0-9]+\.[0-9]+ · ', f'ODIN {version} · ', s)
+              if s2 == s:
+                  raise SystemExit(f'No ODIN loader version marker found in {p}')
+              p.write_text(s2)
+              print(f'Synchronized generated loader version to {version}: {p}')
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
           p = Path('app/build.gradle')
           s = p.read_text()
           v = Path('../VERSION').read_text().strip()
@@ -143,6 +161,14 @@ jobs:
           BADGING=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK")
           echo "$BADGING" | grep -o "versionName='[^']*'" | head -n1
           echo "$BADGING" | grep -F "versionName='${EXPECTED_VERSION}'"
+          echo '--- Loader verification ---'
+          grep -R -F "ODIN ${EXPECTED_VERSION} · Loader aktiv" app/src/main/java >/dev/null
+          if grep -R -F 'ODIN 1.1.48 ·' app/src/main/java >/dev/null; then
+            echo 'ERROR: stale hardcoded loader version 1.1.48 remains'
+            exit 1
+          fi
+          test -s app/src/main/assets/godbot.user.js
+          echo 'GodBot asset present and loader version matches VERSION'
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
