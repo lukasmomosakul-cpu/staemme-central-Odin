@@ -28,4 +28,5 @@ const nextConfig: NextConfig = {
   },
 };
 
+// Force a fresh Vercel production deployment after the Odin version-sync fixes.
 export default nextConfig;
