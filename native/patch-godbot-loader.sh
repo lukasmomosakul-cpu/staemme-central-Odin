@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
-test -n "$TARGET"
+test -n "$TARGET" || { echo 'GodBot loader: GameWebViewActivity.java not found'; exit 1; }
 mkdir -p app/src/main/assets
-URL='https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js'
+URL='https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/'
+echo "GodBot loader: downloading source"
 curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 "$URL" -o app/src/main/assets/godbot.user.js
-test -s app/src/main/assets/godbot.user.js
+test -s app/src/main/assets/godbot.user.js || { echo 'GodBot loader: downloaded source is empty'; exit 1; }
 VERSION=$(tr -d '[:space:]' < ../VERSION)
 python3 - <<'PY'
 from pathlib import Path
