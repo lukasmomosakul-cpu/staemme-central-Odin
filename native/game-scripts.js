@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   window.OdinGameBridge = window.OdinGameBridge || {};
-  window.OdinGameBridge.version = '7';
+  window.OdinGameBridge.version = '8';
   window.OdinGameBridge.minimize = function () {
     if (window.OdinNative && typeof window.OdinNative.minimize === 'function') window.OdinNative.minimize();
   };
@@ -25,19 +25,4 @@
     window.GM_setClipboard = window.GM_setClipboard || function (text) { try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(String(text || '')); } catch (_) {} };
     window.GM_xmlhttpRequest = window.GM_xmlhttpRequest || function (d) { d=d||{}; var x=new XMLHttpRequest(); try { x.open(String(d.method||'GET').toUpperCase(),String(d.url||''),true); if(d.headers)Object.keys(d.headers).forEach(function(k){try{x.setRequestHeader(k,d.headers[k]);}catch(_){}}); x.onreadystatechange=function(){if(x.readyState!==4)return;var r={readyState:4,status:x.status,statusText:x.statusText,responseText:x.responseText,response:x.response,finalUrl:x.responseURL,responseHeaders:''};try{r.responseHeaders=x.getAllResponseHeaders();}catch(_){} if(x.status>=200&&x.status<400){if(typeof d.onload==='function')d.onload(r);}else if(typeof d.onerror==='function')d.onerror(r);if(typeof d.onloadend==='function')d.onloadend(r);}; x.send(d.data||null); } catch(e){if(typeof d.onerror==='function')d.onerror({error:e});} return {abort:function(){try{x.abort();}catch(_){}}}; };
   } catch (_) {}
-
-  // GodBot is a fixed Odin component. It is loaded automatically on every game-world page,
-  // independently of the user script library / Supabase enabled flag.
-  function loadGodBot() {
-    if (!window.OdinGameBridge.isInWorld() || window.__odinGodBotLoaded || window.__odinGodBotLoading) return;
-    window.__odinGodBotLoading = true;
-    var s = document.createElement('script');
-    s.src = 'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js?odin=' + Date.now();
-    s.async = false;
-    s.onload = function () { window.__odinGodBotLoaded = true; window.__odinGodBotLoading = false; console.info('[Odin] GodBot loaded as built-in component'); };
-    s.onerror = function () { window.__odinGodBotLoading = false; console.error('[Odin] GodBot could not be loaded'); };
-    (document.head || document.documentElement).appendChild(s);
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadGodBot, { once:true }); else loadGodBot();
-  setTimeout(loadGodBot, 1500);
 })();
