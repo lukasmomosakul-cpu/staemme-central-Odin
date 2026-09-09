@@ -47,8 +47,9 @@ jobs:
           for name in ODIN_KEYSTORE_BASE64 ODIN_KEYSTORE_PASSWORD ODIN_KEY_ALIAS ODIN_KEY_PASSWORD; do
             test -n "${!name:-}" || { echo "Missing $name"; exit 1; }
           done
-          printf '%s' "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
-          test -s odin-release.jks
+          mkdir -p app
+          printf '%s' "$ODIN_KEYSTORE_BASE64" | base64 --decode > app/odin-release.jks
+          test -s app/odin-release.jks
           # The generator historically emitted an over-escaped Python regex (\\b), causing AssertionError.
           # Normalize that generator typo in the checked-out script before executing it.
           python3 - <<'PY'
