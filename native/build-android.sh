@@ -10,12 +10,10 @@ mkdir -p "$DIR" app/src/main/assets app/src/main/res/xml
 cp ../native/game-scripts.js app/src/main/assets/game-scripts.js
 
 cat > app/src/main/res/xml/backup_rules.xml <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<full-backup-content><include domain="sharedpref" path="odin_app_login.xml" /></full-backup-content>
+<?xml version="1.0" encoding="utf-8"?><full-backup-content><include domain="sharedpref" path="odin_app_login.xml" /></full-backup-content>
 EOF
 cat > app/src/main/res/xml/data_extraction_rules.xml <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<data-extraction-rules><cloud-backup><include domain="sharedpref" path="odin_app_login.xml" /></cloud-backup><device-transfer><include domain="sharedpref" path="odin_app_login.xml" /></device-transfer></data-extraction-rules>
+<?xml version="1.0" encoding="utf-8"?><data-extraction-rules><cloud-backup><include domain="sharedpref" path="odin_app_login.xml" /></cloud-backup><device-transfer><include domain="sharedpref" path="odin_app_login.xml" /></device-transfer></data-extraction-rules>
 EOF
 
 cat > "$DIR/GameWebViewActivity.java" <<EOF
@@ -28,7 +26,7 @@ public class GameWebViewActivity extends Activity {
  @Override public void onCreate(Bundle state){super.onCreate(state);getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);getWindow().getDecorView().setSystemUiVisibility(android.view.View.SYSTEM_UI_FLAG_FULLSCREEN|android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE|android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);username=getIntent().getStringExtra("username");password=getIntent().getStringExtra("password");if(username==null)username="";if(password==null)password="";String sj=getIntent().getStringExtra("scriptsJson");if(sj!=null)try{JSONArray a=new JSONArray(sj);for(int i=0;i<a.length();i++){String src=a.getJSONObject(i).optString("source","");if(src.startsWith("https://"))managedScripts.add(src);}}catch(Exception ignored){}
   String savedGameUrl=getSharedPreferences("odin_game_state",MODE_PRIVATE).getString("lastGameUrl","");
   LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);
-  LinearLayout toolbar=new LinearLayout(this);toolbar.setOrientation(LinearLayout.HORIZONTAL);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setPadding(dp(16),0,dp(10),0);toolbar.setBackgroundColor(Color.rgb(15,20,35));
+  LinearLayout toolbar=new LinearLayout(this);toolbar.setOrientation(LinearLayout.HORIZONTAL);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setPadding(dp(16),0,dp(10),0);toolbar.setBackgroundColor(Color.rgb(15,20,35);
   TextView brand=new TextView(this);brand.setText("ODIN");brand.setTextColor(Color.WHITE);brand.setTextSize(15);brand.setTypeface(Typeface.DEFAULT,Typeface.BOLD);brand.setGravity(Gravity.CENTER_VERTICAL);
   TextView game=new TextView(this);game.setText("  •  Die Stämme");game.setTextColor(Color.rgb(185,190,205));game.setTextSize(14);game.setGravity(Gravity.CENTER_VERTICAL);
   Space spacer=new Space(this);toolbar.addView(brand,new LinearLayout.LayoutParams(-2,-1));toolbar.addView(game,new LinearLayout.LayoutParams(-2,-1));toolbar.addView(spacer,new LinearLayout.LayoutParams(0,-1,1));
@@ -37,7 +35,7 @@ public class GameWebViewActivity extends Activity {
  private void minimizeToApp(){String url=webView==null?"":webView.getUrl();android.content.SharedPreferences.Editor e=getSharedPreferences("odin_game_state",MODE_PRIVATE).edit().putBoolean("minimized",true);if(url!=null&&url.matches("(?i).*[/]game[.]php.*"))e.putString("lastGameUrl",url);e.apply();Intent i=new Intent(this,MainActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);startActivity(i);}
  private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\\n');r.close();v.evaluateJavascript("(function(){"+b+"})()",null);}catch(Exception ignored){}}
  private void prefillLogin(WebView v){if(username.isEmpty()&&password.isEmpty())return;String u=JSONObject.quote(username),p=JSONObject.quote(password);String js="(function(){if(window.__odinPrefillStarted)return;window.__odinPrefillStarted=true;var U="+u+",P="+p+";function put(e,val){if(!e||e.value)return;try{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');if(d&&d.set)d.set.call(e,val);else e.value=val;}catch(x){e.value=val;}['input','change','blur'].forEach(function(n){e.dispatchEvent(new Event(n,{bubbles:true}));});}function f(){var a=document.querySelector('input[name=\"username\"],input[name=\"user\"],input[id=\"username\"],input[autocomplete=\"username\"],input[type=\"email\"]'),b=document.querySelector('input[type=\"password\"],input[name*=\"pass\" i],input[id*=\"pass\" i]');if(a&&U)put(a,U);if(b&&P)put(b,P);return !!(a&&b);}var n=0;function l(){if(f()||++n>=10)clearInterval(t);}var t=setInterval(l,200);f();setTimeout(function(){clearInterval(t);},2000);})();";v.evaluateJavascript(js,null);}
- private void loadEnabledScripts(WebView v){if(managedScripts.isEmpty())return;String path=v.getUrl()==null?"":v.getUrl();boolean inWorld=path.matches("(?i).*[/]game[.]php.*");for(String source:managedScripts){boolean godbot=GODBOT_URL.equalsIgnoreCase(source);if(!inWorld&&!godbot)continue;new Thread(()->{try{HttpURLConnection c=(HttpURLConnection)new URL(source).openConnection();c.setConnectTimeout(15000);c.setReadTimeout(30000);int st=c.getResponseCode();if(st<200||st>=300)return;BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream()));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\\n');r.close();String script=b.toString();List<String> requires=new ArrayList<>();java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\s*//\\s*@require\\s+([^\\s]+)").matcher(script);while(m.find())requires.add(m.group(1));StringBuilder combined=new StringBuilder();for(String req:requires){try{HttpURLConnection rc=(HttpURLConnection)new URL(req).openConnection();rc.setConnectTimeout(15000);rc.setReadTimeout(30000);int rs=rc.getResponseCode();if(rs<200||rs>=300)continue;BufferedReader rr=new BufferedReader(new InputStreamReader(rc.getInputStream()));String x;while((x=rr.readLine())!=null)combined.append(x).append('\\n');rr.close();}catch(Exception ignored){}}combined.append('\\n').append(script);String q=JSONObject.quote(combined.toString());runOnUiThread(()->v.evaluateJavascript("(function(){try{(0,eval)("+q+")}catch(e){console.error('Odin userscript error',e)}})()",null));}catch(Exception ignored){}}).start();}}
+ private void loadEnabledScripts(WebView v){if(managedScripts.isEmpty())return;String path=v.getUrl()==null?"":v.getUrl();boolean inWorld=path.matches("(?i).*[/]game[.]php.*");if(!inWorld)return;for(String source:managedScripts){new Thread(()->{try{HttpURLConnection c=(HttpURLConnection)new URL(source).openConnection();c.setConnectTimeout(15000);c.setReadTimeout(30000);int st=c.getResponseCode();if(st<200||st>=300)return;BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream()));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\\n');r.close();String script=b.toString();List<String> requires=new ArrayList<>();java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\s*//\\s*@require\\s+([^\\s]+)").matcher(script);while(m.find())requires.add(m.group(1));StringBuilder combined=new StringBuilder();for(String req:requires){try{HttpURLConnection rc=(HttpURLConnection)new URL(req).openConnection();rc.setConnectTimeout(15000);rc.setReadTimeout(30000);int rs=rc.getResponseCode();if(rs<200||rs>=300)continue;BufferedReader rr=new BufferedReader(new InputStreamReader(rc.getInputStream()));String x;while((x=rr.readLine())!=null)combined.append(x).append('\\n');rr.close();}catch(Exception ignored){}}combined.append('\\n').append(script);String q=JSONObject.quote(combined.toString());runOnUiThread(()->v.evaluateJavascript("(function(){try{localStorage.setItem('tw_a1','1');(0,eval)("+q+")}catch(e){console.error('Odin userscript error',e)}})()",null));}catch(Exception ignored){}}).start();}}
  @Override public void onBackPressed(){if(webView!=null&&webView.canGoBack())webView.goBack();else minimizeToApp();}
  private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
 }
@@ -64,23 +62,23 @@ from pathlib import Path
 import os,re
 p=Path('app/src/main/AndroidManifest.xml');s=p.read_text()
 if 'android.permission.REQUEST_INSTALL_PACKAGES' not in s:
-    m=re.search(r'<manifest\b',s); assert m; e=s.find('>',m.start());s=s[:e+1]+'\n<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'+s[e+1:]
-if '<uses-sdk' in s:s=re.sub(r'<uses-sdk\b[^>]*/>','<uses-sdk android:minSdkVersion="26" />',s,count=1)
+    m=re.search(r'<manifest\\b',s); assert m; e=s.find('>',m.start());s=s[:e+1]+'\\n<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'+s[e+1:]
+if '<uses-sdk' in s:s=re.sub(r'<uses-sdk\\b[^>]*/>','<uses-sdk android:minSdkVersion="26" />',s,count=1)
 else:
-    m=re.search(r'<manifest\b[^>]*>',s); assert m;s=s[:m.end()]+'\n<uses-sdk android:minSdkVersion="26" />'+s[m.end():]
+    m=re.search(r'<manifest\\b[^>]*>',s); assert m;s=s[:m.end()]+'\\n<uses-sdk android:minSdkVersion="26" />'+s[m.end():]
 if 'android:name=".GameWebViewActivity"' not in s:
-    pos=s.rfind('</application>'); assert pos>=0;s=s[:pos]+'<activity android:name=".GameWebViewActivity" android:exported="false" />\n'+s[pos:]
+    pos=s.rfind('</application>'); assert pos>=0;s=s[:pos]+'<activity android:name=".GameWebViewActivity" android:exported="false" />\\n'+s[pos:]
 p.write_text(s)
 PY
 
 python3 - <<'PY'
 from pathlib import Path
 import os,re
-p=Path('app/build.gradle');s=p.read_text();v=os.environ.get('ODIN_VERSION','');a=v.split('.');code=int(a[0])*1000000+int(a[1])*1000+int(a[2]);s=re.sub(r'\bversionCode\s+\d+',f'versionCode {code}',s,count=1);s=re.sub(r'\bversionName\s+"[^"]+"',f'versionName "{v}"',s,count=1)
-if re.search(r'\bminSdkVersion\s+\d+',s):s=re.sub(r'\bminSdkVersion\s+\d+','minSdkVersion 26',s,count=1)
-elif re.search(r'\bminSdk\s+\d+',s):s=re.sub(r'\bminSdk\s+\d+','minSdk 26',s,count=1)
-else:s=s.replace('defaultConfig {','defaultConfig {\n        minSdkVersion 26',1)
-if 'odinRelease {' not in s:s=s.replace('android {','android {\n    signingConfigs { odinRelease { storeFile rootProject.file("odin-release.jks"); storePassword System.getenv("ODIN_KEYSTORE_PASSWORD"); keyAlias System.getenv("ODIN_KEY_ALIAS"); keyPassword System.getenv("ODIN_KEY_PASSWORD") } }',1)
-if 'signingConfig signingConfigs.odinRelease' not in s:s=s.replace('buildTypes {','buildTypes {\n        debug { signingConfig signingConfigs.odinRelease }',1)
+p=Path('app/build.gradle');s=p.read_text();v=os.environ.get('ODIN_VERSION','');a=v.split('.');code=int(a[0])*1000000+int(a[1])*1000+int(a[2]);s=re.sub(r'\\bversionCode\\s+\\d+',f'versionCode {code}',s,count=1);s=re.sub(r'\\bversionName\\s+"[^"]+"',f'versionName "{v}"',s,count=1)
+if re.search(r'\\bminSdkVersion\\s+\\d+',s):s=re.sub(r'\\bminSdkVersion\\s+\\d+','minSdkVersion 26',s,count=1)
+elif re.search(r'\\bminSdk\\s+\\d+',s):s=re.sub(r'\\bminSdk\\s+\\d+','minSdk 26',s,count=1)
+else:s=s.replace('defaultConfig {','defaultConfig {\\n        minSdkVersion 26',1)
+if 'odinRelease {' not in s:s=s.replace('android {','android {\\n    signingConfigs { odinRelease { storeFile rootProject.file("odin-release.jks"); storePassword System.getenv("ODIN_KEYSTORE_PASSWORD"); keyAlias System.getenv("ODIN_KEY_ALIAS"); keyPassword System.getenv("ODIN_KEY_PASSWORD") } }',1)
+if 'signingConfig signingConfigs.odinRelease' not in s:s=s.replace('buildTypes {','buildTypes {\\n        debug { signingConfig signingConfigs.odinRelease }',1)
 p.write_text(s)
 PY
