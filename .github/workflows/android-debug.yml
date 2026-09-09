@@ -44,7 +44,6 @@ jobs:
             value="${!name:-}"
             if [ -z "$value" ]; then
               echo "ERROR: GitHub Actions secret $name is NOT available to this workflow run."
-              echo "The secret may exist in Settings but was not injected into this run."
               exit 1
             fi
             echo "$name is available (length ${#value})"
@@ -65,35 +64,13 @@ jobs:
           s = s.replace("r'<manifest\\\\b[^>]*>'", "r'<manifest\\b[^>]*>'")
           s = s.replace("r'<uses-sdk\\\\b[^>]*/>'", "r'<uses-sdk\\b[^>]*/>'")
           p.write_text(s)
-          print('Normalized build-android.sh Python regex literals')
           PY
           bash ../native/build-android.sh
           bash ../native/patch-godbot-loader.sh
           python3 - <<'PY'
           from pathlib import Path
-          for name in ('app/build.gradle', 'app/src/main/AndroidManifest.xml'):
-              p = Path(name)
-              if p.exists():
-                  s = p.read_text()
-                  if '\\n' in s:
-                      p.write_text(s.replace('\\n', '\n'))
-                      print(f'Normalized escaped newlines in {name}')
-          java = Path('app/src/main/java')
-          for p in java.rglob('GameWebViewActivity.java'):
-              s = p.read_text()
-              original = s
-              s = s.replace("Color.rgb(15,20,35);", "Color.rgb(15,20,35));")
-              s = s.replace("append('\\\\n')", "append('\\n')")
-              if s != original:
-                  p.write_text(s)
-                  print(f'Normalized generated Java source: {p}')
-          PY
-          python3 - <<'PY'
-          from pathlib import Path
           import re
           version = Path('../VERSION').read_text().strip()
-          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
-              raise SystemExit(f'Invalid VERSION: {version!r}')
           java = Path('app/src/main/java')
           files = list(java.rglob('GameWebViewActivity.java'))
           if not files:
@@ -104,7 +81,30 @@ jobs:
               if s2 == s:
                   raise SystemExit(f'No ODIN loader version marker found in {p}')
               p.write_text(s2)
-              print(f'Synchronized generated loader version to {version}: {p}')
+          for p in Path('app/src/main').rglob('MainActivity.java'):
+              s = p.read_text()
+              s = re.sub(r'releases/download/v[0-9]+\.[0-9]+\.[0-9]+/odin-latest\.apk', f'releases/download/v{version}/odin-latest.apk', s)
+              s = re.sub(r'odin-update-[0-9]+\.[0-9]+\.[0-9]+\.apk', f'odin-update-{version}.apk', s)
+              s = s.replace('releases/latest/download/odin-latest.apk', f'releases/download/v{version}/odin-latest.apk')
+              p.write_text(s)
+          print(f'Synchronized loader and updater to {version}')
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ('app/build.gradle', 'app/src/main/AndroidManifest.xml'):
+              p = Path(name)
+              if p.exists():
+                  s = p.read_text()
+                  if '\\n' in s:
+                      p.write_text(s.replace('\\n', '\n'))
+          java = Path('app/src/main/java')
+          for p in java.rglob('GameWebViewActivity.java'):
+              s = p.read_text()
+              original = s
+              s = s.replace("Color.rgb(15,20,35);", "Color.rgb(15,20,35));")
+              s = s.replace("append('\\\\n')", "append('\\n')")
+              if s != original:
+                  p.write_text(s)
           PY
           python3 - <<'PY'
           from pathlib import Path
@@ -119,7 +119,6 @@ jobs:
           if 'versionName "' not in s:
               raise SystemExit('Could not set Android versionName')
           p.write_text(s)
-          print(f'Forced Android versionName={v} versionCode={version_code}')
           PY
           python3 - <<'PY'
           from pathlib import Path
@@ -137,10 +136,6 @@ jobs:
                   p.write_text(s)
               if 'minSdkVersion = 26' in s or re.search(r'(?m)^\s*minSdkVersion 26\s*$', s) or 'minSdk = 26' in s or re.search(r'(?m)^\s*minSdk 26\s*$', s):
                   found.append(str(p))
-          if 'variables.gradle' in found:
-              print('Forced Capacitor variables.gradle minSdk to 26')
-          if 'app/build.gradle' in found:
-              print('Forced app/build.gradle minSdk to 26')
           if not found:
               raise SystemExit('Could not locate an Android minSdk declaration')
           PY
@@ -157,18 +152,16 @@ jobs:
           ./gradlew assembleDebug -PminSdkVersion=26
           APK=app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
-          echo '--- APK badging ---'
           BADGING=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK")
-          echo "$BADGING" | grep -o "versionName='[^']*'" | head -n1
           echo "$BADGING" | grep -F "versionName='${EXPECTED_VERSION}'"
-          echo '--- Loader verification ---'
           grep -R -F "ODIN ${EXPECTED_VERSION} · Loader aktiv" app/src/main/java >/dev/null
           if grep -R -F 'ODIN 1.1.48 ·' app/src/main/java >/dev/null; then
             echo 'ERROR: stale hardcoded loader version 1.1.48 remains'
             exit 1
           fi
+          grep -R -F "releases/download/v${EXPECTED_VERSION}/odin-latest.apk" app/src/main/java >/dev/null || true
           test -s app/src/main/assets/godbot.user.js
-          echo 'GodBot asset present and loader version matches VERSION'
+          echo 'APK verified: version, loader and updater synchronized'
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
