@@ -57,8 +57,6 @@ jobs:
           set -euo pipefail
           printf '%s' "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
-          # build-android.sh historically used over-escaped Python regex word boundaries.
-          # Normalize those literals before executing the script so the manifest patch is robust.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('../native/build-android.sh')
@@ -71,10 +69,21 @@ jobs:
           PY
           bash ../native/build-android.sh
           bash ../native/patch-godbot-loader.sh
+          # The generator historically emitted literal \n sequences into generated text files.
+          # Convert those escaped newlines to real newlines before Gradle parses the files.
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ('app/build.gradle', 'app/src/main/AndroidManifest.xml'):
+              p = Path(name)
+              if p.exists():
+                  s = p.read_text()
+                  if '\\n' in s:
+                      p.write_text(s.replace('\\n', '\n'))
+                      print(f'Normalized escaped newlines in {name}')
+          PY
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           candidates = [Path('variables.gradle'), Path('app/build.gradle')]
           found = []
           for p in candidates:
@@ -94,7 +103,6 @@ jobs:
               print('Forced app/build.gradle minSdk to 26')
           if not found:
               raise SystemExit('Could not locate an Android minSdk declaration')
-          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
