@@ -24,11 +24,18 @@ android {
         versionCode 1
         versionName '1.0.0'
     }
-    signingConfigs { odinRelease {
-        def ks = System.getenv('ODIN_KEYSTORE_FILE')
-        if (ks != null) { storeFile file(ks); storePassword System.getenv('ODIN_KEYSTORE_PASSWORD'); keyAlias System.getenv('ODIN_KEY_ALIAS'); keyPassword System.getenv('ODIN_KEY_PASSWORD') }
-    }}
-    buildTypes { debug { signingConfig signingConfigs.odinRelease } release { signingConfig signingConfigs.odinRelease } }
+    signingConfigs {
+        odinRelease {
+            storeFile file('odin-release.jks')
+            storePassword System.getenv('ODIN_KEYSTORE_PASSWORD')
+            keyAlias System.getenv('ODIN_KEY_ALIAS')
+            keyPassword System.getenv('ODIN_KEY_PASSWORD')
+        }
+    }
+    buildTypes {
+        debug { signingConfig signingConfigs.odinRelease }
+        release { signingConfig signingConfigs.odinRelease }
+    }
 }
 EOF
 python3 - "$APP/build.gradle" "$VERSION" <<'PY'
