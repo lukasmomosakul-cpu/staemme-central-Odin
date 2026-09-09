@@ -91,6 +91,21 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          v = Path('../VERSION').read_text().strip()
+          parts = v.split('.')
+          version_code = int(parts[0]) * 1000000 + int(parts[1]) * 1000 + int(parts[2])
+          s = re.sub(r'(?m)^(\s*versionCode)\s*(?:=\s*)?\d+\s*$', rf'\1 {version_code}', s, count=1)
+          s = re.sub(r'(?m)^(\s*versionName)\s*(?:=\s*)?"[^"]*"\s*$', rf'\1 "{v}"', s, count=1)
+          if 'versionName "' not in s:
+              raise SystemExit('Could not set Android versionName')
+          p.write_text(s)
+          print(f'Forced Android versionName={v} versionCode={version_code}')
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
           candidates = [Path('variables.gradle'), Path('app/build.gradle')]
           found = []
           for p in candidates:
@@ -110,17 +125,24 @@ jobs:
               print('Forced app/build.gradle minSdk to 26')
           if not found:
               raise SystemExit('Could not locate an Android minSdk declaration')
+          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
       - name: Build and verify APK
         working-directory: android
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           ./gradlew assembleDebug -PminSdkVersion=26
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -F "versionName='${{ steps.version.outputs.version }}'"
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+          echo '--- APK badging ---'
+          BADGING=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK")
+          echo "$BADGING" | grep -o "versionName='[^']*'" | head -n1
+          echo "$BADGING" | grep -F "versionName='${EXPECTED_VERSION}'"
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
