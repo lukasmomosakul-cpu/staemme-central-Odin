@@ -18,6 +18,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - run: corepack enable && corepack prepare pnpm@10.15.0 --activate
       - run: pnpm install --no-frozen-lockfile
       - name: Read version
@@ -50,8 +54,6 @@ jobs:
           mkdir -p app
           printf '%s' "$ODIN_KEYSTORE_BASE64" | base64 --decode > app/odin-release.jks
           test -s app/odin-release.jks
-          # The generator historically emitted an over-escaped Python regex (\\b), causing AssertionError.
-          # Normalize that generator typo in the checked-out script before executing it.
           python3 - <<'PY'
           from pathlib import Path
           p=Path('../native/build-android.sh')
@@ -78,7 +80,6 @@ jobs:
               s=s.replace('releases/latest/download/odin-latest.apk',f'releases/download/v{version}/odin-latest.apk')
               p.write_text(s)
           PY
-          # Normalize literal backslash-n sequences emitted by the generator outside Java string literals.
           python3 - <<'PY'
           from pathlib import Path
           for name in ('app/build.gradle','app/src/main/AndroidManifest.xml'):
