@@ -12,18 +12,14 @@ cat > "$RES/drawable/odin_icon.xml" <<'EOF'
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#182230" android:pathData="M0,0h108v108h-108z" />
-    <!-- sword from lower-left to upper-right -->
-    <path android:fillColor="#F3F6FA" android:pathData="M18,82 L25,89 L84,30 L78,24 Z" />
-    <path android:fillColor="#B8893F" android:pathData="M72,18 L90,36 L84,42 L66,24 Z" />
-    <path android:fillColor="#D8DEE7" android:pathData="M81,21 L87,27 L34,80 L30,76 Z" />
-    <path android:fillColor="#B8893F" android:pathData="M20,76 L34,90 L29,95 L15,81 Z" />
-    <path android:fillColor="#8A6A35" android:pathData="M14,78 L20,72 L36,88 L30,94 Z" />
-    <!-- sword from upper-left to lower-right -->
-    <path android:fillColor="#F3F6FA" android:pathData="M24,24 L30,18 L89,77 L83,83 Z" />
-    <path android:fillColor="#D8DEE7" android:pathData="M21,21 L27,15 L80,68 L76,72 Z" />
-    <path android:fillColor="#B8893F" android:pathData="M66,84 L84,66 L90,72 L72,90 Z" />
-    <path android:fillColor="#8A6A35" android:pathData="M78,76 L84,70 L94,80 L88,86 Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M23,20 L29,14 L94,79 L88,85 Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M85,14 L91,20 L26,85 L20,79 Z" />
+    <path android:fillColor="#B8893F" android:pathData="M17,76 L31,90 L26,95 L12,81 Z" />
+    <path android:fillColor="#B8893F" android:pathData="M77,90 L91,76 L96,81 L82,95 Z" />
+    <path android:fillColor="#8A6A35" android:pathData="M12,76 L18,70 L37,89 L31,95 Z" />
+    <path android:fillColor="#8A6A35" android:pathData="M71,89 L90,70 L96,76 L77,95 Z" />
+    <path android:fillColor="#B8893F" android:pathData="M68,20 L88,40 L82,46 L62,26 Z" />
+    <path android:fillColor="#B8893F" android:pathData="M20,40 L40,20 L46,26 L26,46 Z" />
 </vector>
 EOF
 
@@ -35,7 +31,7 @@ s=p.read_text()
 s=s.replace('android:icon="@mipmap/ic_launcher"','android:icon="@drawable/odin_icon"')
 s=s.replace('android:roundIcon="@mipmap/ic_launcher_round"','android:roundIcon="@drawable/odin_icon"')
 if 'android:icon="@drawable/odin_icon"' not in s:
-    s=s.replace('<application ', '<application android:icon="@drawable/odin_icon" android:roundIcon="@drawable/odin_icon" ' ,1)
+    s=s.replace('<application ', '<application android:icon="@drawable/odin_icon" android:roundIcon="@drawable/odin_icon" ',1)
 p.write_text(s)
 PY
 
