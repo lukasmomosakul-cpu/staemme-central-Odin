@@ -50,8 +50,11 @@ start=s.index(' private void loadEnabledScripts(WebView v){')
 end=s.index('\n @Override public void onBackPressed()',start)
 new=r''' private void loadEnabledScripts(WebView v){
   String path=v.getUrl()==null?"":v.getUrl();
-  if(!path.matches("(?i).*[/]game[.]php.*"))return;
+  if(!path.matches("(?i)^https?://([^.]+[.]*)?die-staemme[.]de(/.*)?$"))return;
   try{
+   if(v.getUrl()!=null && v.getUrl().equals(path)){
+    v.evaluateJavascript("(function(){window.__odinGodBotAttempt=(window.__odinGodBotAttempt||0)+1;return window.__odinGodBotAttempt})()",null);
+   }
    BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("godbot.user.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append(System.lineSeparator());r.close();
    String source=b.toString();
    android.util.Log.i("ODIN_GODBOT","bundled_source bytes="+source.length()+" url="+path);
