@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# The workflow runs this script from the generated android/ directory.
+# Keep generation inside that Capacitor project; never write to the repo-level app/ directory.
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/app"
+if [ "$(basename "$PWD")" = "android" ]; then
+  APP="$PWD/app"
+else
+  APP="$ROOT/android/app"
+fi
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 JAVA_DIR="$APP/src/main/java/de/teamzentrale/odin"
 mkdir -p "$JAVA_DIR" "$APP/src/main/assets" "$APP/src/main/res/values"
@@ -53,7 +59,7 @@ public class MainActivity extends Activity { @Override protected void onCreate(B
 EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
-import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.view.ViewGroup; import android.widget.FrameLayout; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
+import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
 public class GameWebViewActivity extends Activity {
  private WebView webView;
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b);FrameLayout root=new FrameLayout(this);webView=new WebView(this);root.addView(webView,new FrameLayout.LayoutParams(-1,-1));setContentView(root);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);webView.setWebChromeClient(new WebChromeClient());webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}@Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});webView.loadUrl("https://www.die-staemme.de/");}
