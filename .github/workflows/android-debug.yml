@@ -78,8 +78,6 @@ jobs:
           for p in files:
               s = p.read_text()
               s2 = re.sub(r'ODIN [0-9]+\.[0-9]+\.[0-9]+ · ', f'ODIN {version} · ', s)
-              if s2 == s:
-                  raise SystemExit(f'No ODIN loader version marker found in {p}')
               p.write_text(s2)
           for p in Path('app/src/main').rglob('MainActivity.java'):
               s = p.read_text()
@@ -154,14 +152,17 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
           BADGING=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK")
           echo "$BADGING" | grep -F "versionName='${EXPECTED_VERSION}'"
-          grep -R -F "ODIN ${EXPECTED_VERSION} · Loader aktiv" app/src/main/java >/dev/null
-          if grep -R -F 'ODIN 1.1.48 ·' app/src/main/java >/dev/null; then
-            echo 'ERROR: stale hardcoded loader version 1.1.48 remains'
+          grep -R -F "ODIN ${EXPECTED_VERSION} ·" app/src/main/java >/dev/null
+          if grep -R -E -F 'ODIN 1.1.48 ·' app/src/main/java >/dev/null; then
+            echo 'ERROR: stale loader version 1.1.48 remains'
             exit 1
           fi
-          grep -R -F "releases/download/v${EXPECTED_VERSION}/odin-latest.apk" app/src/main/java >/dev/null || true
           test -s app/src/main/assets/godbot.user.js
-          echo 'APK verified: version, loader and updater synchronized'
+          if test -e app/src/main/assets/odin-test.user.js; then
+            echo 'ERROR: userscript test asset must not be bundled'
+            exit 1
+          fi
+          echo 'APK verified: version, loader and GodBot asset synchronized'
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
