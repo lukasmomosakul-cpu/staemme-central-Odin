@@ -1,0 +1,10 @@
+name: Odin 1.1.28 rebuild
+
+on:
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Manual rebuild requested for Odin 1.1.28"
