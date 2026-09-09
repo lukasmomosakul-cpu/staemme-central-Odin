@@ -4,7 +4,7 @@ TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
 test -n "$TARGET" || { echo 'GodBot loader: GameWebViewActivity.java not found'; exit 1; }
 mkdir -p app/src/main/assets
 URL='https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/'
-echo 'GodBot loader: downloading source'
+echo "GodBot loader: downloading source"
 curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 "$URL" -o app/src/main/assets/godbot.user.js
 test -s app/src/main/assets/godbot.user.js
 VERSION=$(tr -d '[:space:]' < ../VERSION)
