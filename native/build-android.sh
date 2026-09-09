@@ -3,7 +3,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/app"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
-PKG="de.teamzentrale.odin"
 JAVA_DIR="$APP/src/main/java/de/teamzentrale/odin"
 mkdir -p "$JAVA_DIR" "$APP/src/main/assets" "$APP/src/main/res/values"
 
@@ -30,7 +29,10 @@ python3 - "$APP/build.gradle" "$VERSION" <<'PY'
 from pathlib import Path
 import re,sys
 p=Path(sys.argv[1]); v=sys.argv[2]; a=v.split('.'); code=int(a[0])*1000000+int(a[1])*1000+int(a[2])
-s=p.read_text(); s=re.sub(r'\bversionCode\s+\d+',f'versionCode {code}',s,1); s=re.sub(r"versionName\s+['\"][^'\"]+['\"]",f"versionName '{v}'",s,1); p.write_text(s)
+s=p.read_text()
+s=re.sub(r'\bversionCode\s+\d+',f'versionCode {code}',s,1)
+s=re.sub(r"versionName\s+['\"][^'\"]+['\"]",f"versionName '{v}'",s,1)
+p.write_text(s)
 PY
 
 cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
@@ -45,7 +47,7 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
 </manifest>
 EOF
 cat > "$APP/src/main/res/values/styles.xml" <<'EOF'
-<resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#333333</item><item name="android:navigationBarColor">#ffffff</item><item name="android:statusBarColor">#ffffff</item><item name="android:windowLightStatusBar">true</item></style></resources>
+<resources><style name="AppTheme" parent="style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#333333</item><item name="android:navigationBarColor">#ffffff</item><item name="android:statusBarColor">#ffffff</item><item name="android:windowLightStatusBar">true</item></style></resources>
 EOF
 cat > "$JAVA_DIR/MainActivity.java" <<'EOF'
 package de.teamzentrale.odin;
@@ -54,13 +56,48 @@ public class MainActivity extends Activity { @Override protected void onCreate(B
 EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
-import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.view.ViewGroup; import android.widget.FrameLayout; import android.util.Log;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.os.Bundle;
+import android.webkit.*;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.util.Log;
+import android.content.Intent;
+import android.net.Uri;
+import android.webkit.JavascriptInterface;
+import java.io.*;
+import java.net.*;
+import org.json.JSONObject;
+
 public class GameWebViewActivity extends Activity {
  private WebView webView;
- @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); FrameLayout root=new FrameLayout(this); webView=new WebView(this); root.addView(webView,new FrameLayout.LayoutParams(-1,-1)); setContentView(root); WebSettings s=webView.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setDatabaseEnabled(true); CookieManager.getInstance().setAcceptCookie(true); CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true); webView.setWebChromeClient(new WebChromeClient()); webView.addJavascriptInterface(new OdinNative(),"OdinNative"); webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;} @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}}); webView.loadUrl("https://www.die-staemme.de/");}
- private void injectManagedScripts(WebView v){try{java.io.BufferedReader r=new java.io.BufferedReader(new java.io.InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
- private void loadEnabledScripts(WebView v){String u=v.getUrl()==null?"":v.getUrl();if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$"))return;try{java.io.BufferedReader r=new java.io.BufferedReader(new java.io.InputStreamReader(getAssets().open("godbot.user.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();String src=b.toString();if(!src.trim().isEmpty()){String js="try{(0,eval)("+org.json.JSONObject.quote(src)+");console.log('ODIN_GODBOT_EVAL_OK')}catch(e){console.error('ODIN_GODBOT_EVAL_ERROR',e&&e.stack?e.stack:e)}";v.evaluateJavascript(js,null);}}catch(Exception e){Log.e("ODIN_GODBOT","load_failed",e);}}
- private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->finish());}}
+ @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){
+  super.onCreate(b);
+  FrameLayout root=new FrameLayout(this); webView=new WebView(this);
+  root.addView(webView,new FrameLayout.LayoutParams(-1,-1)); setContentView(root);
+  WebSettings s=webView.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setDatabaseEnabled(true);
+  CookieManager.getInstance().setAcceptCookie(true); CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);
+  webView.setWebChromeClient(new WebChromeClient()); webView.addJavascriptInterface(new OdinNative(),"OdinNative");
+  webView.setWebViewClient(new WebViewClient(){
+   @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
+   @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}
+  });
+  webView.loadUrl("https://www.die-staemme.de/");
+ }
+ private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
+ private void loadEnabledScripts(WebView v){
+  String u=v.getUrl()==null?"":v.getUrl();
+  if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
+  try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("godbot.user.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();String src=b.toString();
+   if(!src.trim().isEmpty()) v.evaluateJavascript("try{(0,eval)("+JSONObject.quote(src)+");console.log('ODIN_GODBOT_EVAL_OK')}catch(e){console.error('ODIN_GODBOT_EVAL_ERROR',e&&e.stack?e.stack:e)}",null);
+  }catch(Exception e){Log.e("ODIN_GODBOT","load_failed",e);}
+ }
+ @Override public void onBackPressed(){ if(webView.canGoBack()) webView.goBack(); else super.onBackPressed(); }
+ private void minimizeToApp(){finish();}
+ private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
+ private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
 }
 EOF
 printf '%s\n' "ODIN $VERSION · clean generator"
