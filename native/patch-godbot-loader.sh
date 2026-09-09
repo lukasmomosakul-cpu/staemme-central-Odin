@@ -18,7 +18,7 @@ new=r''' private void loadEnabledScripts(WebView v){
   try{
    String test="(function(){try{var e=document.getElementById('__odin_userscript_test');if(!e){e=document.createElement('div');e.id='__odin_userscript_test';e.style.cssText='position:fixed;top:55px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#111;color:#0f0;padding:8px 14px;border:2px solid #0f0;border-radius:6px;font:bold 16px sans-serif;';(document.body||document.documentElement).appendChild(e)}e.textContent='USERSCRIPT OK';console.log('ODIN_TEST_USERSCRIPT_OK')}catch(x){console.error('ODIN_TEST_ERROR',x)}})()";
    v.evaluateJavascript(test,null);
-   String status="(function(){try{var e=document.getElementById('__odin_loader_status');if(!e){e=document.createElement('div');e.id='__odin_loader_status';e.style.cssText='position:fixed;bottom:8px;left:8px;right:8px;z-index:2147483647;background:#111;color:#fff;padding:7px 9px;border:1px solid #777;border-radius:4px;font:12px sans-serif;opacity:.95;white-space:normal;word-break:break-word;max-height:30vh;overflow:auto';(document.body||document.documentElement).appendChild(e)}e.textContent='ODIN 1.1.45 · Loader aktiv'}catch(x){}})()";
+   String status="(function(){try{var e=document.getElementById('__odin_loader_status');if(!e){e=document.createElement('div');e.id='__odin_loader_status';e.style.cssText='position:fixed;bottom:8px;left:8px;right:8px;z-index:2147483647;background:#111;color:#fff;padding:7px 9px;border:1px solid #777;border-radius:4px;font:12px sans-serif;opacity:.95;white-space:normal;word-break:break-word;max-height:30vh;overflow:auto';(document.body||document.documentElement).appendChild(e)}e.textContent='ODIN 1.1.47 · Loader aktiv'}catch(x){}})()";
    v.evaluateJavascript(status,null);
    BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("godbot.user.js"))); StringBuilder bld=new StringBuilder(); String line; while((line=r.readLine())!=null)bld.append(line).append(System.lineSeparator()); r.close(); String src=bld.toString(); if(src.trim().isEmpty()) return;
    java.util.regex.Matcher rm=java.util.regex.Pattern.compile("(?m)^\\s*//\\s*@require\\s+([^\\s]+)").matcher(src); final java.util.ArrayList<String> requires=new java.util.ArrayList<>(); while(rm.find()) requires.add(rm.group(1));
@@ -28,7 +28,7 @@ new=r''' private void loadEnabledScripts(WebView v){
      StringBuilder all=new StringBuilder(); java.util.HashSet<String> seen=new java.util.HashSet<>();
      for(String req:requires){if(!seen.add(req))continue; try{HttpURLConnection c=(HttpURLConnection)new URL(req).openConnection();c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();if(st<200||st>=300)continue;BufferedReader rr=new BufferedReader(new InputStreamReader(c.getInputStream()));String x;while((x=rr.readLine())!=null)all.append(x).append('\n');rr.close();}catch(Exception ignored){}}
      final String qAll=JSONObject.quote(all.toString());
-     runOnUiThread(()->{String js="try{new Function("+qShim+")();(0,eval)("+qAll+");(0,eval)("+qSrc+");var e=document.getElementById('__odin_loader_status');if(e)e.textContent='ODIN 1.1.45 · GodBot eval OK';console.log('ODIN_GODBOT_EVAL_OK')}catch(e){var msg=e&&e.stack?e.stack:(e&&e.message?e.message:String(e));console.error('ODIN_GODBOT_EVAL_ERROR',msg);var x=document.getElementById('__odin_loader_status');if(x){x.innerHTML='ODIN 1.1.45 · GodBot FEHLER<br><pre id=\'__odin_error_text\' style=\'white-space:pre-wrap;user-select:text;color:#f55;margin:5px 0;font:12px monospace\'>ERROR</pre>';var z=document.getElementById('__odin_error_text');z.textContent=msg}}";v.evaluateJavascript(js,null);});
+     runOnUiThread(()->{String js="try{new Function("+qShim+")();(0,eval)("+qAll+");(0,eval)("+qSrc+");var e=document.getElementById('__odin_loader_status');if(e)e.textContent='ODIN 1.1.47 · GodBot eval OK';console.log('ODIN_GODBOT_EVAL_OK')}catch(e){var msg=e&&e.stack?e.stack:(e&&e.message?e.message:String(e));console.error('ODIN_GODBOT_EVAL_ERROR',msg);var x=document.getElementById('__odin_loader_status');if(x){x.innerHTML='ODIN 1.1.47 · GodBot FEHLER<br><pre id=\'__odin_error_text\' style=\'white-space:pre-wrap;user-select:text;color:#f55;margin:5px 0;font:12px monospace\'>ERROR</pre>';var z=document.getElementById('__odin_error_text');z.textContent=msg}}";v.evaluateJavascript(js,null);});
    }catch(Exception e){android.util.Log.e("ODIN_GODBOT","require_load_failed",e);}}
    ).start();
   }catch(Exception e){android.util.Log.e("ODIN_GODBOT","asset_load_failed",e);}
@@ -38,5 +38,14 @@ s=s[:a]+new+s[b:]
 needle='private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}'
 replacement='private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)return "";BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}'
 if needle not in s: raise SystemExit('OdinBridge pattern not found')
-s=s.replace(needle,replacement); p.write_text(s)
+s=s.replace(needle,replacement)
+
+# Patch the generated updater to a concrete release URL and a unique APK filename.
+main=Path(sys.argv[1]).parent/'MainActivity.java'
+if main.exists():
+    ms=main.read_text()
+    ms=ms.replace('https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk?odin=','https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/download/v1.1.47/odin-latest.apk?odin=')
+    ms=ms.replace('"odin-update.apk"','"odin-update-1.1.47.apk"')
+    main.write_text(ms)
+p.write_text(s)
 PY
