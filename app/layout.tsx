@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import './odin-theme.css';
 import VersionUpdater from '../components/VersionUpdater';
 
 export const metadata: Metadata = {
