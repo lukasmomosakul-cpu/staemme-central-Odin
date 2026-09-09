@@ -49,13 +49,11 @@ jobs:
           echo "$ODIN_KEYSTORE_BASE64" | base64 --decode > odin-release.jks
           test -s odin-release.jks
           bash ../native/build-android.sh
+          bash ../native/patch-godbot-loader.sh
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          # Capacitor owns the root SDK variable and can re-apply it after
-          # the app module is configured. Force both levels to the library's
-          # required API so the manifest merger cannot fall back to 24.
           candidates = [Path('variables.gradle'), Path('app/build.gradle')]
           found = []
           for p in candidates:
