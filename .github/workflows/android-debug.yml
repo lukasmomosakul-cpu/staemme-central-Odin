@@ -69,8 +69,6 @@ jobs:
           PY
           bash ../native/build-android.sh
           bash ../native/patch-godbot-loader.sh
-          # The generator historically emitted literal \n sequences into generated text files.
-          # Convert those escaped newlines to real newlines before Gradle parses the files.
           python3 - <<'PY'
           from pathlib import Path
           for name in ('app/build.gradle', 'app/src/main/AndroidManifest.xml'):
@@ -80,6 +78,15 @@ jobs:
                   if '\\n' in s:
                       p.write_text(s.replace('\\n', '\n'))
                       print(f'Normalized escaped newlines in {name}')
+          java = Path('app/src/main/java')
+          for p in java.rglob('GameWebViewActivity.java'):
+              s = p.read_text()
+              original = s
+              s = s.replace("Color.rgb(15,20,35);", "Color.rgb(15,20,35));")
+              s = s.replace("append('\\\\n')", "append('\\n')")
+              if s != original:
+                  p.write_text(s)
+                  print(f'Normalized generated Java source: {p}')
           PY
           python3 - <<'PY'
           from pathlib import Path
