@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Odin GodBot loader — build-time injection, version-synchronised with VERSION.
 TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
 test -n "$TARGET" || { echo 'GodBot loader: GameWebViewActivity.java not found'; exit 1; }
 mkdir -p app/src/main/assets
