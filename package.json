@@ -12,24 +12,24 @@
     "cap:android": "cap open android"
   },
   "dependencies": {
-    "next": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "lucide-react": "latest",
-    "@supabase/supabase-js": "latest",
-    "@capacitor/core": "latest",
-    "@capacitor/browser": "latest",
-    "@capacitor/inappbrowser": "latest",
-    "@capawesome/capacitor-in-app-browser": "latest",
-    "@capacitor/ios": "latest",
-    "@capacitor/android": "latest"
+    "next": "16.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "lucide-react": "1.45.0",
+    "@supabase/supabase-js": "2.116.0",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/browser": "8.0.4",
+    "@capacitor/inappbrowser": "4.0.3",
+    "@capawesome/capacitor-in-app-browser": "0.2.1",
+    "@capacitor/ios": "8.5.2",
+    "@capacitor/android": "8.5.2"
   },
   "devDependencies": {
-    "typescript": "latest",
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "@capacitor/cli": "latest"
+    "typescript": "7.0.2",
+    "@types/node": "22.20.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@capacitor/cli": "8.5.2"
   },
   "packageManager": "pnpm@10.15.0"
 }
