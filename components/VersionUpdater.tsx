@@ -2,7 +2,9 @@
 
 import { useState } from 'react';
 
-const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.1.27';
+// Kein fester Fallback: eine falsche Versionsnummer waere schlimmer als ein
+// sichtbares '?', weil die Anzeige genau dazu dient, einen Deploy zu pruefen.
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '?';
 
 export default function VersionUpdater() {
   const [busy, setBusy] = useState(false);
