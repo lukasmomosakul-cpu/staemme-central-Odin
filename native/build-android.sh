@@ -61,15 +61,64 @@ cat > "$APP/src/main/res/values/styles.xml" <<'EOF'
 EOF
 cat > "$JAVA_DIR/MainActivity.java" <<'EOF'
 package de.teamzentrale.odin;
-import android.app.Activity; import android.content.Intent; import android.os.Bundle;
-public class MainActivity extends Activity { @Override protected void onCreate(Bundle b){ super.onCreate(b); startActivity(new Intent(this,GameWebViewActivity.class)); finish(); } }
+import android.annotation.SuppressLint; import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.util.Log; import android.webkit.JavascriptInterface;
+public class MainActivity extends Activity {
+ private WebView webView;
+ private static final String ODIN_URL="https://staemme-central-odin.vercel.app/";
+ @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){
+  super.onCreate(b);
+  FrameLayout root=new FrameLayout(this); webView=new WebView(this);
+  root.addView(webView,new FrameLayout.LayoutParams(-1,-1)); setContentView(root);
+  WebSettings s=webView.getSettings();
+  s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setDatabaseEnabled(true);
+  s.setSupportMultipleWindows(true); s.setJavaScriptCanOpenWindowsAutomatically(true);
+  CookieManager.getInstance().setAcceptCookie(true);
+  CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);
+  webView.setWebChromeClient(new WebChromeClient(){
+   @Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber());return true;}
+  });
+  webView.addJavascriptInterface(new OdinAppBridge(),"Android");
+  webView.setWebViewClient(new WebViewClient(){
+   @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
+    String u=r.getUrl()==null?"":r.getUrl().toString();
+    // Das Spiel gehoert in die eigene Activity, nicht in die Odin-Ansicht.
+    if(u.contains("die-staemme.de")){openGameActivity("",""); return true;}
+    return false;
+   }
+  });
+  webView.loadUrl(ODIN_URL);
+ }
+ private void openGameActivity(String accountId,String username){
+  Intent i=new Intent(this,GameWebViewActivity.class);
+  i.putExtra("accountId",accountId); i.putExtra("username",username);
+  startActivity(i);
+ }
+ @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
+ private class OdinAppBridge{
+  // Der Webcode ruft window.Android.* auf - diese Namen muessen exakt passen.
+  @JavascriptInterface public void openGame(String accountId,String username,String password,String scriptsJson){
+   runOnUiThread(()->openGameActivity(accountId==null?"":accountId,username==null?"":username));
+  }
+  @JavascriptInterface public void updateApk(){
+   runOnUiThread(()->{try{
+    startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(
+     "https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest")));
+   }catch(Exception e){Log.e("ODIN","update",e);}});
+  }
+ }
+}
 EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
 public class GameWebViewActivity extends Activity {
  private WebView webView;
- @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b);FrameLayout root=new FrameLayout(this);webView=new WebView(this);root.addView(webView,new FrameLayout.LayoutParams(-1,-1));setContentView(root);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}@Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});webView.loadUrl("https://www.die-staemme.de/");}
+ @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b);FrameLayout root=new FrameLayout(this);webView=new WebView(this);root.addView(webView,new FrameLayout.LayoutParams(-1,-1));setContentView(root);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
+ // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
+ @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
+ @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
+ @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
+ @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}@Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});webView.loadUrl("https://www.die-staemme.de/");}
  private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
  private void loadEnabledScripts(WebView v){ }
  private void executeGodBotWhenReady(WebView v){ }
