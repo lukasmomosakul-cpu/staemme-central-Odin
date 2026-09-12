@@ -40,6 +40,12 @@ js = r"""
  window.GM_addStyle=window.GM_addStyle||function(c){var x=document.createElement('style');x.textContent=c;(document.head||document.documentElement).appendChild(x);return x};
  window.GM_registerMenuCommand=window.GM_registerMenuCommand||function(){};
  window.GM_xmlhttpRequest=window.GM_xmlhttpRequest||function(o){try{var z={status:200,responseText:OdinNative.httpGet(String(o.url)),response:''};z.response=z.responseText;if(o.onload)o.onload(z);return z}catch(e){if(o.onerror)o.onerror({status:0,error:e});return{abort:function(){}}}};
+ // Ein Fehler beim Auswerten von GodBot wuerde sonst nur in der Konsole landen.
+ window.addEventListener('error',function(ev){try{if(window.__odinErr)return;window.__odinErr=1;
+  var m=(ev.error&&ev.error.message)||ev.message||'?';
+  OdinNative.status('JS-Fehler: '+m);}catch(e){}},true);
+ window.addEventListener('unhandledrejection',function(ev){try{if(window.__odinErr)return;window.__odinErr=1;
+  OdinNative.status('Promise-Fehler: '+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason));}catch(e){}});
  var n=__DEPCOUNT__, urls=[];
  for(var i=0;i<n;i++)urls.push('/__odin_req_'+i+'.js');
  urls.push('/__odin_godbot.js');
@@ -47,7 +53,14 @@ js = r"""
  function add(i){
   if(i>=urls.length){
    try{var V='__VERSION__';var A=document.querySelectorAll('*');for(var k=0;k<A.length;k++){var e=A[k],t=(e.textContent||'').trim();if(/USERSCRIPT OK/i.test(t)&&e.children.length===0){e.remove();continue}if(/loader aktiv/i.test(t)){e.style.width='fit-content';e.style.maxWidth='calc(100% - 24px)';e.style.display='inline-flex';e.style.padding='6px 10px';e.style.margin='8px';e.style.borderRadius='8px'}}}catch(e){}
-   OdinNative.status('geladen ('+done+' Teile)');
+   // window.godbotCommands wird von GodBot gesetzt - damit laesst sich
+   // 'Datei geladen' von 'Skript wirklich durchgelaufen' unterscheiden.
+   setTimeout(function(){try{
+    OdinNative.status(typeof window.godbotCommands==='function'
+      ? 'aktiv ('+done+' Teile)'
+      : 'geladen, aber nicht initialisiert');
+   }catch(e){}},3000);
+   OdinNative.status('geladen ('+done+' Teile), pruefe...');
    return;
   }
   var sc=document.createElement('script');

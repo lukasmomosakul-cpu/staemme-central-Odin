@@ -83,6 +83,8 @@ public class MainActivity extends Activity {
   WebSettings s=webView.getSettings();
   s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setDatabaseEnabled(true);
   s.setSupportMultipleWindows(true); s.setJavaScriptCanOpenWindowsAutomatically(true);
+  // Ohne das zeigt die WebView nach einem Deploy weiter die alte Version an.
+  s.setCacheMode(WebSettings.LOAD_NO_CACHE);
   CookieManager.getInstance().setAcceptCookie(true);
   CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);
   webView.setWebChromeClient(new WebChromeClient(){
