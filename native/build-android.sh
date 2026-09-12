@@ -61,6 +61,7 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
@@ -73,6 +74,12 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
             android:documentLaunchMode="intoExisting" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <receiver android:name=".OdinAlarmReceiver" android:exported="false" />
+        <receiver android:name=".OdinBootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <service android:name=".OdinService" android:exported="false"
             android:foregroundServiceType="dataSync" />
         <provider android:name="androidx.core.content.FileProvider"
@@ -234,6 +241,7 @@ public class MainActivity extends Activity {
   @JavascriptInterface public void setSupabaseSession(String url,String anonKey,String accessToken,String teamId){
    SUPA_URL=url; SUPA_KEY=anonKey; SUPA_TOKEN=accessToken; SUPA_TEAM=teamId;
    OdinService.url=url; OdinService.key=anonKey; OdinService.token=accessToken;
+   OdinService.sichern(MainActivity.this,url,anonKey,accessToken,teamId);
    OdinService.team=teamId; OdinService.device=android.os.Build.MODEL+"-"+
      android.provider.Settings.Secure.getString(getContentResolver(),
        android.provider.Settings.Secure.ANDROID_ID);
@@ -315,8 +323,27 @@ public class OdinService extends Service {
  private Thread poller; private volatile boolean running;
  private String lastSeen="";
  @Override public IBinder onBind(Intent i){ return null; }
+ // Ohne dauerhafte Ablage stehen die Zugangsdaten nur in statischen Feldern:
+ // nach einem Neustart oder wenn Android die App abraeumt, waeren sie weg und
+ // es wuerden keine Wecker mehr gesetzt.
+ public static void sichern(Context c,String u,String k,String t,String tm){
+  c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).edit()
+   .putString("url",u).putString("key",k).putString("token",t).putString("team",tm).apply();
+ }
+ private void laden(){
+  android.content.SharedPreferences p=getSharedPreferences("odin_svc",Context.MODE_PRIVATE);
+  if(url.isEmpty())url=p.getString("url","");
+  if(key.isEmpty())key=p.getString("key","");
+  if(token.isEmpty())token=p.getString("token","");
+  if(team.isEmpty())team=p.getString("team","");
+  if(device.isEmpty())device=Build.MODEL+"-"+android.provider.Settings.Secure.getString(
+    getContentResolver(),android.provider.Settings.Secure.ANDROID_ID);
+ }
+ @Override public int onStartCommand(Intent i,int flags,int startId){
+  laden(); return START_STICKY;   // nach dem Abraeumen wieder anlaufen
+ }
  @Override public void onCreate(){
-  super.onCreate(); channels();
+  super.onCreate(); laden(); channels();
   Notification n=new Notification.Builder(this,CH_STATUS)
     .setContentTitle("Odin läuft").setContentText("Benachrichtigungen aktiv")
     .setSmallIcon(android.R.drawable.ic_dialog_info).setOngoing(true).build();
@@ -531,6 +558,19 @@ public final class OdinVault {
  public static boolean vorhanden(Context c,String accountId){ return p(c).contains(accountId); }
  public static void loeschen(Context c,String accountId){
   p(c).edit().remove(accountId).remove(accountId+"_ivlen").apply();
+ }
+}
+EOF
+cat > "$JAVA_DIR/OdinBootReceiver.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.BroadcastReceiver; import android.content.Context; import android.content.Intent;
+// Wecker des AlarmManagers ueberleben einen Neustart des Geraets nicht, und
+// nach einem App-Update sind sie ebenfalls weg. Der Dienst wird deshalb wieder
+// gestartet und setzt die Wecker beim naechsten Durchlauf neu.
+public class OdinBootReceiver extends BroadcastReceiver {
+ @Override public void onReceive(Context c, Intent in){
+  try{ c.startForegroundService(new Intent(c,OdinService.class)); }
+  catch(Exception e){ android.util.Log.w("ODIN_BOOT","start",e); }
  }
 }
 EOF
@@ -1074,19 +1114,30 @@ public class GameWebViewActivity extends Activity {
                      :"Wecker: Vordergrund, Anzeige dunkel");
    // Nur so lange offen, wie fuer die Aktion noetig. Danach zurueck in den
    // Hintergrund, damit das Geraet nachts nicht dauerhaft wach bleibt.
+   // War der Account minimiert, liegt seine WebView im Overlay und NICHT in
+   // dieser Activity. Ohne Rueckholen waere die Ansicht leer und der Termin
+   // liefe ins Leere.
+   warGeschwebt=OdinFloat.active(gameAccountId);
+   if(warGeschwebt){ restoreFromFloat(); setStatus("Wecker: aus dem Symbol zurückgeholt"); }
    if(weckFensterEnde!=null)w.getDecorView().removeCallbacks(weckFensterEnde);
    weckFensterEnde=()->{
     if(!weckerAktiv)return;
-    setStatus("Weckfenster beendet – zurück in den Hintergrund");
     weckerAktiv=false;
     anzeigeZuruecksetzen();
+    if(warGeschwebt&&OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat)){
+     // Zurueck ins schwebende Fenster statt in den Hintergrund: dort bleibt
+     // die WebView sichtbar und damit ungedrosselt.
+     setStatus("Weckfenster beendet – schwebt wieder");
+    }else{
+     setStatus("Weckfenster beendet – zurück in den Hintergrund");
+    }
     moveTaskToBack(true);
    };
    weckerAktiv=true;
    w.getDecorView().postDelayed(weckFensterEnde,WECK_FENSTER_MS);
   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","weckerModus",e); }
  }
- private boolean dunkelWegenWecker=false, weckerAktiv=false;
+ private boolean dunkelWegenWecker=false, weckerAktiv=false, warGeschwebt=false;
  private Runnable weckFensterEnde=null;
  // Vorlauf (90 s) plus Puffer fuer Laden und Absetzen des Befehls.
  private static final long WECK_FENSTER_MS=180_000L;
