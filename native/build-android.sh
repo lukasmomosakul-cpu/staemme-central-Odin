@@ -768,6 +768,8 @@ public class GameWebViewActivity extends Activity {
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
  private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  private LinearLayout rootLayout;
+ private FrameLayout dimRahmen;
+ private android.view.View dimDecke;
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
  // Vollstaendiges Protokoll: die Statuszeile ist einzeilig und schneidet lange
  // Fehlermeldungen ab, deshalb wird alles mitgeschrieben und ist kopierbar.
@@ -804,7 +806,9 @@ public class GameWebViewActivity extends Activity {
   root.addView(webView,new LinearLayout.LayoutParams(-1,0,1f));
   root.addView(buildFooter(accountsJson,activeName),new LinearLayout.LayoutParams(-1,-2));
   rootLayout=root;
-  setContentView(root);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
+  dimRahmen=new FrameLayout(this);
+  dimRahmen.addView(root,new FrameLayout.LayoutParams(-1,-1));
+  setContentView(dimRahmen);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
  // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
@@ -849,6 +853,10 @@ public class GameWebViewActivity extends Activity {
    startActivity(i);
   });
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
+  Button dim=new Button(this); dim.setText("🌙"); dim.setTextSize(12f); dim.setAllCaps(false);
+  dim.setPadding(10,0,10,0);
+  dim.setOnClickListener(x->dimmenAn());
+  bar.addView(dim,new LinearLayout.LayoutParams(-2,-2));
   Button min=new Button(this); min.setText("Minimieren"); min.setTextSize(12f); min.setAllCaps(false);
   min.setOnClickListener(x->{
    if(!OdinBubble.allowed(this)){
@@ -915,6 +923,41 @@ public class GameWebViewActivity extends Activity {
  }
  // Vom Wecker gestartet: ueber dem Sperrbildschirm anzeigen und den Schirm
  // einschalten. Erst dadurch wird die WebView sichtbar und laeuft ungedrosselt.
+ // Vollbild bleibt bestehen, nur die Anzeige wird dunkel. Entscheidend: die
+ // WebView wird weiter GERENDERT - die Abdeckung liegt nur davor. Ein
+ // Minimieren wuerde sie unsichtbar machen und Chromium drosselt dann die
+ // Zeitgeber; hier laeuft alles im vollen Takt weiter.
+ private void dimmenAn(){
+  if(dimDecke!=null||dimRahmen==null)return;
+  android.widget.LinearLayout decke=new android.widget.LinearLayout(this);
+  decke.setOrientation(android.widget.LinearLayout.VERTICAL);
+  decke.setGravity(android.view.Gravity.CENTER);
+  decke.setBackgroundColor(0xFF000000);
+  TextView hin=new TextView(this);
+  hin.setText("⚔  Odin läuft\n\nTippen zum Aufwecken");
+  hin.setTextColor(0xFF202020); hin.setTextSize(13f);
+  hin.setGravity(android.view.Gravity.CENTER);
+  decke.addView(hin);
+  decke.setOnClickListener(v->dimmenAus());
+  dimRahmen.addView(decke,new FrameLayout.LayoutParams(-1,-1));
+  dimDecke=decke;
+  android.view.Window w=getWindow();
+  android.view.WindowManager.LayoutParams lp=w.getAttributes();
+  lp.screenBrightness=0f; w.setAttributes(lp);
+  w.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  setStatus("gedimmt - läuft im vollen Takt weiter");
+ }
+ private void dimmenAus(){
+  if(dimDecke==null)return;
+  try{ dimRahmen.removeView(dimDecke); }catch(Exception ignored){}
+  dimDecke=null;
+  android.view.Window w=getWindow();
+  android.view.WindowManager.LayoutParams lp=w.getAttributes();
+  lp.screenBrightness=android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+  w.setAttributes(lp);
+  w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  setStatus("Anzeige normal");
+ }
  private void weckerModus(){
   try{
    if(!getIntent().getBooleanExtra("fromAlarm",false))return;
@@ -1043,7 +1086,10 @@ public class GameWebViewActivity extends Activity {
    }catch(Exception e){android.util.Log.e("ODIN_FLOAT","restore",e);}
   });
  }
- @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
+ @Override public void onBackPressed(){
+  if(dimDecke!=null){dimmenAus();return;}
+  if(webView.canGoBack())webView.goBack();else super.onBackPressed();
+ }
  private void minimizeToApp(){finish();}
  private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);}
   @JavascriptInterface public boolean syncReady(){ return !supaUrl.isEmpty()&&!supaToken.isEmpty()&&!gameAccountId.isEmpty(); }
