@@ -13,5 +13,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="de"><head><style>{`header.top > div > span.muted { display: none !important; } .mobileNav > span.muted { visibility:hidden !important; } #odin-version-updater { position:fixed; top:36px; right:28px; z-index:60; } @media(max-width:900px){#odin-version-updater{top:23px;right:16px}}`}</style></head><body>{children}<div id="odin-version-updater"><VersionUpdater /></div></body></html>;
+  // Frueher stand hier ein fest positionierter Versionsknopf plus CSS, das die
+  // Version in der Kopfzeile ausblendete. Beide Zeilen waren nach dem Umbau der
+  // Kopfzeile sichtbar. Der Knopf wird jetzt direkt in der Kopfzeile gerendert.
+  return <html lang="de"><body>{children}</body></html>;
 }
