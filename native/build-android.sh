@@ -337,29 +337,31 @@ public final class OdinFloat {
    // dargestellt. Wuerde stattdessen das Fenster die WebView verkleinern,
    // baute die Spielseite auf wenige hundert Pixel Breite um und GodBots
    // Selektoren griffen auf ein anderes Layout zu.
+   // Die WebView MUSS angehaengt und gerendert bleiben, sonst drosselt
+   // Chromium die Zeitgeber wieder. Sie laeuft deshalb hinter dem Icon
+   // weiter - stark verkleinert, aber sichtbar. Das Icon liegt deckend
+   // darueber, nach aussen ist nur es zu sehen.
    final int LAY_W=420, LAY_H=740;
-   FrameLayout clip=new FrameLayout(app); clip.setBackgroundColor(0xFF000000);
+   FrameLayout box=new FrameLayout(app);
    FrameLayout.LayoutParams wlp=new FrameLayout.LayoutParams(LAY_W,LAY_H);
    web.setLayoutParams(wlp);
    web.setPivotX(0f); web.setPivotY(0f);
-   clip.addView(web);
+   box.addView(web);
 
-   LinearLayout box=new LinearLayout(app); box.setOrientation(LinearLayout.VERTICAL);
-   box.setBackgroundColor(0xFF000000);
-   // Die ganze Leiste ist Griff UND Schalter: ziehen verschiebt, tippen holt
-   // die App zurueck. So bleibt bei kleiner Darstellung nichts unerreichbar.
-   TextView bar=new TextView(app); bar.setText("Odin ▲");
-   bar.setTextColor(0xFFFFFFFF); bar.setTextSize(9f); bar.setBackgroundColor(0xFF2B2B2B);
-   bar.setGravity(Gravity.CENTER); bar.setPadding(4,3,4,3);
-   box.addView(bar,new LinearLayout.LayoutParams(-1,-2));
-   box.addView(clip,new LinearLayout.LayoutParams(-1,0,1f));
+   TextView bar=new TextView(app); bar.setText("⚔");
+   bar.setTextColor(0xFFFFFFFF); bar.setTextSize(26f);
+   bar.setGravity(Gravity.CENTER);
+   android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
+   g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+   g.setColor(0xFF2B2B2B); g.setStroke(3,0xFFFFFFFF); bar.setBackground(g);
+   box.addView(bar,new FrameLayout.LayoutParams(-1,-1));
 
    int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                                      :WindowManager.LayoutParams.TYPE_PHONE;
    // Sichtbarkeit entscheidet ueber die Drosselung, nicht die Groesse - das
    // Fenster darf also klein sein, nur nicht unsichtbar oder null.
-   final int WIN_W=140, WIN_H=250;
-   float scale=Math.min((float)WIN_W/LAY_W,(float)(WIN_H-18)/LAY_H);
+   final int WIN_W=150, WIN_H=150;
+   float scale=Math.min((float)WIN_W/LAY_W,(float)WIN_H/LAY_H);
    web.setScaleX(scale); web.setScaleY(scale);
    final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WIN_W,WIN_H,type,
      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.OPAQUE);
@@ -392,7 +394,11 @@ public final class OdinFloat {
 
  // Gibt die WebView an die Activity zurueck, ohne sie neu zu laden.
  public static synchronized WebView hide(){
-  WebView w=held; restoreInternal(); return w;
+  WebView w=held;
+  // Ohne das Zuruecksetzen bleibt die Seite nach dem Maximieren winzig in der
+  // linken oberen Ecke stehen.
+  if(w!=null){ w.setScaleX(1f); w.setScaleY(1f); w.setPivotX(0f); w.setPivotY(0f); }
+  restoreInternal(); return w;
  }
  private static void restoreInternal(){
   try{ if(held!=null&&held.getParent() instanceof ViewGroup)
@@ -427,7 +433,7 @@ public final class OdinBubble {
   final Context app=ctx.getApplicationContext();
   if(view!=null||!allowed(app))return;
   wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
-  TextView b=new TextView(app); b.setText("O"); b.setTextColor(Color.WHITE);
+  TextView b=new TextView(app); b.setText("⚔"); b.setTextColor(Color.WHITE);
   b.setTextSize(22f); b.setGravity(Gravity.CENTER);
   GradientDrawable g=new GradientDrawable(); g.setShape(GradientDrawable.OVAL);
   g.setColor(0xFF2B2B2B); g.setStroke(3,0xFFFFFFFF); b.setBackground(g);
@@ -553,7 +559,7 @@ public class GameWebViewActivity extends Activity {
    // JS-Zeitgeber ungedrosselt - ein blosses moveTaskToBack() macht sie
    // unsichtbar und Chromium taktet sie auf etwa einmal pro Minute herunter.
    if(OdinFloat.show(this,webView,this::restoreFromFloat)){
-    setStatus("schwebt - Zeitgeber laufen normal");
+    setStatus("läuft im Hintergrund (Symbol antippen)");
     moveTaskToBack(true);
    }else{
     OdinBubble.setReturnTarget(GameWebViewActivity.class);
@@ -644,7 +650,12 @@ public class GameWebViewActivity extends Activity {
    try{
     if(w.getParent() instanceof android.view.ViewGroup)
      ((android.view.ViewGroup)w.getParent()).removeView(w);
+    // Vollbild wiederherstellen: Skalierung und Layoutgroesse zuruecksetzen,
+    // sonst haengt die Seite verkleinert in der Ecke.
+    w.setScaleX(1f); w.setScaleY(1f);
+    w.setLayoutParams(new LinearLayout.LayoutParams(-1,0,1f));
     rootLayout.addView(w,1,new LinearLayout.LayoutParams(-1,0,1f));
+    w.requestLayout(); w.invalidate();
     Intent i=new Intent(this,GameWebViewActivity.class);
     i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT); startActivity(i);
     setStatus("zurueck im Vordergrund");
