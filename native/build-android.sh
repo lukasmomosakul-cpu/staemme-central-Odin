@@ -145,7 +145,11 @@ public class MainActivity extends Activity {
    runOnUiThread(()->openGameActivity(accountId==null?"":accountId,username==null?"":username,accountsJson));
   }
   @JavascriptInterface public void updateApk(){
-   downloadAndInstall("https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk");
+   // Bewusst zusammengesetzt: der Build-Workflow ersetzt die zusammenhaengende
+   // Zeichenkette durch die gerade gebaute Version, wodurch das Update stets
+   // dieselbe Fassung nachgeladen haette.
+   String base="https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/";
+   downloadAndInstall(base+"latest"+"/download/"+"odin-latest"+".apk");
   }
  }
 }
@@ -245,7 +249,8 @@ public class GameWebViewActivity extends Activity {
  // Zwischenspeicher fuer die vom Bootstrap angeforderten Skripte.
  private volatile String godbotSrc;
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
- void setStatus(String msg){runOnUiThread(()->{if(statusView!=null)statusView.setText("GodBot: "+msg);});android.util.Log.i("ODIN_GODBOT",msg);}
+ String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
+ void setStatus(String msg){runOnUiThread(()->{if(statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+msg);});android.util.Log.i("ODIN_GODBOT",msg);}
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
@@ -269,7 +274,7 @@ public class GameWebViewActivity extends Activity {
   TextView t=new TextView(this); t.setText(activeName.isEmpty()?"Die Stämme":activeName);
   t.setTextColor(0xFFFFFFFF); t.setTextSize(16f); t.setSingleLine(true);
   col.addView(t);
-  statusView=new TextView(this); statusView.setText("GodBot: wartet"); statusView.setTextColor(0xFFBBBBBB);
+  statusView=new TextView(this); statusView.setText("APK "+apkVersion()+" · GodBot: wartet"); statusView.setTextColor(0xFFBBBBBB);
   statusView.setTextSize(11f); statusView.setSingleLine(true); col.addView(statusView);
   bar.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
   Button back=new Button(this); back.setText("Odin"); back.setTextSize(12f); back.setAllCaps(false);
