@@ -8,6 +8,15 @@ set -euo pipefail
 # aus der Seite heraus laedt. Nebeneffekt: das Gist wirkt immer sofort.
 TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
 test -n "$TARGET" || { echo 'GodBot loader: GameWebViewActivity.java not found'; exit 1; }
+# Der Bootstrap laedt GodBot zur Laufzeit per fetch(). Die Datei wird hier
+# trotzdem geholt: sie ist die Build-Zeit-Kontrolle, dass die Gist-URL
+# erreichbar ist, und der Workflow prueft ihre Existenz (test -s ...).
+mkdir -p app/src/main/assets
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
+  'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js' \
+  -o app/src/main/assets/godbot.user.js
+test -s app/src/main/assets/godbot.user.js
+rm -f app/src/main/assets/odin-test.user.js
 VERSION=$(tr -d '[:space:]' < ../VERSION)
 python3 - "$TARGET" "$VERSION" <<'PY'
 from pathlib import Path
