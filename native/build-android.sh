@@ -51,10 +51,16 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-sdk android:minSdkVersion="26" />
     <application android:theme="@style/AppTheme" android:label="Odin" android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
         <activity android:name=".GameWebViewActivity" android:exported="false" />
+        <service android:name=".OdinService" android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <provider android:name="androidx.core.content.FileProvider"
             android:authorities="de.teamzentrale.odin.fileprovider"
             android:exported="false" android:grantUriPermissions="true">
@@ -73,7 +79,7 @@ cat > "$APP/src/main/res/values/styles.xml" <<'EOF'
 EOF
 cat > "$JAVA_DIR/MainActivity.java" <<'EOF'
 package de.teamzentrale.odin;
-import android.annotation.SuppressLint; import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.util.Log; import android.webkit.JavascriptInterface; import java.net.HttpURLConnection;
+import android.annotation.SuppressLint; import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.util.Log; import android.webkit.JavascriptInterface; import java.net.HttpURLConnection; import android.os.Build;
 public class MainActivity extends Activity {
  private WebView webView;
  private static final String ODIN_URL="https://staemme-central-odin.vercel.app/";
@@ -152,6 +158,16 @@ public class MainActivity extends Activity {
   // werden koennen.
   @JavascriptInterface public void setSupabaseSession(String url,String anonKey,String accessToken,String teamId){
    SUPA_URL=url; SUPA_KEY=anonKey; SUPA_TOKEN=accessToken; SUPA_TEAM=teamId;
+   OdinService.url=url; OdinService.key=anonKey; OdinService.token=accessToken;
+   OdinService.team=teamId; OdinService.device=android.os.Build.MODEL+"-"+
+     android.provider.Settings.Secure.getString(getContentResolver(),
+       android.provider.Settings.Secure.ANDROID_ID);
+   runOnUiThread(()->{try{
+    if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+        !=android.content.pm.PackageManager.PERMISSION_GRANTED)
+     requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},77);
+    startForegroundService(new Intent(MainActivity.this,OdinService.class));
+   }catch(Exception e){Log.e("ODIN","service",e);}});
   }
   @JavascriptInterface public void updateApk(){
    // Bewusst zusammengesetzt: der Build-Workflow ersetzt die zusammenhaengende
@@ -187,6 +203,90 @@ public final class Fullscreen {
       |View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
    }
   }catch(Exception ignored){}
+ }
+}
+EOF
+cat > "$JAVA_DIR/OdinService.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.app.*; import android.content.Context; import android.content.Intent;
+import android.os.Build; import android.os.IBinder; import android.os.PowerManager;
+import java.io.BufferedReader; import java.io.InputStreamReader; import java.net.HttpURLConnection; import java.net.URL;
+import org.json.*;
+// Haelt den Prozess am Leben und holt Benachrichtigungen anderer Geraete.
+// Hinweis zur Grenze: der Dienst verhindert das Abraeumen des Prozesses und
+// haelt die CPU wach. Android drosselt JS-Zeitgeber einer NICHT SICHTBAREN
+// WebView trotzdem - vollstaendiger Hintergrundlauf ist damit nicht garantiert.
+public class OdinService extends Service {
+ public static final String CH_STATUS="odin_status", CH_ALERT="odin_alert";
+ static String url="",key="",token="",team="",device="";
+ private PowerManager.WakeLock lock;
+ private Thread poller; private volatile boolean running;
+ private String lastSeen="";
+ @Override public IBinder onBind(Intent i){ return null; }
+ @Override public void onCreate(){
+  super.onCreate(); channels();
+  Notification n=new Notification.Builder(this,CH_STATUS)
+    .setContentTitle("Odin läuft").setContentText("Benachrichtigungen aktiv")
+    .setSmallIcon(android.R.drawable.ic_dialog_info).setOngoing(true).build();
+  if(Build.VERSION.SDK_INT>=29)
+    startForeground(1,n,android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+  else startForeground(1,n);
+  try{ PowerManager pm=(PowerManager)getSystemService(Context.POWER_SERVICE);
+   lock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"odin:bot"); lock.acquire(); }catch(Exception ignored){}
+  running=true; poller=new Thread(this::loop); poller.start();
+ }
+ private void channels(){
+  NotificationManager nm=getSystemService(NotificationManager.class);
+  nm.createNotificationChannel(new NotificationChannel(CH_STATUS,"Odin Status",NotificationManager.IMPORTANCE_LOW));
+  NotificationChannel a=new NotificationChannel(CH_ALERT,"Odin Meldungen",NotificationManager.IMPORTANCE_HIGH);
+  a.enableVibration(true); nm.createNotificationChannel(a);
+ }
+ private void loop(){
+  while(running){
+   try{ poll(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","poll",e); }
+   try{ Thread.sleep(30000); }catch(InterruptedException e){ return; }
+  }
+ }
+ private void poll() throws Exception {
+  if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
+  String since=lastSeen.isEmpty()
+    ? new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss",java.util.Locale.US)
+        .format(new java.util.Date(System.currentTimeMillis()-60000))
+    : lastSeen;
+  String q=url+"/rest/v1/notifications?select=*&team_id=eq."+team
+    +"&created_at=gt."+java.net.URLEncoder.encode(since,"UTF-8")
+    +"&order=created_at.asc&limit=20";
+  HttpURLConnection c=(HttpURLConnection)new URL(q).openConnection();
+  c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
+  c.setConnectTimeout(15000); c.setReadTimeout(20000);
+  if(c.getResponseCode()>=400)return;
+  BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
+  StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
+  JSONArray arr=new JSONArray(b.toString());
+  for(int i=0;i<arr.length();i++){
+   JSONObject o=arr.getJSONObject(i);
+   lastSeen=o.optString("created_at",lastSeen);
+   // Eigene Meldungen nicht erneut anzeigen.
+   if(device.equals(o.optString("source","")))continue;
+   show(o.optString("title","Odin"),o.optString("body",""),o.optString("level","info"));
+  }
+ }
+ private void show(String title,String body,String level){
+  NotificationManager nm=getSystemService(NotificationManager.class);
+  Intent open=new Intent(this,MainActivity.class);
+  open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+  PendingIntent pi=PendingIntent.getActivity(this,0,open,
+    PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+  Notification n=new Notification.Builder(this,"alert".equals(level)||"warn".equals(level)?CH_ALERT:CH_STATUS)
+    .setContentTitle(title).setContentText(body).setContentIntent(pi)
+    .setStyle(new Notification.BigTextStyle().bigText(body))
+    .setSmallIcon(android.R.drawable.ic_dialog_info).setAutoCancel(true).build();
+  nm.notify((int)(System.currentTimeMillis()%100000),n);
+ }
+ @Override public void onDestroy(){
+  running=false; if(poller!=null)poller.interrupt();
+  try{ if(lock!=null&&lock.isHeld())lock.release(); }catch(Exception ignored){}
+  super.onDestroy();
  }
 }
 EOF
@@ -396,6 +496,19 @@ public class GameWebViewActivity extends Activity {
     setStatus("Einstellungen geladen ("+out.length()+")");
     return out.toString();
    }catch(Exception e){ setStatus("Abgleich lesen fehlgeschlagen: "+e.getMessage()); return "{}"; }
+  }
+  // GodBot kann Meldungen an alle Geraete des Teams schicken - ohne Discord.
+  @JavascriptInterface public boolean notify(String title,String body,String level){
+   try{
+    if(!syncReady())return false;
+    org.json.JSONObject row=new org.json.JSONObject();
+    row.put("team_id",supaTeam); row.put("account_id",gameAccountId);
+    row.put("title",title==null?"Odin":title); row.put("body",body==null?"":body);
+    row.put("level",level==null?"info":level); row.put("source",OdinService.device);
+    supaRequest("POST","notifications",new org.json.JSONArray().put(row).toString());
+    setStatus("Meldung gesendet: "+title);
+    return true;
+   }catch(Exception e){ setStatus("Meldung fehlgeschlagen: "+e.getMessage()); return false; }
   }
   @JavascriptInterface public boolean settingsSave(String pairsJson){
    try{

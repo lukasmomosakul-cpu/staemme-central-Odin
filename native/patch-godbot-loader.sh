@@ -78,6 +78,49 @@ js = r"""
    }
   };
  }
+ // --- Benachrichtigungen ---------------------------------------------------
+ // GodBot verschickt ueber sendDiscordNotification()/postDiscordAlert() an eine
+ // Webhook-URL aus tw_settings. Die Funktionen liegen in der IIFE und sind von
+ // aussen nicht erreichbar - deshalb wird die ausgehende Anfrage abgefangen und
+ // zusaetzlich als Odin-Meldung an alle Geraete verteilt. Discord selbst bleibt
+ // unberuehrt, wer es weiter nutzen will, kann es eingetragen lassen.
+ window.odinNotify=function(title,body,level){
+  try{ return OdinNative.notify(String(title||'Odin'),String(body||''),String(level||'info')); }
+  catch(e){ return false; }
+ };
+ (function(){
+  var isHook=/discord(app)?\.com\/api\/webhooks/i;
+  function mirror(body){
+   try{
+    var d=typeof body==='string'?JSON.parse(body):body;
+    var e=d&&d.embeds&&d.embeds[0];
+    var title=(e&&e.title)||d.content||'GodBot';
+    var desc=(e&&e.description)||'';
+    if(e&&e.fields)for(var i=0;i<e.fields.length;i++)
+     desc+=(desc?' · ':'')+e.fields[i].name+': '+e.fields[i].value;
+    // Discord-Farben: Rot 0xE74C3C, Orange 0xE67E22, Gruen 0x2ECC71, Blau 0x3498DB.
+    // Ein Schwellwert auf die Zahl trifft daneben - deshalb den Rotanteil pruefen.
+    var lvl='info';
+    if(e&&typeof e.color==='number'){
+     var cr=(e.color>>16)&255, cg=(e.color>>8)&255;
+     if(cr>150&&cg<170)lvl='warn';
+    }
+    window.odinNotify(title,desc,lvl);
+   }catch(err){}
+  }
+  var of=window.fetch;
+  if(of)window.fetch=function(u,o){
+   try{ if(isHook.test(String(u&&u.url?u.url:u))&&o&&o.body)mirror(o.body); }catch(e){}
+   return of.apply(this,arguments);
+  };
+  var ox=XMLHttpRequest.prototype.open, os=XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open=function(m,u){ this.__odinUrl=String(u||''); return ox.apply(this,arguments); };
+  XMLHttpRequest.prototype.send=function(b){
+   try{ if(isHook.test(this.__odinUrl||'')&&b)mirror(b); }catch(e){}
+   return os.apply(this,arguments);
+  };
+ })();
+ // --------------------------------------------------------------------------
  // --- Einstellungsabgleich -------------------------------------------------
  // GodBot legt seine Einstellungen in localStorage ab. Wird der vor dem Laden
  // aus Supabase befuellt und werden Schreibzugriffe zurueckgespiegelt, ergibt
