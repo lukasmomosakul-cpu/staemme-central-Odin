@@ -68,7 +68,7 @@ cat > "$APP/src/main/res/xml/file_paths.xml" <<'EOF'
 <paths><cache-path name="apk" path="." /><external-cache-path name="apk_ext" path="." /></paths>
 EOF
 cat > "$APP/src/main/res/values/styles.xml" <<'EOF'
-<resources><style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar.Fullscreen"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#333333</item><item name="android:windowFullscreen">true</item><item name="android:windowContentOverlay">@null</item><item name="android:navigationBarColor">#000000</item><item name="android:statusBarColor">#000000</item></style></resources>
+<resources><style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#333333</item><item name="android:windowFullscreen">true</item><item name="android:navigationBarColor">#ffffff</item><item name="android:statusBarColor">#ffffff</item><item name="android:windowLightStatusBar">true</item></style></resources>
 EOF
 cat > "$JAVA_DIR/MainActivity.java" <<'EOF'
 package de.teamzentrale.odin;
