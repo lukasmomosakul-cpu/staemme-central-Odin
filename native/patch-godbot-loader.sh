@@ -78,6 +78,45 @@ js = r"""
    }
   };
  }
+ // --- Einstellungsabgleich -------------------------------------------------
+ // GodBot legt seine Einstellungen in localStorage ab. Wird der vor dem Laden
+ // aus Supabase befuellt und werden Schreibzugriffe zurueckgespiegelt, ergibt
+ // sich der Geraeteabgleich, ohne GodBot selbst anzufassen. Der Ingame-
+ // Notizblock wird damit als Transportweg ueberfluessig.
+ var SYNC_PREFIX=/^(tw_|godbot_|gb_)/;
+ try{
+  if(OdinNative.syncReady()){
+   var loaded=JSON.parse(OdinNative.settingsLoad()||'{}');
+   var applied=0;
+   for(var k in loaded){ if(!SYNC_PREFIX.test(k))continue;
+    try{ if(localStorage.getItem(k)!==loaded[k]){localStorage.setItem(k,loaded[k]);applied++;} }catch(e){}
+   }
+   OdinNative.status('Abgleich: '+applied+' uebernommen');
+  }else{
+   OdinNative.status('Abgleich inaktiv (keine Sitzung)');
+  }
+ }catch(e){ try{OdinNative.status('Abgleich-Fehler: '+e.message)}catch(_){} }
+
+ // Schreibzugriffe sammeln und gebuendelt zurueckschreiben, damit nicht jede
+ // Einzelaenderung eine eigene Anfrage ausloest.
+ (function(){
+  var pending={}, timer=null;
+  var origSet=localStorage.setItem.bind(localStorage);
+  function flush(){
+   timer=null;
+   var batch=pending; pending={};
+   if(!Object.keys(batch).length)return;
+   try{ if(OdinNative.syncReady())OdinNative.settingsSave(JSON.stringify(batch)); }catch(e){}
+  }
+  localStorage.setItem=function(k,v){
+   origSet(k,v);
+   try{ if(SYNC_PREFIX.test(k)){ pending[k]=String(v);
+    if(timer)clearTimeout(timer); timer=setTimeout(flush,4000); } }catch(e){}
+  };
+  window.addEventListener('pagehide',flush);
+  window.__odinSyncFlush=flush;
+ })();
+ // --------------------------------------------------------------------------
  var n=__DEPCOUNT__, urls=[];
  for(var i=0;i<n;i++)urls.push('/__odin_req_'+i+'.js');
  urls.push('/__odin_godbot.js');

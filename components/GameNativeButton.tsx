@@ -1,23 +1,25 @@
 'use client';
 
 import { Browser } from '@capacitor/browser';
+import { supabase } from '../lib/supabase';
 
 declare global {
   interface Window {
     Android?: {
       openGame?: (accountId: string, username?: string, password?: string, scriptsJson?: string) => void;
       openGameWithAccounts?: (accountId: string, username?: string, accountsJson?: string) => void;
+      setSupabaseSession?: (url: string, anonKey: string, accessToken: string, teamId: string) => void;
     };
   }
 }
 
-type Props = { accountId: string; username?: string; accounts?: { name: string }[] };
+type Props = { accountId: string; username?: string; accounts?: { name: string }[]; teamId?: string | null };
 type ScriptEntry = { id:string; name:string; source:string; enabled:boolean; type:'Tampermonkey'|'Gist' };
 
 const GAME_URL = 'https://www.die-staemme.de/';
 const SCRIPTS_KEY = 'odin-script-library';
 
-export default function GameNativeButton({ accountId, username = '', accounts = [] }: Props) {
+export default function GameNativeButton({ accountId, username = '', accounts = [], teamId = null }: Props) {
   const openGame = async () => {
     localStorage.setItem('odin-selected-game-account', accountId);
 
@@ -36,6 +38,25 @@ export default function GameNativeButton({ accountId, username = '', accounts = 
 
     // Fussleiste im Spiel zeigt alle Accounts des Teams.
     const accountsJson = JSON.stringify(accounts.map((a) => ({ name: a.name })));
+
+    // Die Spielansicht hat keine eigene Supabase-Sitzung. Zugangstoken und Team
+    // werden hier uebergeben, damit die GodBot-Einstellungen abgeglichen werden.
+    try {
+      if (window.Android?.setSupabaseSession && supabase && teamId) {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token ?? '';
+        if (token) {
+          window.Android.setSupabaseSession(
+            process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '',
+            token,
+            teamId,
+          );
+        }
+      }
+    } catch {
+      // Ohne Sitzung laeuft das Spiel weiter, nur ohne Einstellungsabgleich.
+    }
 
     if (window.Android?.openGameWithAccounts) {
       window.Android.openGameWithAccounts(accountId, username, accountsJson);

@@ -77,6 +77,7 @@ import android.annotation.SuppressLint; import android.app.Activity; import andr
 public class MainActivity extends Activity {
  private WebView webView;
  private static final String ODIN_URL="https://staemme-central-odin.vercel.app/";
+ static String SUPA_URL="",SUPA_KEY="",SUPA_TOKEN="",SUPA_TEAM="";
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){
   super.onCreate(b); Fullscreen.apply(this);
   FrameLayout root=new FrameLayout(this); webView=new WebView(this);
@@ -106,6 +107,8 @@ public class MainActivity extends Activity {
   Intent i=new Intent(this,GameWebViewActivity.class);
   i.putExtra("accountId",accountId); i.putExtra("username",username);
   i.putExtra("accountsJson",accountsJson==null?"[]":accountsJson);
+  i.putExtra("supaUrl",SUPA_URL); i.putExtra("supaKey",SUPA_KEY);
+  i.putExtra("supaToken",SUPA_TOKEN); i.putExtra("supaTeam",SUPA_TEAM);
   startActivity(i);
  }
  // Laedt die aktuelle APK und startet den System-Installer.
@@ -143,6 +146,12 @@ public class MainActivity extends Activity {
   }
   @JavascriptInterface public void openGameWithAccounts(String accountId,String username,String accountsJson){
    runOnUiThread(()->openGameActivity(accountId==null?"":accountId,username==null?"":username,accountsJson));
+  }
+  // Die Spielansicht hat keine eigene Supabase-Sitzung. Der Webcode reicht
+  // Zugangstoken und Team hier durch, damit die Einstellungen abgeglichen
+  // werden koennen.
+  @JavascriptInterface public void setSupabaseSession(String url,String anonKey,String accessToken,String teamId){
+   SUPA_URL=url; SUPA_KEY=anonKey; SUPA_TOKEN=accessToken; SUPA_TEAM=teamId;
   }
   @JavascriptInterface public void updateApk(){
    // Bewusst zusammengesetzt: der Build-Workflow ersetzt die zusammenhaengende
@@ -249,6 +258,7 @@ public class GameWebViewActivity extends Activity {
  // Zwischenspeicher fuer die vom Bootstrap angeforderten Skripte.
  private volatile String godbotSrc;
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
+ private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
  // Vollstaendiges Protokoll: die Statuszeile ist einzeilig und schneidet lange
  // Fehlermeldungen ab, deshalb wird alles mitgeschrieben und ist kopierbar.
@@ -275,6 +285,9 @@ public class GameWebViewActivity extends Activity {
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
+  supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
+  supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
+  gameAccountId=nz(getIntent().getStringExtra("accountId"));
   LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(0xFFFFFFFF);
   root.addView(buildHeader(activeName),new LinearLayout.LayoutParams(-1,-2));
   webView=new WebView(this);
@@ -338,6 +351,29 @@ public class GameWebViewActivity extends Activity {
   }catch(Exception e){Log.e("ODIN","footer",e);}
   sc.addView(row); return sc;
  }
+ private static String nz(String x){ return x==null?"":x; }
+ // Einstellungsabgleich ueber Supabase REST. Laeuft nativ, damit weder CORS
+ // noch die CSP der Spielseite dazwischenfunken.
+ private String supaRequest(String method,String path,String body) throws Exception {
+  java.net.HttpURLConnection c=(java.net.HttpURLConnection)new java.net.URL(supaUrl+"/rest/v1/"+path).openConnection();
+  c.setRequestMethod(method); c.setConnectTimeout(15000); c.setReadTimeout(30000);
+  c.setRequestProperty("apikey",supaKey);
+  c.setRequestProperty("Authorization","Bearer "+supaToken);
+  c.setRequestProperty("Content-Type","application/json");
+  c.setRequestProperty("Accept","application/json");
+  if(body!=null){
+   c.setRequestProperty("Prefer","resolution=merge-duplicates,return=minimal");
+   c.setDoOutput(true);
+   java.io.OutputStream os=c.getOutputStream(); os.write(body.getBytes("UTF-8")); os.close();
+  }
+  int st=c.getResponseCode();
+  java.io.InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();
+  StringBuilder b=new StringBuilder();
+  if(in!=null){ BufferedReader r=new BufferedReader(new InputStreamReader(in,"UTF-8"));
+   String l; while((l=r.readLine())!=null)b.append(l); r.close(); }
+  if(st<200||st>=400) throw new java.io.IOException("HTTP "+st+" "+b);
+  return b.toString();
+ }
  private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
  private void loadEnabledScripts(WebView v){ }
  private void executeGodBotWhenReady(WebView v){ }
@@ -347,7 +383,36 @@ public class GameWebViewActivity extends Activity {
  @Override protected void onResume(){super.onResume();Fullscreen.apply(this);OdinBubble.hide();}
  @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
  private void minimizeToApp(){finish();}
- private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);} @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
+ private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);}
+  @JavascriptInterface public boolean syncReady(){ return !supaUrl.isEmpty()&&!supaToken.isEmpty()&&!gameAccountId.isEmpty(); }
+  @JavascriptInterface public String settingsLoad(){
+   try{
+    if(!syncReady())return "{}";
+    String q="godbot_settings?select=skey,value&account_id=eq."+java.net.URLEncoder.encode(gameAccountId,"UTF-8");
+    String json=supaRequest("GET",q,null);
+    org.json.JSONArray arr=new org.json.JSONArray(json);
+    org.json.JSONObject out=new org.json.JSONObject();
+    for(int i=0;i<arr.length();i++){org.json.JSONObject o=arr.getJSONObject(i);out.put(o.getString("skey"),o.getString("value"));}
+    setStatus("Einstellungen geladen ("+out.length()+")");
+    return out.toString();
+   }catch(Exception e){ setStatus("Abgleich lesen fehlgeschlagen: "+e.getMessage()); return "{}"; }
+  }
+  @JavascriptInterface public boolean settingsSave(String pairsJson){
+   try{
+    if(!syncReady())return false;
+    org.json.JSONObject in=new org.json.JSONObject(pairsJson);
+    org.json.JSONArray rows=new org.json.JSONArray();
+    java.util.Iterator<String> it=in.keys();
+    while(it.hasNext()){ String k=it.next();
+     org.json.JSONObject r=new org.json.JSONObject();
+     r.put("team_id",supaTeam); r.put("account_id",gameAccountId);
+     r.put("skey",k); r.put("value",in.getString(k)); rows.put(r); }
+    if(rows.length()==0)return true;
+    supaRequest("POST","godbot_settings?on_conflict=account_id,skey",rows.toString());
+    setStatus("Einstellungen gesichert ("+rows.length()+")");
+    return true;
+   }catch(Exception e){ setStatus("Abgleich schreiben fehlgeschlagen: "+e.getMessage()); return false; }
+  } @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
  private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
 }
 EOF
