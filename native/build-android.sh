@@ -780,9 +780,37 @@ public class GameWebViewActivity extends Activity {
  private void weckerModus(){
   try{
    if(!getIntent().getBooleanExtra("fromAlarm",false))return;
+   android.view.Window w=getWindow();
    if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(true); setTurnScreenOn(true); }
-   getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+   else w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                  |android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+   w.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+   // Der Bildschirm MUSS an sein, sonst rendert Chromium die WebView nicht
+   // und die Zeitgeber bleiben gedrosselt. Er darf aber dunkel sein:
+   // Helligkeit 0 ist die niedrigste Stufe, nicht "aus".
+   android.view.WindowManager.LayoutParams lp=w.getAttributes();
+   lp.screenBrightness=0f; w.setAttributes(lp);
+   dunkelWegenWecker=true;
+   // Sperrbildschirm beiseite schieben, sonst liegt er ueber der WebView.
+   try{ android.app.KeyguardManager km=getSystemService(android.app.KeyguardManager.class);
+        if(km!=null&&Build.VERSION.SDK_INT>=26)km.requestDismissKeyguard(this,null); }catch(Exception ignored){}
+   setStatus("Wecker: Vordergrund, Anzeige dunkel");
   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","weckerModus",e); }
+ }
+ private boolean dunkelWegenWecker=false;
+ // Sobald du das Geraet anfasst, wieder normale Helligkeit.
+ @Override public void onUserInteraction(){
+  super.onUserInteraction();
+  if(!dunkelWegenWecker)return;
+  dunkelWegenWecker=false;
+  try{
+   android.view.Window w=getWindow();
+   android.view.WindowManager.LayoutParams lp=w.getAttributes();
+   lp.screenBrightness=android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+   w.setAttributes(lp);
+   w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+   setStatus("Anzeige normal");
+  }catch(Exception ignored){}
  }
  // Einstellungsabgleich ueber Supabase REST. Laeuft nativ, damit weder CORS
  // noch die CSP der Spielseite dazwischenfunken.
@@ -819,6 +847,9 @@ public class GameWebViewActivity extends Activity {
   supaUrl=nz(in.getStringExtra("supaUrl")); supaKey=nz(in.getStringExtra("supaKey"));
   supaToken=nz(in.getStringExtra("supaToken")); supaTeam=nz(in.getStringExtra("supaTeam"));
   String a=nz(in.getStringExtra("accountId")); if(!a.isEmpty())gameAccountId=a;
+  // Frueher lief der Weckermodus nur in onCreate. Existierte die Ansicht
+  // bereits, kam onNewIntent dran und der Bildschirm blieb aus.
+  weckerModus();
  }
  @Override protected void onResume(){super.onResume();Fullscreen.apply(this);OdinBubble.hide();restoreFromFloat();}
  @Override protected void onPause(){
