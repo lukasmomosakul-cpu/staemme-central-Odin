@@ -55,12 +55,17 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-sdk android:minSdkVersion="26" />
-    <application android:theme="@style/AppTheme" android:label="Odin" android:usesCleartextTraffic="true">
+    <application android:theme="@style/AppTheme" android:label="Odin" android:usesCleartextTraffic="true"
+        android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
         <activity android:name=".GameWebViewActivity" android:exported="false" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
+        <receiver android:name=".OdinAlarmReceiver" android:exported="false" />
         <service android:name=".OdinService" android:exported="false"
             android:foregroundServiceType="dataSync" />
         <provider android:name="androidx.core.content.FileProvider"
@@ -72,7 +77,42 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     </application>
 </manifest>
 EOF
-mkdir -p "$APP/src/main/res/xml"
+mkdir -p "$APP/src/main/res/xml" "$APP/src/main/res/drawable" "$APP/src/main/res/mipmap-anydpi-v26"
+cat > "$APP/src/main/res/drawable/ic_odin_fg.xml" <<'EOF'
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Zwei gekreuzte Schwerter: Klingen, Parierstangen, Knaeufe -->
+    <path android:strokeColor="#F2F2F2" android:strokeWidth="7"
+          android:strokeLineCap="round" android:pathData="M32,78 L74,36" />
+    <path android:strokeColor="#F2F2F2" android:strokeWidth="7"
+          android:strokeLineCap="round" android:pathData="M76,78 L34,36" />
+    <path android:strokeColor="#C8962A" android:strokeWidth="6"
+          android:strokeLineCap="round" android:pathData="M24,72 L40,88" />
+    <path android:strokeColor="#C8962A" android:strokeWidth="6"
+          android:strokeLineCap="round" android:pathData="M84,72 L68,88" />
+    <path android:strokeColor="#C8962A" android:strokeWidth="9"
+          android:strokeLineCap="round" android:pathData="M30,82 L29,83" />
+    <path android:strokeColor="#C8962A" android:strokeWidth="9"
+          android:strokeLineCap="round" android:pathData="M78,82 L79,83" />
+</vector>
+EOF
+cat > "$APP/src/main/res/drawable/ic_odin_bg.xml" <<'EOF'
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#2B2B2B" android:pathData="M0,0 H108 V108 H0 Z" />
+</vector>
+EOF
+for N in ic_launcher ic_launcher_round; do
+cat > "$APP/src/main/res/mipmap-anydpi-v26/$N.xml" <<'EOF'
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_odin_bg" />
+    <foreground android:drawable="@drawable/ic_odin_fg" />
+    <monochrome android:drawable="@drawable/ic_odin_fg" />
+</adaptive-icon>
+EOF
+done
 cat > "$APP/src/main/res/xml/file_paths.xml" <<'EOF'
 <paths><cache-path name="apk" path="." /><external-cache-path name="apk_ext" path="." /></paths>
 EOF
@@ -129,6 +169,7 @@ public class MainActivity extends Activity {
   i.putExtra("accountsJson",accountsJson==null?"[]":accountsJson);
   i.putExtra("supaUrl",SUPA_URL); i.putExtra("supaKey",SUPA_KEY);
   i.putExtra("supaToken",SUPA_TOKEN); i.putExtra("supaTeam",SUPA_TEAM);
+  OdinService.account=accountId;
   // Ohne dieses Flag entsteht bei jedem Klick eine NEUE Spielansicht: die
   // Sitzung startet von vorn und die Anmeldemaske erscheint wieder.
   i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
@@ -235,7 +276,7 @@ import org.json.*;
 // WebView trotzdem - vollstaendiger Hintergrundlauf ist damit nicht garantiert.
 public class OdinService extends Service {
  public static final String CH_STATUS="odin_status", CH_ALERT="odin_alert";
- static String url="",key="",token="",team="",device="";
+ static String url="",key="",token="",team="",device="",account="";
  private PowerManager.WakeLock lock;
  private Thread poller; private volatile boolean running;
  private String lastSeen="";
@@ -259,10 +300,30 @@ public class OdinService extends Service {
   a.enableVibration(true); nm.createNotificationChannel(a);
  }
  private void loop(){
+  int runde=0;
   while(running){
    try{ poll(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","poll",e); }
+   // Wecker alle 10 Runden (5 Minuten) neu setzen: Plaene aendern sich, und
+   // Android begrenzt die Zahl gleichzeitiger exakter Alarme.
+   if(runde%10==0){ try{ weckerNeuSetzen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","alarm",e); } }
+   runde++;
    try{ Thread.sleep(30000); }catch(InterruptedException e){ return; }
   }
+ }
+ private void weckerNeuSetzen() throws Exception {
+  if(url.isEmpty()||token.isEmpty()||account.isEmpty())return;
+  String q=url+"/rest/v1/godbot_settings?select=value&skey=eq.tw_tabben_plan&account_id=eq."
+    +java.net.URLEncoder.encode(account,"UTF-8");
+  HttpURLConnection c=(HttpURLConnection)new URL(q).openConnection();
+  c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
+  c.setConnectTimeout(15000); c.setReadTimeout(20000);
+  if(c.getResponseCode()>=400)return;
+  BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
+  StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
+  JSONArray arr=new JSONArray(b.toString());
+  if(arr.length()==0)return;
+  int n=OdinAlarm.planen(this,arr.getJSONObject(0).optString("value","{}"));
+  android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+n);
  }
  private void poll() throws Exception {
   if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
@@ -304,6 +365,98 @@ public class OdinService extends Service {
   running=false; if(poller!=null)poller.interrupt();
   try{ if(lock!=null&&lock.isHeld())lock.release(); }catch(Exception ignored){}
   super.onDestroy();
+ }
+}
+EOF
+cat > "$JAVA_DIR/OdinAlarm.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.app.AlarmManager; import android.app.PendingIntent;
+import android.content.Context; import android.content.Intent; import android.os.Build;
+import org.json.*;
+// Weckt zum Termin, auch bei gesperrtem Bildschirm.
+//
+// Grundlage sind die ohnehin abgeglichenen Rausstell-Plaene: in
+// tw_tabben_plan steht je Eintrag attacks[].attacks[].atMs, der
+// Einschlagszeitpunkt in Millisekunden. Geweckt wird VORLAUF_MS davor,
+// damit GodBot die Seite laden und handeln kann.
+public final class OdinAlarm {
+ private OdinAlarm(){}
+ public static final long VORLAUF_MS = 90_000L;   // 90 s vor Einschlag
+ private static final int MAX_WECKER = 12;        // Android begrenzt exakte Alarme
+ public static final String EXTRA_AT="odin_at", EXTRA_INFO="odin_info";
+
+ public static boolean exactAllowed(Context c){
+  try{
+   AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
+   return Build.VERSION.SDK_INT<31 || am.canScheduleExactAlarms();
+  }catch(Exception e){ return false; }
+ }
+
+ // Liefert die Anzahl gesetzter Wecker zurueck.
+ public static int planen(Context c, String tabbenPlanJson){
+  int gesetzt=0;
+  try{
+   AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
+   JSONObject root=new JSONObject(tabbenPlanJson);
+   JSONArray doerfer=root.optJSONArray("attacks"); if(doerfer==null)return 0;
+   java.util.TreeMap<Long,String> termine=new java.util.TreeMap<>();
+   long jetzt=System.currentTimeMillis();
+   for(int i=0;i<doerfer.length();i++){
+    JSONObject d=doerfer.optJSONObject(i); if(d==null)continue;
+    String coord=d.optString("coord","");
+    JSONArray list=d.optJSONArray("attacks"); if(list==null)continue;
+    for(int k=0;k<list.length();k++){
+     JSONObject a=list.optJSONObject(k); if(a==null)continue;
+     long at=a.optLong("atMs",0L); if(at<=0)continue;
+     long weck=at-VORLAUF_MS;
+     if(weck<=jetzt+5000L)continue;            // zu knapp oder vorbei
+     termine.put(weck, coord+" · "+a.optString("slowestUnit",""));
+    }
+   }
+   int id=9000;
+   for(java.util.Map.Entry<Long,String> e:termine.entrySet()){
+    if(gesetzt>=MAX_WECKER)break;
+    Intent i=new Intent(c,OdinAlarmReceiver.class);
+    i.putExtra(EXTRA_AT,e.getKey()+VORLAUF_MS); i.putExtra(EXTRA_INFO,e.getValue());
+    PendingIntent pi=PendingIntent.getBroadcast(c,id++,i,
+      PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+    try{
+     if(exactAllowed(c)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,e.getKey(),pi);
+     else am.set(AlarmManager.RTC_WAKEUP,e.getKey(),pi);
+     gesetzt++;
+    }catch(SecurityException se){
+     // Ohne Recht auf exakte Alarme lieber ungenau wecken als gar nicht.
+     am.set(AlarmManager.RTC_WAKEUP,e.getKey(),pi); gesetzt++;
+    }
+   }
+  }catch(Exception e){ android.util.Log.e("ODIN_ALARM","planen",e); }
+  return gesetzt;
+ }
+}
+EOF
+cat > "$JAVA_DIR/OdinAlarmReceiver.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.app.*; import android.content.BroadcastReceiver; import android.content.Context;
+import android.content.Intent;
+// Holt die App zum Termin nach vorne - wie ein Wecker, auch ueber dem
+// Sperrbildschirm. Erst dadurch wird die WebView sichtbar und die
+// Zeitgeber laufen wieder exakt.
+public class OdinAlarmReceiver extends BroadcastReceiver {
+ @Override public void onReceive(Context c, Intent in){
+  String info=in.getStringExtra(OdinAlarm.EXTRA_INFO); if(info==null)info="";
+  Intent open=new Intent(c,GameWebViewActivity.class);
+  open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+  open.putExtra("fromAlarm",true);
+  PendingIntent pi=PendingIntent.getActivity(c,4242,open,
+    PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+  Notification n=new Notification.Builder(c,OdinService.CH_ALERT)
+    .setContentTitle("Rausstellen fällig").setContentText(info)
+    .setSmallIcon(android.R.drawable.ic_dialog_info)
+    .setCategory(Notification.CATEGORY_ALARM)
+    .setFullScreenIntent(pi,true)     // oeffnet direkt, auch gesperrt
+    .setAutoCancel(true).build();
+  c.getSystemService(NotificationManager.class).notify((int)(System.currentTimeMillis()%90000),n);
+  try{ c.startActivity(open); }catch(Exception e){ android.util.Log.w("ODIN_ALARM","start",e); }
  }
 }
 EOF
@@ -473,7 +626,7 @@ public final class OdinBubble {
 EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
-import android.annotation.SuppressLint; import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
+import android.annotation.SuppressLint; import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
 public class GameWebViewActivity extends Activity {
  private WebView webView;
  private TextView statusView;
@@ -505,7 +658,7 @@ public class GameWebViewActivity extends Activity {
      android.widget.Toast.LENGTH_SHORT).show();
   }catch(Exception e){android.util.Log.e("ODIN_GODBOT","clipboard",e);}
  }
- @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
+ @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this); weckerModus();
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
@@ -593,6 +746,15 @@ public class GameWebViewActivity extends Activity {
   sc.addView(row); return sc;
  }
  private static String nz(String x){ return x==null?"":x; }
+ // Vom Wecker gestartet: ueber dem Sperrbildschirm anzeigen und den Schirm
+ // einschalten. Erst dadurch wird die WebView sichtbar und laeuft ungedrosselt.
+ private void weckerModus(){
+  try{
+   if(!getIntent().getBooleanExtra("fromAlarm",false))return;
+   if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(true); setTurnScreenOn(true); }
+   getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  }catch(Exception e){ android.util.Log.w("ODIN_ALARM","weckerModus",e); }
+ }
  // Einstellungsabgleich ueber Supabase REST. Laeuft nativ, damit weder CORS
  // noch die CSP der Spielseite dazwischenfunken.
  private String supaRequest(String method,String path,String body) throws Exception {
