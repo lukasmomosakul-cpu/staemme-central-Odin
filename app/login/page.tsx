@@ -10,32 +10,16 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  // Bestehende Sitzung wiederherstellen. Frueher wurde hierfuer das Passwort
+  // per Android-Bruecke im Klartext auf dem Geraet abgelegt - unnoetig, weil
+  // Supabase den Refresh-Token selbst persistiert.
   useEffect(() => {
     let cancelled = false;
-    async function restoreLogin() {
-      try {
-        const native = (window as any).Android;
-        if (!native?.getSavedAppLogin || !supabase) return;
-        const raw = native.getSavedAppLogin();
-        if (!raw) return;
-        const saved = JSON.parse(raw);
-        const savedEmail = saved?.email ? String(saved.email) : '';
-        const savedPassword = saved?.password ? String(saved.password) : '';
-        if (!savedEmail || !savedPassword || cancelled) return;
-        setEmail(savedEmail);
-        setPassword(savedPassword);
-        setBusy(true);
-        const { error } = await supabase.auth.signInWithPassword({ email: savedEmail, password: savedPassword });
-        if (!cancelled && error) {
-          native.clearSavedAppLogin?.();
-          setMessage('Gespeicherte Anmeldung ist nicht mehr gültig. Bitte erneut anmelden.');
-        } else if (!cancelled && !error) {
-          window.location.href = '/';
-        }
-      } catch {}
-      if (!cancelled) setBusy(false);
-    }
-    restoreLogin();
+    (async () => {
+      if (!supabase) return;
+      const { data } = await supabase.auth.getSession();
+      if (!cancelled && data.session) window.location.href = '/';
+    })();
     return () => { cancelled = true; };
   }, []);
 
@@ -60,7 +44,6 @@ export default function LoginPage() {
       if (error) {
         setMessage(error.message);
       } else {
-        try { (window as any).Android?.saveAppLogin?.(nextEmail, nextPassword); } catch {}
         window.location.href = '/';
       }
     } else {
