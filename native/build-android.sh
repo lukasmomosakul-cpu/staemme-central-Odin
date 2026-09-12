@@ -597,100 +597,98 @@ cat > "$JAVA_DIR/OdinFloat.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.content.Context; import android.graphics.PixelFormat; import android.os.Build;
 import android.provider.Settings; import android.view.*; import android.widget.*; import android.webkit.WebView;
-// Haengt die Spiel-WebView in ein schwebendes Fenster ueber anderen Apps.
+import java.util.*;
+// Schwebende Spielfenster - eines je Spielaccount, gleichzeitig moeglich.
 //
-// Der Punkt dabei: Chromium drosselt JS-Zeitgeber danach, ob die WebView
-// GERENDERT wird - nicht danach, ob die App den Fokus hat. Ein sichtbares
-// Overlay-Fenster zaehlt als gerendert, also laufen die Zeitgeber normal
-// weiter, waehrend das Geraet anderweitig benutzt wird.
+// Chromium drosselt JS-Zeitgeber danach, ob eine WebView GERENDERT wird. Jedes
+// Overlay ist ein eigenes sichtbares Fenster, also laufen mehrere Welten
+// parallel im vollen Takt. Die WebView behaelt ihre Layoutgroesse und wird nur
+// skaliert dargestellt, sonst baute die Spielseite auf Symbolbreite um und
+// GodBots Selektoren griffen auf ein anderes Layout zu.
 public final class OdinFloat {
  private OdinFloat(){}
- private static WindowManager wm; private static View frame; private static WebView held;
- private static ViewGroup origParent; private static int origIndex=-1;
- public static boolean active(){ return frame!=null; }
+ private static final int LAY_W=420, LAY_H=740, WIN=150;
+ private static class Fenster {
+  View rahmen; WebView web; WindowManager wm;
+ }
+ private static final Map<String,Fenster> offen=new LinkedHashMap<>();
+
  public static boolean allowed(Context c){ return Settings.canDrawOverlays(c); }
+ public static synchronized boolean active(String accountId){ return offen.containsKey(schluessel(accountId)); }
+ public static synchronized int anzahl(){ return offen.size(); }
+ private static String schluessel(String a){ return a==null||a.isEmpty()?"_":a; }
 
- public static synchronized boolean show(Context ctx, WebView web, Runnable onRestore){
+ public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore){
   final Context app=ctx.getApplicationContext();
-  if(frame!=null||web==null||!allowed(app))return false;
+  final String key=schluessel(accountId);
+  if(offen.containsKey(key)||web==null||!allowed(app))return false;
   try{
-   origParent=(ViewGroup)web.getParent();
-   origIndex=origParent==null?-1:origParent.indexOfChild(web);
-   if(origParent!=null)origParent.removeView(web);
-   held=web;
+   if(web.getParent() instanceof ViewGroup)((ViewGroup)web.getParent()).removeView(web);
 
-   // Die WebView behaelt ihre volle Layoutbreite und wird nur SKALIERT
-   // dargestellt. Wuerde stattdessen das Fenster die WebView verkleinern,
-   // baute die Spielseite auf wenige hundert Pixel Breite um und GodBots
-   // Selektoren griffen auf ein anderes Layout zu.
-   // Die WebView MUSS angehaengt und gerendert bleiben, sonst drosselt
-   // Chromium die Zeitgeber wieder. Sie laeuft deshalb hinter dem Icon
-   // weiter - stark verkleinert, aber sichtbar. Das Icon liegt deckend
-   // darueber, nach aussen ist nur es zu sehen.
-   final int LAY_W=420, LAY_H=740;
    FrameLayout box=new FrameLayout(app);
    FrameLayout.LayoutParams wlp=new FrameLayout.LayoutParams(LAY_W,LAY_H);
-   web.setLayoutParams(wlp);
-   web.setPivotX(0f); web.setPivotY(0f);
+   web.setLayoutParams(wlp); web.setPivotX(0f); web.setPivotY(0f);
+   float scale=Math.min((float)WIN/LAY_W,(float)WIN/LAY_H);
+   web.setScaleX(scale); web.setScaleY(scale);
    box.addView(web);
 
-   TextView bar=new TextView(app); bar.setText("⚔");
-   bar.setTextColor(0xFFFFFFFF); bar.setTextSize(26f);
-   bar.setGravity(Gravity.CENTER);
+   TextView symbol=new TextView(app); symbol.setText("⚔");
+   symbol.setTextColor(0xFFFFFFFF); symbol.setTextSize(24f);
+   symbol.setGravity(Gravity.CENTER);
    android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
    g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-   g.setColor(0xFF2B2B2B); g.setStroke(3,0xFFFFFFFF); bar.setBackground(g);
-   box.addView(bar,new FrameLayout.LayoutParams(-1,-1));
+   g.setColor(0xFF2B2B2B); g.setStroke(3,0xFFFFFFFF); symbol.setBackground(g);
+   box.addView(symbol,new FrameLayout.LayoutParams(-1,-1));
 
    int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                                      :WindowManager.LayoutParams.TYPE_PHONE;
-   // Sichtbarkeit entscheidet ueber die Drosselung, nicht die Groesse - das
-   // Fenster darf also klein sein, nur nicht unsichtbar oder null.
-   final int WIN_W=150, WIN_H=150;
-   float scale=Math.min((float)WIN_W/LAY_W,(float)WIN_H/LAY_H);
-   web.setScaleX(scale); web.setScaleY(scale);
-   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WIN_W,WIN_H,type,
+   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WIN,WIN,type,
      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.OPAQUE);
-   lp.gravity=Gravity.TOP|Gravity.START; lp.x=16; lp.y=180;
-   wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
+   lp.gravity=Gravity.TOP|Gravity.START; lp.x=16;
+   // Versetzt stapeln, damit sich mehrere Symbole nicht ueberdecken.
+   lp.y=180+offen.size()*(WIN+24);
 
-   bar.setOnTouchListener(new View.OnTouchListener(){
-    float dx,dy,sx,sy; boolean moved;
+   final WindowManager wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
+   final Fenster f=new Fenster(); f.web=web; f.wm=wm;
+
+   symbol.setOnTouchListener(new View.OnTouchListener(){
+    float dx,dy,sx,sy; boolean bewegt;
     @Override public boolean onTouch(View v,MotionEvent e){
      switch(e.getAction()){
       case MotionEvent.ACTION_DOWN:
-       dx=lp.x-e.getRawX(); dy=lp.y-e.getRawY(); sx=e.getRawX(); sy=e.getRawY(); moved=false; return true;
+       dx=lp.x-e.getRawX(); dy=lp.y-e.getRawY(); sx=e.getRawX(); sy=e.getRawY(); bewegt=false; return true;
       case MotionEvent.ACTION_MOVE:
        lp.x=(int)(e.getRawX()+dx); lp.y=(int)(e.getRawY()+dy);
-       if(Math.abs(e.getRawX()-sx)>10||Math.abs(e.getRawY()-sy)>10)moved=true;
-       try{wm.updateViewLayout(frame,lp);}catch(Exception ig){} return true;
+       if(Math.abs(e.getRawX()-sx)>10||Math.abs(e.getRawY()-sy)>10)bewegt=true;
+       try{wm.updateViewLayout(f.rahmen,lp);}catch(Exception ig){} return true;
       case MotionEvent.ACTION_UP:
-       if(!moved&&onRestore!=null)onRestore.run();
+       if(!bewegt&&onRestore!=null)onRestore.run();
        return true;
      }
      return false;
     }
    });
-   // Kein eigener Knopf mehr: Tippen auf die Leiste maximiert.
 
-   wm.addView(box,lp); frame=box;
+   wm.addView(box,lp); f.rahmen=box; offen.put(key,f);
    return true;
-  }catch(Exception e){ android.util.Log.e("ODIN_FLOAT","show",e); restoreInternal(); return false; }
+  }catch(Exception e){ android.util.Log.e("ODIN_FLOAT","show",e); entfernen(key); return false; }
  }
 
- // Gibt die WebView an die Activity zurueck, ohne sie neu zu laden.
- public static synchronized WebView hide(){
-  WebView w=held;
-  // Ohne das Zuruecksetzen bleibt die Seite nach dem Maximieren winzig in der
-  // linken oberen Ecke stehen.
+ // Gibt die WebView zurueck und setzt die Darstellung zurueck. Ohne das haengt
+ // die Seite nach dem Maximieren verkleinert in der Ecke.
+ public static synchronized WebView hide(String accountId){
+  Fenster f=offen.get(schluessel(accountId));
+  if(f==null)return null;
+  WebView w=f.web;
   if(w!=null){ w.setScaleX(1f); w.setScaleY(1f); w.setPivotX(0f); w.setPivotY(0f); }
-  restoreInternal(); return w;
+  entfernen(schluessel(accountId));
+  return w;
  }
- private static void restoreInternal(){
-  try{ if(held!=null&&held.getParent() instanceof ViewGroup)
-        ((ViewGroup)held.getParent()).removeView(held); }catch(Exception ignored){}
-  try{ if(frame!=null&&wm!=null)wm.removeView(frame); }catch(Exception ignored){}
-  frame=null; origParent=null; origIndex=-1;
+ private static void entfernen(String key){
+  Fenster f=offen.remove(key); if(f==null)return;
+  try{ if(f.web!=null&&f.web.getParent() instanceof ViewGroup)
+        ((ViewGroup)f.web.getParent()).removeView(f.web); }catch(Exception ignored){}
+  try{ if(f.rahmen!=null&&f.wm!=null)f.wm.removeView(f.rahmen); }catch(Exception ignored){}
  }
 }
 EOF
@@ -866,8 +864,8 @@ public class GameWebViewActivity extends Activity {
    // Die WebView wandert in ein sichtbares Overlay. Nur so bleiben die
    // JS-Zeitgeber ungedrosselt - ein blosses moveTaskToBack() macht sie
    // unsichtbar und Chromium taktet sie auf etwa einmal pro Minute herunter.
-   if(OdinFloat.show(this,webView,this::restoreFromFloat)){
-    setStatus("läuft im Hintergrund (Symbol antippen)");
+   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat)){
+    setStatus("schwebt ("+OdinFloat.anzahl()+" aktiv) – Symbol antippen");
     moveTaskToBack(true);
    }else{
     OdinBubble.setReturnTarget(GameWebViewActivity.class);
@@ -1066,8 +1064,8 @@ public class GameWebViewActivity extends Activity {
  // Holt die WebView aus dem schwebenden Fenster zurueck in die Activity.
  // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
  private void restoreFromFloat(){
-  if(!OdinFloat.active())return;
-  WebView w=OdinFloat.hide();
+  if(!OdinFloat.active(gameAccountId))return;
+  WebView w=OdinFloat.hide(gameAccountId);
   if(w==null||rootLayout==null)return;
   webView=w;
   runOnUiThread(()->{
