@@ -321,20 +321,34 @@ public class OdinService extends Service {
    try{ Thread.sleep(30000); }catch(InterruptedException e){ return; }
   }
  }
- private void weckerNeuSetzen() throws Exception {
-  if(url.isEmpty()||token.isEmpty()||account.isEmpty())return;
-  String q=url+"/rest/v1/godbot_settings?select=value&skey=eq.tw_tabben_plan&account_id=eq."
-    +java.net.URLEncoder.encode(account,"UTF-8");
-  HttpURLConnection c=(HttpURLConnection)new URL(q).openConnection();
+ private String hole(String pfad) throws Exception {
+  HttpURLConnection c=(HttpURLConnection)new URL(url+"/rest/v1/"+pfad).openConnection();
   c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
   c.setConnectTimeout(15000); c.setReadTimeout(20000);
-  if(c.getResponseCode()>=400)return;
+  if(c.getResponseCode()>=400)return "[]";
   BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
   StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
-  JSONArray arr=new JSONArray(b.toString());
-  if(arr.length()==0)return;
-  int n=OdinAlarm.planen(this,arr.getJSONObject(0).optString("value","{}"));
-  android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+n);
+  return b.toString();
+ }
+ // Wecker fuer ALLE Accounts des Teams. Echte Parallelitaet gibt es nicht -
+ // nur die sichtbare WebView laeuft ungedrosselt. Stattdessen wird jeweils
+ // der Account nach vorne geholt, der als naechstes einen Termin hat.
+ private void weckerNeuSetzen() throws Exception {
+  if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
+  JSONArray accs=new JSONArray(hole("game_accounts?select=id,name,world&team_id=eq."
+    +java.net.URLEncoder.encode(team,"UTF-8")));
+  OdinAlarm.zuruecksetzen(this);
+  int gesamt=0;
+  for(int i=0;i<accs.length();i++){
+   JSONObject a=accs.getJSONObject(i);
+   String id=a.optString("id",""); if(id.isEmpty())continue;
+   String bez=a.optString("name","")+" · "+a.optString("world","");
+   JSONArray s=new JSONArray(hole("godbot_settings?select=value&skey=eq.tw_tabben_plan&account_id=eq."
+     +java.net.URLEncoder.encode(id,"UTF-8")));
+   if(s.length()==0)continue;
+   gesamt+=OdinAlarm.planen(this,s.getJSONObject(0).optString("value","{}"),id,bez);
+  }
+  android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+gesamt+" ueber "+accs.length()+" Accounts");
  }
  private void poll() throws Exception {
   if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
@@ -394,7 +408,12 @@ public final class OdinAlarm {
  private OdinAlarm(){}
  public static final long VORLAUF_MS = 90_000L;   // 90 s vor Einschlag
  private static final int MAX_WECKER = 12;        // Android begrenzt exakte Alarme
- public static final String EXTRA_AT="odin_at", EXTRA_INFO="odin_info";
+ public static final String EXTRA_AT="odin_at", EXTRA_INFO="odin_info",
+   EXTRA_ACCOUNT="odin_account";
+ // Fortlaufende Kennung ueber alle Accounts hinweg, damit sich die Wecker
+ // verschiedener Konten nicht gegenseitig ueberschreiben.
+ private static int naechsteId=9000;
+ public static synchronized void zuruecksetzen(Context c){ naechsteId=9000; }
 
  public static boolean exactAllowed(Context c){
   try{
@@ -405,7 +424,7 @@ public final class OdinAlarm {
 
  // Einzelner Testwecker, um die Kette ohne Warten auf einen echten Termin
  // zu pruefen: Alarm -> Bildschirm an -> Spielansicht im Vordergrund.
- public static long test(Context c, int sekunden){
+ @SuppressWarnings("unused") public static long test(Context c, int sekunden){
   long at=System.currentTimeMillis()+sekunden*1000L;
   try{
    AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
@@ -420,7 +439,7 @@ public final class OdinAlarm {
  }
 
  // Liefert die Anzahl gesetzter Wecker zurueck.
- public static int planen(Context c, String tabbenPlanJson){
+ public static int planen(Context c, String tabbenPlanJson, String accountId, String bezeichnung){
   int gesetzt=0;
   try{
    AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
@@ -437,15 +456,18 @@ public final class OdinAlarm {
      long at=a.optLong("atMs",0L); if(at<=0)continue;
      long weck=at-VORLAUF_MS;
      if(weck<=jetzt+5000L)continue;            // zu knapp oder vorbei
-     termine.put(weck, coord+" · "+a.optString("slowestUnit",""));
+     termine.put(weck, bezeichnung+" · "+coord+" · "+a.optString("slowestUnit",""));
     }
    }
-   int id=9000;
    for(java.util.Map.Entry<Long,String> e:termine.entrySet()){
     if(gesetzt>=MAX_WECKER)break;
     Intent i=new Intent(c,OdinAlarmReceiver.class);
     i.putExtra(EXTRA_AT,e.getKey()+VORLAUF_MS); i.putExtra(EXTRA_INFO,e.getValue());
-    PendingIntent pi=PendingIntent.getBroadcast(c,id++,i,
+    i.putExtra(EXTRA_ACCOUNT,accountId==null?"":accountId);
+    // Eigene Daten-URI, sonst gilt bei PendingIntent nur die Kennung und
+    // gleichartige Intents verschiedener Konten wuerden verschmelzen.
+    i.setData(android.net.Uri.parse("odin://wecker/"+accountId+"/"+e.getKey()));
+    PendingIntent pi=PendingIntent.getBroadcast(c,naechsteId++,i,
       PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
     try{
      if(exactAllowed(c)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,e.getKey(),pi);
@@ -471,8 +493,13 @@ import android.content.Intent;
 public class OdinAlarmReceiver extends BroadcastReceiver {
  @Override public void onReceive(Context c, Intent in){
   String info=in.getStringExtra(OdinAlarm.EXTRA_INFO); if(info==null)info="";
+  String acc=in.getStringExtra(OdinAlarm.EXTRA_ACCOUNT); if(acc==null)acc="";
   Intent open=new Intent(c,GameWebViewActivity.class);
   open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+  // Dieselbe Daten-URI wie beim Oeffnen aus Odin: dadurch kommt genau die
+  // Ansicht dieses Accounts nach vorne statt irgendeiner.
+  if(!acc.isEmpty()){ open.setData(android.net.Uri.parse("odin://account/"+acc));
+                      open.putExtra("accountId",acc); }
   open.putExtra("fromAlarm",true);
   PendingIntent pi=PendingIntent.getActivity(c,4242,open,
     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
@@ -711,7 +738,8 @@ public class GameWebViewActivity extends Activity {
   LinearLayout bar=new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL);
   bar.setBackgroundColor(0xFF2B2B2B); bar.setPadding(24,18,12,18); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
   LinearLayout col=new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
-  TextView t=new TextView(this); t.setText(activeName.isEmpty()?"Die Stämme":activeName);
+  final TextView t=new TextView(this);
+  t.setText((activeName.isEmpty()?"Die Stämme":activeName)+" ⌄");
   t.setTextColor(0xFFFFFFFF); t.setTextSize(16f); t.setSingleLine(true);
   col.addView(t);
   statusView=new TextView(this); statusView.setText("APK "+apkVersion()+" · GodBot: wartet"); statusView.setTextColor(0xFFBBBBBB);
@@ -719,7 +747,15 @@ public class GameWebViewActivity extends Activity {
   // Tippen kopiert das komplette Protokoll in die Zwischenablage.
   statusView.setOnClickListener(x->copyStatusLog());
   statusView.setOnLongClickListener(x->{copyStatusLog();return true;});
+  // Einklappbar, Zustand wird gemerkt.
+  boolean offen=getSharedPreferences("odin",MODE_PRIVATE).getBoolean("statusOffen",true);
+  statusView.setVisibility(offen?android.view.View.VISIBLE:android.view.View.GONE);
   col.addView(statusView);
+  t.setOnClickListener(x->{
+   boolean sichtbar=statusView.getVisibility()==android.view.View.VISIBLE;
+   statusView.setVisibility(sichtbar?android.view.View.GONE:android.view.View.VISIBLE);
+   getSharedPreferences("odin",MODE_PRIVATE).edit().putBoolean("statusOffen",!sichtbar).apply();
+  });
   bar.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
   Button back=new Button(this); back.setText("Dashboard"); back.setTextSize(12f); back.setAllCaps(false);
   // Frueher finish(): damit war die Spielansicht weg und das Spiel startete
