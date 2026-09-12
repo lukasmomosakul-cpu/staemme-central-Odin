@@ -41,11 +41,16 @@ js = r"""
  window.GM_registerMenuCommand=window.GM_registerMenuCommand||function(){};
  window.GM_xmlhttpRequest=window.GM_xmlhttpRequest||function(o){try{var z={status:200,responseText:OdinNative.httpGet(String(o.url)),response:''};z.response=z.responseText;if(o.onload)o.onload(z);return z}catch(e){if(o.onerror)o.onerror({status:0,error:e});return{abort:function(){}}}};
  // Ein Fehler beim Auswerten von GodBot wuerde sonst nur in der Konsole landen.
- window.addEventListener('error',function(ev){try{if(window.__odinErr)return;window.__odinErr=1;
+ // Ersten Fehler festhalten. Frueher wurde die Meldung von der spaeteren
+ // Statuspruefung ueberschrieben - genau die Information ging dabei verloren.
+ window.addEventListener('error',function(ev){try{if(window.__odinErrMsg)return;
   var m=(ev.error&&ev.error.message)||ev.message||'?';
-  OdinNative.status('JS-Fehler: '+m);}catch(e){}},true);
- window.addEventListener('unhandledrejection',function(ev){try{if(window.__odinErr)return;window.__odinErr=1;
-  OdinNative.status('Promise-Fehler: '+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason));}catch(e){}});
+  var w=(ev.filename||'')+':'+(ev.lineno||0);
+  window.__odinErrMsg='JS-Fehler: '+m+' @'+w;
+  OdinNative.status(window.__odinErrMsg);}catch(e){}},true);
+ window.addEventListener('unhandledrejection',function(ev){try{if(window.__odinErrMsg)return;
+  window.__odinErrMsg='Promise-Fehler: '+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason);
+  OdinNative.status(window.__odinErrMsg);}catch(e){}});
  var n=__DEPCOUNT__, urls=[];
  for(var i=0;i<n;i++)urls.push('/__odin_req_'+i+'.js');
  urls.push('/__odin_godbot.js');
@@ -55,11 +60,13 @@ js = r"""
    try{var V='__VERSION__';var A=document.querySelectorAll('*');for(var k=0;k<A.length;k++){var e=A[k],t=(e.textContent||'').trim();if(/USERSCRIPT OK/i.test(t)&&e.children.length===0){e.remove();continue}if(/loader aktiv/i.test(t)){e.style.width='fit-content';e.style.maxWidth='calc(100% - 24px)';e.style.display='inline-flex';e.style.padding='6px 10px';e.style.margin='8px';e.style.borderRadius='8px'}}}catch(e){}
    // window.godbotCommands wird von GodBot gesetzt - damit laesst sich
    // 'Datei geladen' von 'Skript wirklich durchgelaufen' unterscheiden.
-   setTimeout(function(){try{
-    OdinNative.status(typeof window.godbotCommands==='function'
-      ? 'aktiv ('+done+' Teile)'
-      : 'geladen, aber nicht initialisiert');
-   }catch(e){}},3000);
+   function verdict(){try{
+    if(window.__odinErrMsg){OdinNative.status(window.__odinErrMsg);return;}
+    if(typeof window.godbotCommands==='function'){OdinNative.status('aktiv ('+done+' Teile)');return;}
+    // Kein Fehler geworfen: das Skript lief durch, nur der Marker fehlt.
+    OdinNative.status('ausgefuehrt, kein Fehler (Marker fehlt)');
+   }catch(e){}}
+   setTimeout(verdict,3000); setTimeout(verdict,12000);
    OdinNative.status('geladen ('+done+' Teile), pruefe...');
    return;
   }
