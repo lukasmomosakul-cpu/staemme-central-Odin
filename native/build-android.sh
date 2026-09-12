@@ -885,6 +885,29 @@ public class GameWebViewActivity extends Activity {
   String stufe = (msg.contains("Fehler")||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
                : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
   OdinLog.schreib(this,kopfName,stufe,msg);
+  // Nur Auffaelliges wandert nach Odin: sonst wuerde jede Routinemeldung eine
+  // eigene Anfrage ausloesen, und im Protokoll ginge das Wesentliche unter.
+  if(!"info".equals(stufe))ereignisMelden(stufe,bereichVon(msg),msg);
+ }
+ private static String bereichVon(String m){
+  if(m.contains("Anmeldung"))return "anmeldung";
+  if(m.contains("Wecker"))return "wecker";
+  if(m.contains("Abgleich")||m.contains("Einstellungen"))return "abgleich";
+  if(m.contains("Zugangssperre")||m.contains("Bruecke")||m.contains("Quelle"))return "godbot";
+  return "app";
+ }
+ private void ereignisMelden(String stufe,String bereich,String text){
+  if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return;
+  new Thread(()->{
+   try{
+    org.json.JSONObject r=new org.json.JSONObject();
+    r.put("team_id",supaTeam);
+    if(!gameAccountId.isEmpty())r.put("account_id",gameAccountId);
+    r.put("level",stufe); r.put("bereich",bereich); r.put("message",text);
+    r.put("device",android.os.Build.MODEL); r.put("app_version",apkVersion());
+    supaRequest("POST","app_events",new org.json.JSONArray().put(r).toString());
+   }catch(Exception e){ android.util.Log.w("ODIN_EVENT","melden",e); }
+  }).start();
  }
  private String kopfName="";
  // Vollstaendiges Protokoll ansehen, kopieren oder leeren.
