@@ -942,7 +942,7 @@ public class GameWebViewActivity extends Activity {
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
  @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
- @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);}});String welt=nz(getIntent().getStringExtra("world"));
+ @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);}});String welt=normWelt(nz(getIntent().getStringExtra("world")));
   String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
   // Direkt in die Welt: /page/play/<welt> fuehrt nach der Anmeldung dorthin.
   String ziel = !welt.isEmpty() ? "https://www.die-staemme.de/page/play/"+welt
@@ -1031,6 +1031,18 @@ public class GameWebViewActivity extends Activity {
   sc.addView(row); return sc;
  }
  private static String nz(String x){ return x==null?"":x; }
+ // In der Datenbank steht die Welt oft nur als Zahl ("256"). Die Spielseite
+ // erwartet aber den vollen Namen ("de256") - /page/play/256 antwortet mit
+ // "invalid data". Deshalb hier vereinheitlichen statt saubere Eingaben
+ // vorauszusetzen.
+ static String normWelt(String w){
+  if(w==null)return "";
+  String x=w.trim().toLowerCase().replace("welt","").replace(" ","");
+  if(x.isEmpty())return "";
+  if(x.matches("[0-9]+"))return "de"+x;          // 256   -> de256
+  if(x.matches("[a-z]{2,3}[0-9]+"))return x;     // de256 -> de256
+  return x;
+ }
  // Trennt Cookies und Speicher je Spielaccount. Ohne das teilen sich alle
  // Ansichten eine Sitzung: Anmeldung mit Konto B oeffnete das Spiel von A.
  private void profilSetzen(WebView v,String accountId){

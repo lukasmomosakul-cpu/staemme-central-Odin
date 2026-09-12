@@ -61,9 +61,17 @@ export default function GameNativeButton({ accountId, username = '', world = '',
       // Ohne Sitzung laeuft das Spiel weiter, nur ohne Einstellungsabgleich.
     }
 
+    // Welt vereinheitlichen: in der Datenbank steht oft nur die Zahl ("256"),
+    // die Spielseite erwartet "de256". /page/play/256 liefert "invalid data".
+    const welt = (() => {
+      const x = (world ?? '').trim().toLowerCase().replace(/\s|welt/g, '');
+      if (!x) return '';
+      return /^[0-9]+$/.test(x) ? `de${x}` : x;
+    })();
+
     // Direkt in die richtige Welt, damit die Anmeldung dort greift.
     if (window.Android?.openGameOnWorld) {
-      window.Android.openGameOnWorld(accountId, username, accountsJson, world);
+      window.Android.openGameOnWorld(accountId, username, accountsJson, welt);
       return;
     }
     if (window.Android?.openGameWithAccounts) {
