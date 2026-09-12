@@ -392,6 +392,22 @@ public final class OdinAlarm {
   }catch(Exception e){ return false; }
  }
 
+ // Einzelner Testwecker, um die Kette ohne Warten auf einen echten Termin
+ // zu pruefen: Alarm -> Bildschirm an -> Spielansicht im Vordergrund.
+ public static long test(Context c, int sekunden){
+  long at=System.currentTimeMillis()+sekunden*1000L;
+  try{
+   AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
+   Intent i=new Intent(c,OdinAlarmReceiver.class);
+   i.putExtra(EXTRA_AT,at); i.putExtra(EXTRA_INFO,"Testwecker");
+   PendingIntent pi=PendingIntent.getBroadcast(c,8999,i,
+     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+   if(exactAllowed(c)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,at,pi);
+   else am.set(AlarmManager.RTC_WAKEUP,at,pi);
+  }catch(Exception e){ android.util.Log.e("ODIN_ALARM","test",e); return 0L; }
+  return at;
+ }
+
  // Liefert die Anzahl gesetzter Wecker zurueck.
  public static int planen(Context c, String tabbenPlanJson){
   int gesetzt=0;
@@ -702,6 +718,19 @@ public class GameWebViewActivity extends Activity {
    startActivity(i);
   });
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
+  Button test=new Button(this); test.setText("⏰"); test.setTextSize(12f); test.setAllCaps(false);
+  test.setPadding(10,0,10,0);
+  test.setOnClickListener(x->{
+   long at=OdinAlarm.test(this,60);
+   if(at==0){ setStatus("Testwecker fehlgeschlagen"); return; }
+   String uhr=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY)
+     .format(new java.util.Date(at));
+   setStatus("Testwecker "+uhr+(OdinAlarm.exactAllowed(this)?" (exakt)":" (ungenau)"));
+   android.widget.Toast.makeText(this,
+     "Wecker um "+uhr+" — Bildschirm jetzt sperren",
+     android.widget.Toast.LENGTH_LONG).show();
+  });
+  bar.addView(test,new LinearLayout.LayoutParams(-2,-2));
   Button min=new Button(this); min.setText("Minimieren"); min.setTextSize(12f); min.setAllCaps(false);
   min.setOnClickListener(x->{
    if(!OdinBubble.allowed(this)){
