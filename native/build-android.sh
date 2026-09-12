@@ -57,8 +57,10 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-sdk android:minSdkVersion="26" />
     <application android:theme="@style/AppTheme" android:label="Odin" android:usesCleartextTraffic="true">
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
-        <activity android:name=".GameWebViewActivity" android:exported="false" />
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
+        <activity android:name=".GameWebViewActivity" android:exported="false" android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <service android:name=".OdinService" android:exported="false"
             android:foregroundServiceType="dataSync" />
         <provider android:name="androidx.core.content.FileProvider"
@@ -313,6 +315,10 @@ import android.widget.TextView;
 public final class OdinBubble {
  private OdinBubble(){}
  private static View view; private static WindowManager wm;
+ // Merkt sich, aus welcher Ansicht minimiert wurde, damit das Tippen genau
+ // dorthin zurueckfuehrt statt eine neue Spielsitzung zu starten.
+ private static Class<?> returnTo=MainActivity.class;
+ public static void setReturnTarget(Class<?> c){ if(c!=null)returnTo=c; }
  public static boolean allowed(Context c){ return Settings.canDrawOverlays(c); }
  public static void requestPermission(Context c){
   Intent i=new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -344,7 +350,7 @@ public final class OdinBubble {
       try{wm.updateViewLayout(v,lp);}catch(Exception ig){} return true;
      case MotionEvent.ACTION_UP:
       if(!moved){ // Tippen holt die App zurueck
-       Intent i=new Intent(app,MainActivity.class);
+       Intent i=new Intent(app,returnTo);
        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
        app.startActivity(i); hide();
       }
@@ -428,7 +434,13 @@ public class GameWebViewActivity extends Activity {
   col.addView(statusView);
   bar.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
   Button back=new Button(this); back.setText("Odin"); back.setTextSize(12f); back.setAllCaps(false);
-  back.setOnClickListener(x->finish());
+  // Frueher finish(): damit war die Spielansicht weg und das Spiel startete
+  // beim Zurueckkehren von vorn. Jetzt bleibt sie im Stapel bestehen.
+  back.setOnClickListener(x->{
+   Intent i=new Intent(this,MainActivity.class);
+   i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+   startActivity(i);
+  });
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
   Button min=new Button(this); min.setText("Minimieren"); min.setTextSize(12f); min.setAllCaps(false);
   min.setOnClickListener(x->{
@@ -436,8 +448,9 @@ public class GameWebViewActivity extends Activity {
     setStatus("Bitte 'Über anderen Apps anzeigen' erlauben");
     OdinBubble.requestPermission(this); return;
    }
+   OdinBubble.setReturnTarget(GameWebViewActivity.class);
    OdinBubble.show(this);
-   moveTaskToBack(true);
+   moveTaskToBack(true);   // legt die App in den Hintergrund, zerstoert sie nicht
   });
   bar.addView(min,new LinearLayout.LayoutParams(-2,-2));
   return bar;
