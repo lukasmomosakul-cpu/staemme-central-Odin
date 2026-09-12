@@ -8,18 +8,21 @@ declare global {
     Android?: {
       openGame?: (accountId: string, username?: string, password?: string, scriptsJson?: string) => void;
       openGameWithAccounts?: (accountId: string, username?: string, accountsJson?: string) => void;
+      openGameOnWorld?: (accountId: string, username?: string, accountsJson?: string, world?: string) => void;
+      setGameCredentials?: (accountId: string, username: string, password: string) => void;
+      hasGameCredentials?: (accountId: string) => boolean;
       setSupabaseSession?: (url: string, anonKey: string, accessToken: string, teamId: string) => void;
     };
   }
 }
 
-type Props = { accountId: string; username?: string; accounts?: { name: string; world?: string }[]; teamId?: string | null };
+type Props = { accountId: string; username?: string; world?: string; accounts?: { name: string; world?: string }[]; teamId?: string | null };
 type ScriptEntry = { id:string; name:string; source:string; enabled:boolean; type:'Tampermonkey'|'Gist' };
 
 const GAME_URL = 'https://www.die-staemme.de/';
 const SCRIPTS_KEY = 'odin-script-library';
 
-export default function GameNativeButton({ accountId, username = '', accounts = [], teamId = null }: Props) {
+export default function GameNativeButton({ accountId, username = '', world = '', accounts = [], teamId = null }: Props) {
   const openGame = async () => {
     localStorage.setItem('odin-selected-game-account', accountId);
 
@@ -58,6 +61,11 @@ export default function GameNativeButton({ accountId, username = '', accounts = 
       // Ohne Sitzung laeuft das Spiel weiter, nur ohne Einstellungsabgleich.
     }
 
+    // Direkt in die richtige Welt, damit die Anmeldung dort greift.
+    if (window.Android?.openGameOnWorld) {
+      window.Android.openGameOnWorld(accountId, username, accountsJson, world);
+      return;
+    }
     if (window.Android?.openGameWithAccounts) {
       window.Android.openGameWithAccounts(accountId, username, accountsJson);
       return;

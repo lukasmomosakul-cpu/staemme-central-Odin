@@ -170,6 +170,7 @@ public class MainActivity extends Activity {
     getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString(LAST_URL,u).apply();
   }catch(Exception ignored){}
  }
+ private String gameWorld="";
  private void openGameActivity(String accountId,String username,String accountsJson){
   Intent i=new Intent(this,GameWebViewActivity.class);
   // Eigene Daten-URI je Account: Android fuehrt dadurch getrennte Aufgaben
@@ -177,6 +178,7 @@ public class MainActivity extends Activity {
   if(accountId!=null&&!accountId.isEmpty())
    i.setData(android.net.Uri.parse("odin://account/"+accountId));
   i.putExtra("accountId",accountId); i.putExtra("username",username);
+  i.putExtra("world",gameWorld==null?"":gameWorld);
   i.putExtra("accountsJson",accountsJson==null?"[]":accountsJson);
   i.putExtra("supaUrl",SUPA_URL); i.putExtra("supaKey",SUPA_KEY);
   i.putExtra("supaToken",SUPA_TOKEN); i.putExtra("supaTeam",SUPA_TEAM);
@@ -222,6 +224,10 @@ public class MainActivity extends Activity {
   @JavascriptInterface public void openGameWithAccounts(String accountId,String username,String accountsJson){
    runOnUiThread(()->openGameActivity(accountId==null?"":accountId,username==null?"":username,accountsJson));
   }
+  @JavascriptInterface public void openGameOnWorld(String accountId,String username,String accountsJson,String world){
+   gameWorld=world==null?"":world.trim().toLowerCase();
+   runOnUiThread(()->openGameActivity(accountId==null?"":accountId,username==null?"":username,accountsJson));
+  }
   // Die Spielansicht hat keine eigene Supabase-Sitzung. Der Webcode reicht
   // Zugangstoken und Team hier durch, damit die Einstellungen abgeglichen
   // werden koennen.
@@ -237,6 +243,19 @@ public class MainActivity extends Activity {
      requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},77);
     startForegroundService(new Intent(MainActivity.this,OdinService.class));
    }catch(Exception e){Log.e("ODIN","service",e);}});
+  }
+  // Zugangsdaten bleiben auf dem Geraet, verschluesselt im Android-Keystore.
+  @JavascriptInterface public void setGameCredentials(String accountId,String benutzer,String passwort){
+   if(accountId==null||accountId.isEmpty())return;
+   if(passwort==null||passwort.isEmpty()){ OdinVault.loeschen(MainActivity.this,accountId); return; }
+   OdinVault.speichern(MainActivity.this,accountId,benutzer==null?"":benutzer,passwort);
+  }
+  @JavascriptInterface public boolean hasGameCredentials(String accountId){
+   return accountId!=null&&OdinVault.vorhanden(MainActivity.this,accountId);
+  }
+  @JavascriptInterface public String getGameUsername(String accountId){
+   String[] d=accountId==null?null:OdinVault.lesen(MainActivity.this,accountId);
+   return d==null?"":d[0];
   }
   @JavascriptInterface public void updateApk(){
    // Bewusst zusammengesetzt: der Build-Workflow ersetzt die zusammenhaengende
@@ -390,6 +409,66 @@ public class OdinService extends Service {
   running=false; if(poller!=null)poller.interrupt();
   try{ if(lock!=null&&lock.isHeld())lock.release(); }catch(Exception ignored){}
   super.onDestroy();
+ }
+}
+EOF
+cat > "$JAVA_DIR/OdinVault.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.Context; import android.content.SharedPreferences;
+import android.security.keystore.KeyGenParameterSpec; import android.security.keystore.KeyProperties;
+import android.util.Base64;
+import java.security.KeyStore;
+import javax.crypto.*; import javax.crypto.spec.GCMParameterSpec;
+// Zugangsdaten der Spielaccounts - ausschliesslich auf DIESEM Geraet.
+//
+// Bewusst nicht in der geteilten Datenbank: dort waeren sie fuer jedes
+// Teammitglied lesbar, und ein einziger Fehler in einer RLS-Regel oder ein
+// abhandengekommener Anon-Key legt dann nicht ein Passwort offen, sondern alle.
+// Der Schluessel liegt im Android-Keystore und verlaesst das Geraet nie.
+public final class OdinVault {
+ private OdinVault(){}
+ private static final String ALIAS="odin_vault", PREFS="odin_vault_prefs";
+ private static SecretKey key() throws Exception {
+  KeyStore ks=KeyStore.getInstance("AndroidKeyStore"); ks.load(null);
+  if(ks.containsAlias(ALIAS)) return ((KeyStore.SecretKeyEntry)ks.getEntry(ALIAS,null)).getSecretKey();
+  KeyGenerator kg=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore");
+  kg.init(new KeyGenParameterSpec.Builder(ALIAS,
+    KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT)
+    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());
+  return kg.generateKey();
+ }
+ private static SharedPreferences p(Context c){ return c.getSharedPreferences(PREFS,Context.MODE_PRIVATE); }
+
+ public static void speichern(Context c,String accountId,String benutzer,String passwort){
+  try{
+   Cipher ci=Cipher.getInstance("AES/GCM/NoPadding");
+   ci.init(Cipher.ENCRYPT_MODE,key());
+   byte[] iv=ci.getIV();
+   byte[] ct=ci.doFinal((benutzer+"\u0000"+passwort).getBytes("UTF-8"));
+   byte[] all=new byte[iv.length+ct.length];
+   System.arraycopy(iv,0,all,0,iv.length); System.arraycopy(ct,0,all,iv.length,ct.length);
+   p(c).edit().putString(accountId,Base64.encodeToString(all,Base64.NO_WRAP))
+              .putInt(accountId+"_ivlen",iv.length).apply();
+  }catch(Exception e){ android.util.Log.e("ODIN_VAULT","speichern",e); }
+ }
+ // [0] Benutzer, [1] Passwort - oder null.
+ public static String[] lesen(Context c,String accountId){
+  try{
+   String b64=p(c).getString(accountId,null); if(b64==null)return null;
+   int ivlen=p(c).getInt(accountId+"_ivlen",12);
+   byte[] all=Base64.decode(b64,Base64.NO_WRAP);
+   byte[] iv=new byte[ivlen]; System.arraycopy(all,0,iv,0,ivlen);
+   byte[] ct=new byte[all.length-ivlen]; System.arraycopy(all,ivlen,ct,0,ct.length);
+   Cipher ci=Cipher.getInstance("AES/GCM/NoPadding");
+   ci.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,iv));
+   String[] teile=new String(ci.doFinal(ct),"UTF-8").split("\u0000",2);
+   return teile.length==2?teile:null;
+  }catch(Exception e){ android.util.Log.e("ODIN_VAULT","lesen",e); return null; }
+ }
+ public static boolean vorhanden(Context c,String accountId){ return p(c).contains(accountId); }
+ public static void loeschen(Context c,String accountId){
+  p(c).edit().remove(accountId).remove(accountId+"_ivlen").apply();
  }
 }
 EOF
@@ -732,8 +811,12 @@ public class GameWebViewActivity extends Activity {
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
  @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
- @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
-  webView.loadUrl(lastGame.contains("die-staemme.de")?lastGame:"https://www.die-staemme.de/");}
+ @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);}});String welt=nz(getIntent().getStringExtra("world"));
+  String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
+  // Direkt in die Welt: /page/play/<welt> fuehrt nach der Anmeldung dorthin.
+  String ziel = !welt.isEmpty() ? "https://www.die-staemme.de/page/play/"+welt
+              : (lastGame.contains("die-staemme.de") ? lastGame : "https://www.die-staemme.de/");
+  webView.loadUrl(ziel);}
  private android.view.View buildHeader(String activeName){
   LinearLayout bar=new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL);
   bar.setBackgroundColor(0xFF2B2B2B); bar.setPadding(24,18,12,18); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -897,6 +980,18 @@ public class GameWebViewActivity extends Activity {
    String l; while((l=r.readLine())!=null)b.append(l); r.close(); }
   if(st<200||st>=400) throw new java.io.IOException("HTTP "+st+" "+b);
   return b.toString();
+ }
+ private void anmeldenWennNoetig(WebView v){
+  try{
+   if(gameAccountId.isEmpty())return;
+   String[] d=OdinVault.lesen(this,gameAccountId); if(d==null)return;
+   String u=org.json.JSONObject.quote(d[0]), p=org.json.JSONObject.quote(d[1]);
+   String js="(function(u,p){try{\n var f=document.getElementById('login_form'); if(!f) return 'kein_formular';\n var un=document.getElementById('user'), pw=document.getElementById('password');\n if(!un||!pw) return 'felder_fehlen';\n if(un.value && pw.value) return 'schon_gefuellt';\n function setz(el,v){\n  var d=Object.getOwnPropertyDescriptor(el.constructor.prototype,'value');\n  if(d&&d.set)d.set.call(el,v); else el.value=v;\n  el.dispatchEvent(new Event('input',{bubbles:true}));\n  el.dispatchEvent(new Event('change',{bubbles:true}));\n }\n setz(un,u); setz(pw,p);\n var rm=document.getElementById('remember-me'); if(rm&&!rm.checked)rm.click();\n // Das Formular hat action=\"#\" - abgeschickt wird ueber den Link, nicht submit.\n var btn=document.querySelector('a.btn-login');\n if(btn){ btn.click(); return 'abgeschickt'; }\n var sb=document.getElementById('login_submit_button');\n if(sb){ sb.click(); return 'abgeschickt_knopf'; }\n return 'kein_knopf';\n}catch(e){return 'fehler: '+e.message}})"+"("+u+","+p+");";
+   v.evaluateJavascript(js,r->{
+    String t=r==null?"":r.replace("\"","");
+    if(!"kein_formular".equals(t))setStatus("Anmeldung: "+t);
+   });
+  }catch(Exception e){ setStatus("Anmeldung fehlgeschlagen: "+e.getMessage()); }
  }
  private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
  private void loadEnabledScripts(WebView v){ }
