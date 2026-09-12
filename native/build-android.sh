@@ -250,7 +250,28 @@ public class GameWebViewActivity extends Activity {
  private volatile String godbotSrc;
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
- void setStatus(String msg){runOnUiThread(()->{if(statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+msg);});android.util.Log.i("ODIN_GODBOT",msg);}
+ // Vollstaendiges Protokoll: die Statuszeile ist einzeilig und schneidet lange
+ // Fehlermeldungen ab, deshalb wird alles mitgeschrieben und ist kopierbar.
+ private final StringBuilder statusLog=new StringBuilder();
+ void setStatus(String msg){
+  synchronized(statusLog){
+   if(statusLog.length()==0)statusLog.append("Odin APK ").append(apkVersion()).append('\n');
+   statusLog.append('[').append(new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY)
+     .format(new java.util.Date())).append("] ").append(msg).append('\n');
+  }
+  runOnUiThread(()->{if(statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+msg);});
+  android.util.Log.i("ODIN_GODBOT",msg);
+ }
+ private void copyStatusLog(){
+  String text;
+  synchronized(statusLog){ text=statusLog.toString(); }
+  try{
+   android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+   cm.setPrimaryClip(android.content.ClipData.newPlainText("Odin GodBot-Protokoll",text));
+   android.widget.Toast.makeText(this,"Protokoll kopiert ("+text.length()+" Zeichen)",
+     android.widget.Toast.LENGTH_SHORT).show();
+  }catch(Exception e){android.util.Log.e("ODIN_GODBOT","clipboard",e);}
+ }
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
@@ -275,7 +296,11 @@ public class GameWebViewActivity extends Activity {
   t.setTextColor(0xFFFFFFFF); t.setTextSize(16f); t.setSingleLine(true);
   col.addView(t);
   statusView=new TextView(this); statusView.setText("APK "+apkVersion()+" · GodBot: wartet"); statusView.setTextColor(0xFFBBBBBB);
-  statusView.setTextSize(11f); statusView.setSingleLine(true); col.addView(statusView);
+  statusView.setTextSize(11f); statusView.setSingleLine(true);
+  // Tippen kopiert das komplette Protokoll in die Zwischenablage.
+  statusView.setOnClickListener(x->copyStatusLog());
+  statusView.setOnLongClickListener(x->{copyStatusLog();return true;});
+  col.addView(statusView);
   bar.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
   Button back=new Button(this); back.setText("Odin"); back.setTextSize(12f); back.setAllCaps(false);
   back.setOnClickListener(x->finish());
