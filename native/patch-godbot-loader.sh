@@ -100,11 +100,15 @@ js = r"""
      desc+=(desc?' · ':'')+e.fields[i].name+': '+e.fields[i].value;
     // Discord-Farben: Rot 0xE74C3C, Orange 0xE67E22, Gruen 0x2ECC71, Blau 0x3498DB.
     // Ein Schwellwert auf die Zahl trifft daneben - deshalb den Rotanteil pruefen.
+    // Nur echte Warnungen vibrieren (Rotanteil der Embed-Farbe). Routine -
+    // Farmen, Raubzug, Statusmeldungen - laeuft still auf dem leisen Kanal.
     var lvl='info';
     if(e&&typeof e.color==='number'){
      var cr=(e.color>>16)&255, cg=(e.color>>8)&255;
      if(cr>150&&cg<170)lvl='warn';
     }
+    var titelWarn=/sperre|botschutz|captcha|angriff|fehler|abbruch/i.test(title||'');
+    if(!titelWarn&&lvl==='warn'&&!/sperre|botschutz|captcha|angriff/i.test(desc||''))lvl='info';
     window.odinNotify(title,desc,lvl);
    }catch(err){}
   }

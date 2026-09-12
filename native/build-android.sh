@@ -306,6 +306,10 @@ import org.json.*;
 // WebView trotzdem - vollstaendiger Hintergrundlauf ist damit nicht garantiert.
 public class OdinService extends Service {
  public static final String CH_STATUS="odin_status", CH_ALERT="odin_alert";
+ // Eigener Kanal fuer Wecker: hohe Wichtigkeit, damit der Full-Screen-Intent
+ // greift, aber ohne Ton und Vibration - die App oeffnet sich ja selbst.
+ // Eigene Kennung, weil Android bestehende Kanaele nicht nachtraeglich aendert.
+ public static final String CH_WAKE="odin_wake_v2";
  static String url="",key="",token="",team="",device="",account="";
  private PowerManager.WakeLock lock;
  private Thread poller; private volatile boolean running;
@@ -328,6 +332,9 @@ public class OdinService extends Service {
   nm.createNotificationChannel(new NotificationChannel(CH_STATUS,"Odin Status",NotificationManager.IMPORTANCE_LOW));
   NotificationChannel a=new NotificationChannel(CH_ALERT,"Odin Meldungen",NotificationManager.IMPORTANCE_HIGH);
   a.enableVibration(true); nm.createNotificationChannel(a);
+  NotificationChannel wk=new NotificationChannel(CH_WAKE,"Odin Termine",NotificationManager.IMPORTANCE_HIGH);
+  wk.enableVibration(false); wk.setVibrationPattern(null); wk.setSound(null,null);
+  wk.setShowBadge(false); nm.createNotificationChannel(wk);
  }
  private void loop(){
   int runde=0;
@@ -637,8 +644,9 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
   open.putExtra("fromAlarm",true);
   PendingIntent pi=PendingIntent.getActivity(c,4242,open,
     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-  Notification n=new Notification.Builder(c,OdinService.CH_ALERT)
+  Notification n=new Notification.Builder(c,OdinService.CH_WAKE)
     .setContentTitle("Rausstellen fällig").setContentText(info)
+    .setSilent(true)
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setCategory(Notification.CATEGORY_ALARM)
     .setFullScreenIntent(pi,true)     // oeffnet direkt, auch gesperrt
