@@ -129,6 +129,9 @@ public class MainActivity extends Activity {
   i.putExtra("accountsJson",accountsJson==null?"[]":accountsJson);
   i.putExtra("supaUrl",SUPA_URL); i.putExtra("supaKey",SUPA_KEY);
   i.putExtra("supaToken",SUPA_TOKEN); i.putExtra("supaTeam",SUPA_TEAM);
+  // Ohne dieses Flag entsteht bei jedem Klick eine NEUE Spielansicht: die
+  // Sitzung startet von vorn und die Anmeldemaske erscheint wieder.
+  i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
   startActivity(i);
  }
  // Laedt die aktuelle APK und startet den System-Installer.
@@ -336,14 +339,19 @@ public final class OdinFloat {
    bar.setPadding(12,4,4,4); bar.setGravity(Gravity.CENTER_VERTICAL);
    TextView t=new TextView(app); t.setText("Odin läuft"); t.setTextColor(0xFFFFFFFF); t.setTextSize(10f);
    bar.addView(t,new LinearLayout.LayoutParams(0,-2,1f));
-   Button up=new Button(app); up.setText("▲"); up.setTextSize(9f); up.setAllCaps(false);
-   bar.addView(up,new LinearLayout.LayoutParams(-2,-2));
+   Button sz=new Button(app); sz.setText("⤢"); sz.setTextSize(8f); sz.setAllCaps(false);
+   sz.setPadding(6,0,6,0); bar.addView(sz,new LinearLayout.LayoutParams(-2,-2));
+   Button up=new Button(app); up.setText("▲"); up.setTextSize(8f); up.setAllCaps(false);
+   up.setPadding(6,0,6,0); bar.addView(up,new LinearLayout.LayoutParams(-2,-2));
    box.addView(bar,new LinearLayout.LayoutParams(-1,-2));
    box.addView(web,new LinearLayout.LayoutParams(-1,0,1f));
 
    int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                                      :WindowManager.LayoutParams.TYPE_PHONE;
-   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(520,420,type,
+   // Klein genug, um kaum zu stoeren. Sichtbar muss es bleiben, sonst
+   // drosselt Chromium die Zeitgeber wieder.
+   final int[] sizes={160,120, 300,240, 520,420}; final int[] step={0};
+   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(sizes[0],sizes[1],type,
      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.OPAQUE);
    lp.gravity=Gravity.TOP|Gravity.START; lp.x=16; lp.y=180;
    wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
@@ -359,6 +367,11 @@ public final class OdinFloat {
      }
      return false;
     }
+   });
+   sz.setOnClickListener(x->{
+    step[0]=(step[0]+1)%3;
+    lp.width=sizes[step[0]*2]; lp.height=sizes[step[0]*2+1];
+    try{wm.updateViewLayout(frame,lp);}catch(Exception ig){}
    });
    up.setOnClickListener(x->{ if(onRestore!=null)onRestore.run(); });
 
@@ -495,7 +508,8 @@ public class GameWebViewActivity extends Activity {
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
  @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
- @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});webView.loadUrl("https://www.die-staemme.de/");}
+ @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
+  webView.loadUrl(lastGame.contains("die-staemme.de")?lastGame:"https://www.die-staemme.de/");}
  private android.view.View buildHeader(String activeName){
   LinearLayout bar=new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL);
   bar.setBackgroundColor(0xFF2B2B2B); bar.setPadding(24,18,12,18); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -591,7 +605,24 @@ public class GameWebViewActivity extends Activity {
  private void injectGodBot(WebView v){ }
  private WebResourceResponse odinIntercept(WebResourceRequest r){ return null; }
  @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
+ @Override protected void onNewIntent(Intent in){
+  super.onNewIntent(in); setIntent(in);
+  // Nur die Sitzungsdaten auffrischen - die WebView bleibt unberuehrt,
+  // sonst ginge die Anmeldung bei jedem Wechsel verloren.
+  supaUrl=nz(in.getStringExtra("supaUrl")); supaKey=nz(in.getStringExtra("supaKey"));
+  supaToken=nz(in.getStringExtra("supaToken")); supaTeam=nz(in.getStringExtra("supaTeam"));
+  String a=nz(in.getStringExtra("accountId")); if(!a.isEmpty())gameAccountId=a;
+ }
  @Override protected void onResume(){super.onResume();Fullscreen.apply(this);OdinBubble.hide();restoreFromFloat();}
+ @Override protected void onPause(){
+  super.onPause();
+  // Ohne flush() bleiben die Anmeldecookies nur im Speicher und sind nach
+  // einem Neuaufbau des Prozesses weg.
+  try{ android.webkit.CookieManager.getInstance().flush(); }catch(Exception ignored){}
+  try{ if(webView!=null&&webView.getUrl()!=null)
+        getSharedPreferences("odin",MODE_PRIVATE).edit()
+          .putString("lastGameUrl",webView.getUrl()).apply(); }catch(Exception ignored){}
+ }
  // Holt die WebView aus dem schwebenden Fenster zurueck in die Activity.
  // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
  private void restoreFromFloat(){
