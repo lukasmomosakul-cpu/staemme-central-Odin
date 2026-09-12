@@ -51,6 +51,26 @@ js = r"""
  window.addEventListener('unhandledrejection',function(ev){try{if(window.__odinErrMsg)return;
   window.__odinErrMsg='Promise-Fehler: '+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason);
   OdinNative.status(window.__odinErrMsg);}catch(e){}});
+ // GodBot richtet Bruecken wie Object.defineProperty(window,'Timing',{get:...})
+ // ein. Unter Tampermonkey laufen die in einer Sandbox, hier im Seitenkontext
+ // hat das Spiel 'Timing' bereits nicht-konfigurierbar definiert -> TypeError,
+ // und das Skript bricht in Zeile 24 ab. Deshalb fuer window tolerant machen.
+ if(!window.__odinDefineFix){
+  window.__odinDefineFix=1;
+  var _odp=Object.defineProperty;
+  Object.defineProperty=function(o,prop,desc){
+   try{ return _odp(o,prop,desc); }
+   catch(err){
+    if(o!==window)throw err;
+    try{
+     var val = desc && (('value' in desc) ? desc.value : (desc.get ? desc.get() : undefined));
+     if(val!==undefined) o[prop]=val;
+    }catch(e2){}
+    try{OdinNative.status('Bruecke uebersprungen: '+prop);}catch(e3){}
+    return o;
+   }
+  };
+ }
  var n=__DEPCOUNT__, urls=[];
  for(var i=0;i<n;i++)urls.push('/__odin_req_'+i+'.js');
  urls.push('/__odin_godbot.js');
