@@ -304,6 +304,81 @@ public class OdinService extends Service {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinFloat.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.Context; import android.graphics.PixelFormat; import android.os.Build;
+import android.provider.Settings; import android.view.*; import android.widget.*; import android.webkit.WebView;
+// Haengt die Spiel-WebView in ein schwebendes Fenster ueber anderen Apps.
+//
+// Der Punkt dabei: Chromium drosselt JS-Zeitgeber danach, ob die WebView
+// GERENDERT wird - nicht danach, ob die App den Fokus hat. Ein sichtbares
+// Overlay-Fenster zaehlt als gerendert, also laufen die Zeitgeber normal
+// weiter, waehrend das Geraet anderweitig benutzt wird.
+public final class OdinFloat {
+ private OdinFloat(){}
+ private static WindowManager wm; private static View frame; private static WebView held;
+ private static ViewGroup origParent; private static int origIndex=-1;
+ public static boolean active(){ return frame!=null; }
+ public static boolean allowed(Context c){ return Settings.canDrawOverlays(c); }
+
+ public static synchronized boolean show(Context ctx, WebView web, Runnable onRestore){
+  final Context app=ctx.getApplicationContext();
+  if(frame!=null||web==null||!allowed(app))return false;
+  try{
+   origParent=(ViewGroup)web.getParent();
+   origIndex=origParent==null?-1:origParent.indexOfChild(web);
+   if(origParent!=null)origParent.removeView(web);
+   held=web;
+
+   LinearLayout box=new LinearLayout(app); box.setOrientation(LinearLayout.VERTICAL);
+   box.setBackgroundColor(0xFF000000);
+   LinearLayout bar=new LinearLayout(app); bar.setBackgroundColor(0xFF2B2B2B);
+   bar.setPadding(12,4,4,4); bar.setGravity(Gravity.CENTER_VERTICAL);
+   TextView t=new TextView(app); t.setText("Odin läuft"); t.setTextColor(0xFFFFFFFF); t.setTextSize(10f);
+   bar.addView(t,new LinearLayout.LayoutParams(0,-2,1f));
+   Button up=new Button(app); up.setText("▲"); up.setTextSize(9f); up.setAllCaps(false);
+   bar.addView(up,new LinearLayout.LayoutParams(-2,-2));
+   box.addView(bar,new LinearLayout.LayoutParams(-1,-2));
+   box.addView(web,new LinearLayout.LayoutParams(-1,0,1f));
+
+   int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                                     :WindowManager.LayoutParams.TYPE_PHONE;
+   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(520,420,type,
+     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.OPAQUE);
+   lp.gravity=Gravity.TOP|Gravity.START; lp.x=16; lp.y=180;
+   wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
+
+   bar.setOnTouchListener(new View.OnTouchListener(){
+    float dx,dy;
+    @Override public boolean onTouch(View v,MotionEvent e){
+     switch(e.getAction()){
+      case MotionEvent.ACTION_DOWN: dx=lp.x-e.getRawX(); dy=lp.y-e.getRawY(); return true;
+      case MotionEvent.ACTION_MOVE:
+       lp.x=(int)(e.getRawX()+dx); lp.y=(int)(e.getRawY()+dy);
+       try{wm.updateViewLayout(frame,lp);}catch(Exception ig){} return true;
+     }
+     return false;
+    }
+   });
+   up.setOnClickListener(x->{ if(onRestore!=null)onRestore.run(); });
+
+   wm.addView(box,lp); frame=box;
+   return true;
+  }catch(Exception e){ android.util.Log.e("ODIN_FLOAT","show",e); restoreInternal(); return false; }
+ }
+
+ // Gibt die WebView an die Activity zurueck, ohne sie neu zu laden.
+ public static synchronized WebView hide(){
+  WebView w=held; restoreInternal(); return w;
+ }
+ private static void restoreInternal(){
+  try{ if(held!=null&&held.getParent() instanceof ViewGroup)
+        ((ViewGroup)held.getParent()).removeView(held); }catch(Exception ignored){}
+  try{ if(frame!=null&&wm!=null)wm.removeView(frame); }catch(Exception ignored){}
+  frame=null; origParent=null; origIndex=-1;
+ }
+}
+EOF
 cat > "$JAVA_DIR/OdinBubble.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.content.Context; import android.content.Intent; import android.graphics.Color;
@@ -377,6 +452,7 @@ public class GameWebViewActivity extends Activity {
  private volatile String godbotSrc;
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
  private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
+ private LinearLayout rootLayout;
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
  // Vollstaendiges Protokoll: die Statuszeile ist einzeilig und schneidet lange
  // Fehlermeldungen ab, deshalb wird alles mitgeschrieben und ist kopierbar.
@@ -411,6 +487,7 @@ public class GameWebViewActivity extends Activity {
   webView=new WebView(this);
   root.addView(webView,new LinearLayout.LayoutParams(-1,0,1f));
   root.addView(buildFooter(accountsJson,activeName),new LinearLayout.LayoutParams(-1,-2));
+  rootLayout=root;
   setContentView(root);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
  // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
@@ -448,9 +525,18 @@ public class GameWebViewActivity extends Activity {
     setStatus("Bitte 'Über anderen Apps anzeigen' erlauben");
     OdinBubble.requestPermission(this); return;
    }
-   OdinBubble.setReturnTarget(GameWebViewActivity.class);
-   OdinBubble.show(this);
-   moveTaskToBack(true);   // legt die App in den Hintergrund, zerstoert sie nicht
+   // Die WebView wandert in ein sichtbares Overlay. Nur so bleiben die
+   // JS-Zeitgeber ungedrosselt - ein blosses moveTaskToBack() macht sie
+   // unsichtbar und Chromium taktet sie auf etwa einmal pro Minute herunter.
+   if(OdinFloat.show(this,webView,this::restoreFromFloat)){
+    setStatus("schwebt - Zeitgeber laufen normal");
+    moveTaskToBack(true);
+   }else{
+    OdinBubble.setReturnTarget(GameWebViewActivity.class);
+    OdinBubble.show(this);
+    setStatus("minimiert (gedrosselt)");
+    moveTaskToBack(true);
+   }
   });
   bar.addView(min,new LinearLayout.LayoutParams(-2,-2));
   return bar;
@@ -505,7 +591,25 @@ public class GameWebViewActivity extends Activity {
  private void injectGodBot(WebView v){ }
  private WebResourceResponse odinIntercept(WebResourceRequest r){ return null; }
  @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
- @Override protected void onResume(){super.onResume();Fullscreen.apply(this);OdinBubble.hide();}
+ @Override protected void onResume(){super.onResume();Fullscreen.apply(this);OdinBubble.hide();restoreFromFloat();}
+ // Holt die WebView aus dem schwebenden Fenster zurueck in die Activity.
+ // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
+ private void restoreFromFloat(){
+  if(!OdinFloat.active())return;
+  WebView w=OdinFloat.hide();
+  if(w==null||rootLayout==null)return;
+  webView=w;
+  runOnUiThread(()->{
+   try{
+    if(w.getParent() instanceof android.view.ViewGroup)
+     ((android.view.ViewGroup)w.getParent()).removeView(w);
+    rootLayout.addView(w,1,new LinearLayout.LayoutParams(-1,0,1f));
+    Intent i=new Intent(this,GameWebViewActivity.class);
+    i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT); startActivity(i);
+    setStatus("zurueck im Vordergrund");
+   }catch(Exception e){android.util.Log.e("ODIN_FLOAT","restore",e);}
+  });
+ }
  @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
  private void minimizeToApp(){finish();}
  private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);}
