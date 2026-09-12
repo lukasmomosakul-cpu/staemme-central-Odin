@@ -37,7 +37,13 @@ android {
         release { signingConfig signingConfigs.odinRelease }
     }
 }
-dependencies { implementation 'androidx.core:core:1.13.1' }
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+    // Multi-Profile: eigener Cookie- und Speicherbereich je Spielaccount.
+    // Androids CookieManager ist sonst prozessweit, alle WebViews teilen sich
+    // eine Sitzung - deshalb landete man immer beim zuletzt angemeldeten Konto.
+    implementation 'androidx.webkit:webkit:1.12.1'
+}
 EOF
 python3 - "$APP/build.gradle" "$VERSION" <<'PY'
 from pathlib import Path
@@ -63,7 +69,8 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
-        <activity android:name=".GameWebViewActivity" android:exported="false" android:launchMode="singleTop"
+        <activity android:name=".GameWebViewActivity" android:exported="false"
+            android:documentLaunchMode="intoExisting" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <receiver android:name=".OdinAlarmReceiver" android:exported="false" />
         <service android:name=".OdinService" android:exported="false"
@@ -165,6 +172,10 @@ public class MainActivity extends Activity {
  }
  private void openGameActivity(String accountId,String username,String accountsJson){
   Intent i=new Intent(this,GameWebViewActivity.class);
+  // Eigene Daten-URI je Account: Android fuehrt dadurch getrennte Aufgaben
+  // und haelt mehrere Spielansichten gleichzeitig am Leben.
+  if(accountId!=null&&!accountId.isEmpty())
+   i.setData(android.net.Uri.parse("odin://account/"+accountId));
   i.putExtra("accountId",accountId); i.putExtra("username",username);
   i.putExtra("accountsJson",accountsJson==null?"[]":accountsJson);
   i.putExtra("supaUrl",SUPA_URL); i.putExtra("supaKey",SUPA_KEY);
@@ -683,6 +694,7 @@ public class GameWebViewActivity extends Activity {
   LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(0xFFFFFFFF);
   root.addView(buildHeader(activeName),new LinearLayout.LayoutParams(-1,-2));
   webView=new WebView(this);
+  profilSetzen(webView,gameAccountId);
   root.addView(webView,new LinearLayout.LayoutParams(-1,0,1f));
   root.addView(buildFooter(accountsJson,activeName),new LinearLayout.LayoutParams(-1,-2));
   rootLayout=root;
@@ -709,7 +721,7 @@ public class GameWebViewActivity extends Activity {
   statusView.setOnLongClickListener(x->{copyStatusLog();return true;});
   col.addView(statusView);
   bar.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
-  Button back=new Button(this); back.setText("Odin"); back.setTextSize(12f); back.setAllCaps(false);
+  Button back=new Button(this); back.setText("Dashboard"); back.setTextSize(12f); back.setAllCaps(false);
   // Frueher finish(): damit war die Spielansicht weg und das Spiel startete
   // beim Zurueckkehren von vorn. Jetzt bleibt sie im Stapel bestehen.
   back.setOnClickListener(x->{
@@ -718,19 +730,6 @@ public class GameWebViewActivity extends Activity {
    startActivity(i);
   });
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
-  Button test=new Button(this); test.setText("⏰"); test.setTextSize(12f); test.setAllCaps(false);
-  test.setPadding(10,0,10,0);
-  test.setOnClickListener(x->{
-   long at=OdinAlarm.test(this,60);
-   if(at==0){ setStatus("Testwecker fehlgeschlagen"); return; }
-   String uhr=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY)
-     .format(new java.util.Date(at));
-   setStatus("Testwecker "+uhr+(OdinAlarm.exactAllowed(this)?" (exakt)":" (ungenau)"));
-   android.widget.Toast.makeText(this,
-     "Wecker um "+uhr+" — Bildschirm jetzt sperren",
-     android.widget.Toast.LENGTH_LONG).show();
-  });
-  bar.addView(test,new LinearLayout.LayoutParams(-2,-2));
   Button min=new Button(this); min.setText("Minimieren"); min.setTextSize(12f); min.setAllCaps(false);
   min.setOnClickListener(x->{
    if(!OdinBubble.allowed(this)){
@@ -762,8 +761,11 @@ public class GameWebViewActivity extends Activity {
    for(int i=0;i<arr.length();i++){
     org.json.JSONObject o=arr.optJSONObject(i); if(o==null)continue;
     String nm=o.optString("name",""); if(nm.isEmpty())continue;
+    String welt=o.optString("world","");
     boolean active=nm.equals(activeName);
-    TextView c=new TextView(this); c.setText(nm); c.setTextSize(12f); c.setPadding(22,10,22,10);
+    TextView c=new TextView(this);
+    c.setText(welt.isEmpty()?nm:(nm+"  ·  "+welt));
+    c.setTextSize(12f); c.setPadding(22,10,22,10);
     c.setTextColor(active?0xFFFFFFFF:0xFF333333);
     android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
     g.setCornerRadius(18f); g.setColor(active?0xFF2B2B2B:0xFFFFFFFF); g.setStroke(1,0xFFCCCCCC);
@@ -775,6 +777,23 @@ public class GameWebViewActivity extends Activity {
   sc.addView(row); return sc;
  }
  private static String nz(String x){ return x==null?"":x; }
+ // Trennt Cookies und Speicher je Spielaccount. Ohne das teilen sich alle
+ // Ansichten eine Sitzung: Anmeldung mit Konto B oeffnete das Spiel von A.
+ private void profilSetzen(WebView v,String accountId){
+  if(accountId==null||accountId.isEmpty())return;
+  try{
+   if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)){
+    String name="acc_"+accountId.replaceAll("[^A-Za-z0-9]","");
+    androidx.webkit.ProfileStore.getInstance().getOrCreateProfile(name);
+    androidx.webkit.WebViewCompat.setProfile(v,name);
+    setStatus("Profil "+name);
+   }else{
+    // Aeltere WebView-Versionen koennen das nicht - dann bleibt es bei einer
+    // gemeinsamen Sitzung, und das sagen wir auch statt es zu verschweigen.
+    setStatus("Achtung: WebView zu alt für getrennte Konten");
+   }
+  }catch(Exception e){ setStatus("Profil fehlgeschlagen: "+e.getMessage()); }
+ }
  // Vom Wecker gestartet: ueber dem Sperrbildschirm anzeigen und den Schirm
  // einschalten. Erst dadurch wird die WebView sichtbar und laeuft ungedrosselt.
  private void weckerModus(){

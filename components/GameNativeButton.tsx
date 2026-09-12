@@ -13,7 +13,7 @@ declare global {
   }
 }
 
-type Props = { accountId: string; username?: string; accounts?: { name: string }[]; teamId?: string | null };
+type Props = { accountId: string; username?: string; accounts?: { name: string; world?: string }[]; teamId?: string | null };
 type ScriptEntry = { id:string; name:string; source:string; enabled:boolean; type:'Tampermonkey'|'Gist' };
 
 const GAME_URL = 'https://www.die-staemme.de/';
@@ -37,7 +37,7 @@ export default function GameNativeButton({ accountId, username = '', accounts = 
     }
 
     // Fussleiste im Spiel zeigt alle Accounts des Teams.
-    const accountsJson = JSON.stringify(accounts.map((a) => ({ name: a.name })));
+    const accountsJson = JSON.stringify(accounts.map((a) => ({ name: a.name, world: a.world ?? '' })));
 
     // Die Spielansicht hat keine eigene Supabase-Sitzung. Zugangstoken und Team
     // werden hier uebergeben, damit die GodBot-Einstellungen abgeglichen werden.
