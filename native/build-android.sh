@@ -412,6 +412,61 @@ public class OdinService extends Service {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinLog.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.Context; import java.io.*; import java.text.SimpleDateFormat;
+import java.util.*;
+// Dauerhaftes Protokoll auf dem Geraet.
+//
+// Die Statuszeile zeigt nur den letzten Vorgang und verschwindet beim Neustart.
+// Hier landet alles mit Zeitstempel, Account und Stufe - genau das, womit wir
+// die bisherigen Fehler gefunden haben, nur ohne dass es verlorengeht.
+public final class OdinLog {
+ private OdinLog(){}
+ private static final String DATEI="odin-protokoll.txt";
+ private static final int MAX_ZEILEN=800;
+ private static final Object schloss=new Object();
+
+ public static void schreib(Context c,String account,String stufe,String text){
+  String zeile="["+new SimpleDateFormat("dd.MM. HH:mm:ss",Locale.GERMANY).format(new Date())+"] "
+    +(stufe==null?"info":stufe)+" · "+(account==null||account.isEmpty()?"-":account)+" · "+text;
+  synchronized(schloss){
+   try{
+    File f=new File(c.getFilesDir(),DATEI);
+    List<String> alle=lesenIntern(f);
+    alle.add(zeile);
+    // Ringpuffer: aeltestes faellt raus, damit die Datei nicht waechst.
+    while(alle.size()>MAX_ZEILEN)alle.remove(0);
+    BufferedWriter w=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(f,false),"UTF-8"));
+    for(String z:alle){ w.write(z); w.newLine(); }
+    w.close();
+   }catch(Exception e){ android.util.Log.e("ODIN_LOG","schreib",e); }
+  }
+ }
+ private static List<String> lesenIntern(File f) {
+  List<String> alle=new ArrayList<>();
+  if(!f.exists())return alle;
+  try{
+   BufferedReader r=new BufferedReader(new InputStreamReader(new FileInputStream(f),"UTF-8"));
+   String l; while((l=r.readLine())!=null)alle.add(l); r.close();
+  }catch(Exception ignored){}
+  return alle;
+ }
+ public static String lesen(Context c){
+  synchronized(schloss){
+   List<String> alle=lesenIntern(new File(c.getFilesDir(),DATEI));
+   if(alle.isEmpty())return "(noch nichts protokolliert)";
+   StringBuilder b=new StringBuilder();
+   // Neueste zuerst - beim Suchen nach einem Fehler will man den Schluss.
+   for(int i=alle.size()-1;i>=0;i--)b.append(alle.get(i)).append('\n');
+   return b.toString();
+  }
+ }
+ public static void leeren(Context c){
+  synchronized(schloss){ new File(c.getFilesDir(),DATEI).delete(); }
+ }
+}
+EOF
 cat > "$JAVA_DIR/OdinVault.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.content.Context; import android.content.SharedPreferences;
@@ -780,6 +835,32 @@ public class GameWebViewActivity extends Activity {
   }
   runOnUiThread(()->{if(statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+msg);});
   android.util.Log.i("ODIN_GODBOT",msg);
+  String stufe = (msg.contains("Fehler")||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
+               : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
+  OdinLog.schreib(this,kopfName,stufe,msg);
+ }
+ private String kopfName="";
+ // Vollstaendiges Protokoll ansehen, kopieren oder leeren.
+ private void protokollZeigen(){
+  String text=OdinLog.lesen(this);
+  android.widget.TextView tv=new android.widget.TextView(this);
+  tv.setText(text); tv.setTextSize(11f); tv.setPadding(24,16,24,16);
+  tv.setTextIsSelectable(true);
+  android.widget.ScrollView sv=new android.widget.ScrollView(this); sv.addView(tv);
+  new android.app.AlertDialog.Builder(this)
+   .setTitle("Protokoll")
+   .setView(sv)
+   .setPositiveButton("Kopieren",(d,w)->{
+     try{
+      android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+      cm.setPrimaryClip(android.content.ClipData.newPlainText("Odin-Protokoll",text));
+      android.widget.Toast.makeText(this,"Protokoll kopiert ("+text.length()+" Zeichen)",
+        android.widget.Toast.LENGTH_SHORT).show();
+     }catch(Exception ignored){}
+   })
+   .setNeutralButton("Leeren",(d,w)->{ OdinLog.leeren(this); setStatus("Protokoll geleert"); })
+   .setNegativeButton("Schließen",null)
+   .show();
  }
  private void copyStatusLog(){
   String text;
@@ -793,6 +874,7 @@ public class GameWebViewActivity extends Activity {
  }
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this); weckerModus();
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
+  kopfName=activeName;
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
   supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
@@ -830,7 +912,7 @@ public class GameWebViewActivity extends Activity {
   statusView=new TextView(this); statusView.setText("APK "+apkVersion()+" · GodBot: wartet"); statusView.setTextColor(0xFFBBBBBB);
   statusView.setTextSize(11f); statusView.setSingleLine(true);
   // Tippen kopiert das komplette Protokoll in die Zwischenablage.
-  statusView.setOnClickListener(x->copyStatusLog());
+  statusView.setOnClickListener(x->protokollZeigen());
   statusView.setOnLongClickListener(x->{copyStatusLog();return true;});
   // Einklappbar, Zustand wird gemerkt.
   boolean offen=getSharedPreferences("odin",MODE_PRIVATE).getBoolean("statusOffen",true);
@@ -983,22 +1065,44 @@ public class GameWebViewActivity extends Activity {
         } }catch(Exception ignored){}
    setStatus(gesichert?"Wecker: über Sperrbildschirm, dunkel"
                      :"Wecker: Vordergrund, Anzeige dunkel");
+   // Nur so lange offen, wie fuer die Aktion noetig. Danach zurueck in den
+   // Hintergrund, damit das Geraet nachts nicht dauerhaft wach bleibt.
+   if(weckFensterEnde!=null)w.getDecorView().removeCallbacks(weckFensterEnde);
+   weckFensterEnde=()->{
+    if(!weckerAktiv)return;
+    setStatus("Weckfenster beendet – zurück in den Hintergrund");
+    weckerAktiv=false;
+    anzeigeZuruecksetzen();
+    moveTaskToBack(true);
+   };
+   weckerAktiv=true;
+   w.getDecorView().postDelayed(weckFensterEnde,WECK_FENSTER_MS);
   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","weckerModus",e); }
  }
- private boolean dunkelWegenWecker=false;
- // Sobald du das Geraet anfasst, wieder normale Helligkeit.
- @Override public void onUserInteraction(){
-  super.onUserInteraction();
-  if(!dunkelWegenWecker)return;
-  dunkelWegenWecker=false;
+ private boolean dunkelWegenWecker=false, weckerAktiv=false;
+ private Runnable weckFensterEnde=null;
+ // Vorlauf (90 s) plus Puffer fuer Laden und Absetzen des Befehls.
+ private static final long WECK_FENSTER_MS=180_000L;
+ private void anzeigeZuruecksetzen(){
   try{
    android.view.Window w=getWindow();
    android.view.WindowManager.LayoutParams lp=w.getAttributes();
    lp.screenBrightness=android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
    w.setAttributes(lp);
    w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-   setStatus("Anzeige normal");
+   if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(false); setTurnScreenOn(false); }
   }catch(Exception ignored){}
+  dunkelWegenWecker=false;
+ }
+ // Sobald du das Geraet anfasst, wieder normale Helligkeit.
+ @Override public void onUserInteraction(){
+  super.onUserInteraction();
+  if(!dunkelWegenWecker&&!weckerAktiv)return;
+  // Du hast uebernommen - dann nicht automatisch wieder wegschalten.
+  weckerAktiv=false;
+  if(weckFensterEnde!=null)getWindow().getDecorView().removeCallbacks(weckFensterEnde);
+  anzeigeZuruecksetzen();
+  setStatus("Anzeige normal – Weckfenster abgebrochen");
  }
  // Einstellungsabgleich ueber Supabase REST. Laeuft nativ, damit weder CORS
  // noch die CSP der Spielseite dazwischenfunken.
