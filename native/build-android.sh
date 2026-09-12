@@ -791,10 +791,19 @@ public class GameWebViewActivity extends Activity {
    android.view.WindowManager.LayoutParams lp=w.getAttributes();
    lp.screenBrightness=0f; w.setAttributes(lp);
    dunkelWegenWecker=true;
-   // Sperrbildschirm beiseite schieben, sonst liegt er ueber der WebView.
+   // Bei gesichertem Sperrbildschirm NICHT requestDismissKeyguard aufrufen:
+   // das entsperrt nichts, sondern blendet die PIN-/Musterabfrage ein - und
+   // die legt sich ueber die WebView. setShowWhenLocked zeigt die Ansicht
+   // ohnehin ueber dem Sperrbildschirm an, gerendert und damit ungedrosselt.
+   // Das Geraet bleibt dabei gesperrt.
+   boolean gesichert=false;
    try{ android.app.KeyguardManager km=getSystemService(android.app.KeyguardManager.class);
-        if(km!=null&&Build.VERSION.SDK_INT>=26)km.requestDismissKeyguard(this,null); }catch(Exception ignored){}
-   setStatus("Wecker: Vordergrund, Anzeige dunkel");
+        if(km!=null){
+         gesichert=km.isKeyguardSecure();
+         if(!gesichert&&Build.VERSION.SDK_INT>=26)km.requestDismissKeyguard(this,null);
+        } }catch(Exception ignored){}
+   setStatus(gesichert?"Wecker: über Sperrbildschirm, dunkel"
+                     :"Wecker: Vordergrund, Anzeige dunkel");
   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","weckerModus",e); }
  }
  private boolean dunkelWegenWecker=false;
