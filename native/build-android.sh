@@ -68,7 +68,7 @@ cat > "$APP/src/main/res/xml/file_paths.xml" <<'EOF'
 <paths><cache-path name="apk" path="." /><external-cache-path name="apk_ext" path="." /></paths>
 EOF
 cat > "$APP/src/main/res/values/styles.xml" <<'EOF'
-<resources><style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#333333</item><item name="android:navigationBarColor">#ffffff</item><item name="android:statusBarColor">#ffffff</item><item name="android:windowLightStatusBar">true</item></style></resources>
+<resources><style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar.Fullscreen"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#333333</item><item name="android:windowFullscreen">true</item><item name="android:windowContentOverlay">@null</item><item name="android:navigationBarColor">#000000</item><item name="android:statusBarColor">#000000</item></style></resources>
 EOF
 cat > "$JAVA_DIR/MainActivity.java" <<'EOF'
 package de.teamzentrale.odin;
@@ -77,7 +77,7 @@ public class MainActivity extends Activity {
  private WebView webView;
  private static final String ODIN_URL="https://staemme-central-odin.vercel.app/";
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){
-  super.onCreate(b);
+  super.onCreate(b); Fullscreen.apply(this);
   FrameLayout root=new FrameLayout(this); webView=new WebView(this);
   root.addView(webView,new FrameLayout.LayoutParams(-1,-1)); setContentView(root);
   WebSettings s=webView.getSettings();
@@ -145,12 +145,37 @@ public class MainActivity extends Activity {
  }
 }
 EOF
+cat > "$JAVA_DIR/Fullscreen.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.app.Activity; import android.os.Build; import android.view.View; import android.view.WindowInsets; import android.view.WindowInsetsController; import android.view.WindowManager;
+public final class Fullscreen {
+ private Fullscreen(){}
+ // Blendet Status- und Navigationsleiste aus; sie erscheinen kurz bei Wischen
+ // vom Rand und verschwinden wieder von selbst.
+ public static void apply(Activity a){
+  try{
+   a.getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);
+   if(Build.VERSION.SDK_INT>=30){
+    a.getWindow().setDecorFitsSystemWindows(false);
+    WindowInsetsController c=a.getWindow().getInsetsController();
+    if(c!=null){c.hide(WindowInsets.Type.statusBars()|WindowInsets.Type.navigationBars());
+     c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);}
+   }else{
+    a.getWindow().getDecorView().setSystemUiVisibility(
+      View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+      |View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+      |View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+   }
+  }catch(Exception ignored){}
+ }
+}
+EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
 public class GameWebViewActivity extends Activity {
  private WebView webView;
- @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b);
+ @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
   LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(0xFFFFFFFF);
