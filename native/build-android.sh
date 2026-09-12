@@ -130,6 +130,8 @@ public class MainActivity extends Activity {
    }
   }).start();
  }
+ @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
+ @Override protected void onResume(){super.onResume();Fullscreen.apply(this);}
  @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
  private class OdinAppBridge{
   // Der Webcode ruft window.Android.* auf - diese Namen muessen exakt passen.
@@ -156,7 +158,9 @@ public final class Fullscreen {
   try{
    a.getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);
    if(Build.VERSION.SDK_INT>=30){
-    a.getWindow().setDecorFitsSystemWindows(false);
+    // setDecorFitsSystemWindows(false) wurde entfernt: es legt den Inhalt UNTER
+    // die Statusleiste, wodurch die Kopfleiste verdeckt wird sobald die Leiste
+    // kurz wieder auftaucht.
     WindowInsetsController c=a.getWindow().getInsetsController();
     if(c!=null){c.hide(WindowInsets.Type.statusBars()|WindowInsets.Type.navigationBars());
      c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);}
@@ -175,6 +179,11 @@ package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
 public class GameWebViewActivity extends Activity {
  private WebView webView;
+ private TextView statusView;
+ // Zwischenspeicher fuer die vom Bootstrap angeforderten Skripte.
+ private volatile String godbotSrc;
+ private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
+ void setStatus(String msg){runOnUiThread(()->{if(statusView!=null)statusView.setText("GodBot: "+msg);});android.util.Log.i("ODIN_GODBOT",msg);}
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
@@ -188,13 +197,19 @@ public class GameWebViewActivity extends Activity {
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
- @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}@Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});webView.loadUrl("https://www.die-staemme.de/");}
+ @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
+ @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
+ @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);loadEnabledScripts(v);}});webView.loadUrl("https://www.die-staemme.de/");}
  private android.view.View buildHeader(String activeName){
   LinearLayout bar=new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL);
   bar.setBackgroundColor(0xFF2B2B2B); bar.setPadding(24,18,12,18); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+  LinearLayout col=new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
   TextView t=new TextView(this); t.setText(activeName.isEmpty()?"Die Stämme":activeName);
   t.setTextColor(0xFFFFFFFF); t.setTextSize(16f); t.setSingleLine(true);
-  bar.addView(t,new LinearLayout.LayoutParams(0,-2,1f));
+  col.addView(t);
+  statusView=new TextView(this); statusView.setText("GodBot: wartet"); statusView.setTextColor(0xFFBBBBBB);
+  statusView.setTextSize(11f); statusView.setSingleLine(true); col.addView(statusView);
+  bar.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
   Button back=new Button(this); back.setText("Odin"); back.setTextSize(12f); back.setAllCaps(false);
   back.setOnClickListener(x->finish());
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
@@ -229,9 +244,12 @@ public class GameWebViewActivity extends Activity {
  private void loadEnabledScripts(WebView v){ }
  private void executeGodBotWhenReady(WebView v){ }
  private void injectGodBot(WebView v){ }
+ private WebResourceResponse odinIntercept(WebResourceRequest r){ return null; }
+ @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
+ @Override protected void onResume(){super.onResume();Fullscreen.apply(this);}
  @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
  private void minimizeToApp(){finish();}
- private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
+ private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);} @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
  private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
 }
 EOF

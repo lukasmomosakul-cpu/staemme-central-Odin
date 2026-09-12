@@ -2,15 +2,15 @@
 set -euo pipefail
 # Odin GodBot loader.
 #
-# Wichtig: GodBot ist ~730 KB. Ein String dieser Groesse durch
-# WebView.evaluateJavascript zu schicken schlaegt still fehl (Binder-Limit).
-# Deshalb wird nur ein kleiner Bootstrap injiziert, der die Quelle per fetch()
-# aus der Seite heraus laedt. Nebeneffekt: das Gist wirkt immer sofort.
+# Zwei Grenzen bestimmen dieses Design:
+#  1. GodBot ist ~730 KB. So ein String durch WebView.evaluateJavascript zu
+#     schicken schlaegt still fehl (Binder-Limit).
+#  2. Die Spielseite kann per CSP (connect-src) ein fetch() auf fremde Hosts
+#     blockieren.
+# Deshalb wird das Skript ueber shouldInterceptRequest unter der GLEICHEN
+# Origin ausgeliefert (/__odin_godbot.js) und per <script src> eingebunden.
 TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
 test -n "$TARGET" || { echo 'GodBot loader: GameWebViewActivity.java not found'; exit 1; }
-# Der Bootstrap laedt GodBot zur Laufzeit per fetch(). Die Datei wird hier
-# trotzdem geholt: sie ist die Build-Zeit-Kontrolle, dass die Gist-URL
-# erreichbar ist, und der Workflow prueft ihre Existenz (test -s ...).
 mkdir -p app/src/main/assets
 curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
   'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js' \
@@ -40,45 +40,44 @@ js = r"""
  window.GM_addStyle=window.GM_addStyle||function(c){var x=document.createElement('style');x.textContent=c;(document.head||document.documentElement).appendChild(x);return x};
  window.GM_registerMenuCommand=window.GM_registerMenuCommand||function(){};
  window.GM_xmlhttpRequest=window.GM_xmlhttpRequest||function(o){try{var z={status:200,responseText:OdinNative.httpGet(String(o.url)),response:''};z.response=z.responseText;if(o.onload)o.onload(z);return z}catch(e){if(o.onerror)o.onerror({status:0,error:e});return{abort:function(){}}}};
- function uiFix(){try{var V='__VERSION__';var A=document.querySelectorAll('*');for(var i=0;i<A.length;i++){var e=A[i],t=(e.textContent||'').trim();if(/USERSCRIPT OK/i.test(t)&&e.children.length===0){e.remove();continue}if(/loader aktiv/i.test(t)){e.style.width='fit-content';e.style.maxWidth='calc(100% - 24px)';e.style.display='inline-flex';e.style.boxSizing='border-box';e.style.padding='6px 10px';e.style.margin='8px';e.style.borderRadius='8px';e.style.position='relative'}}}catch(e){}}
- fetch('__GIST__',{cache:'no-store'}).then(function(r){return r.text()}).then(function(txt){
-  if(!txt||txt.length<1000)throw new Error('source too short: '+(txt?txt.length:0));
-  var reqs=[],m,re=/^\s*\/\/\s*@require\s+(\S+)/gm;
-  while((m=re.exec(txt)))reqs.push(m[1]);
-  return Promise.all(reqs.map(function(u){
-   return fetch(u).then(function(r){return r.text()}).catch(function(){return ''});
-  })).then(function(deps){
-   for(var i=0;i<deps.length;i++){try{if(deps[i])(0,eval)(deps[i])}catch(e){console.error('ODIN_REQUIRE',e)}}
-   (0,eval)(txt);
-   uiFix();
-   console.log('ODIN_GODBOT_LOADED chars='+txt.length+' deps='+deps.length);
-  });
- }).catch(function(e){
-  window.__odinGodBot=0;
-  console.error('ODIN_GODBOT_FETCH_FAILED',e&&e.message?e.message:e);
- });
+ var n=__DEPCOUNT__, urls=[];
+ for(var i=0;i<n;i++)urls.push('/__odin_req_'+i+'.js');
+ urls.push('/__odin_godbot.js');
+ var done=0;
+ function add(i){
+  if(i>=urls.length){
+   try{var V='__VERSION__';var A=document.querySelectorAll('*');for(var k=0;k<A.length;k++){var e=A[k],t=(e.textContent||'').trim();if(/USERSCRIPT OK/i.test(t)&&e.children.length===0){e.remove();continue}if(/loader aktiv/i.test(t)){e.style.width='fit-content';e.style.maxWidth='calc(100% - 24px)';e.style.display='inline-flex';e.style.padding='6px 10px';e.style.margin='8px';e.style.borderRadius='8px'}}}catch(e){}
+   OdinNative.status('geladen ('+done+' Teile)');
+   return;
+  }
+  var sc=document.createElement('script');
+  sc.src=urls[i]; sc.async=false;
+  sc.onload=function(){done++;add(i+1)};
+  sc.onerror=function(){OdinNative.status('Fehler bei '+urls[i]);window.__odinGodBot=0};
+  (document.head||document.documentElement).appendChild(sc);
+ }
+ OdinNative.status('injiziere...');
+ add(0);
  return 'started';
-}catch(e){window.__odinGodBot=0;console.error('ODIN_GODBOT_BOOT',e);return 'error'}})();
-""".replace('__VERSION__', version).replace('__GIST__', GIST)
+}catch(e){window.__odinGodBot=0;try{OdinNative.status('Bootstrap-Fehler: '+e.message)}catch(_){}return 'error'}})();
+""".replace('__VERSION__', version)
 
 a = s.index(' private void loadEnabledScripts(WebView v){')
-b = s.index('\n @Override public void onBackPressed()', a)
+b = s.index('\n @Override public void onWindowFocusChanged', a)
 
 new = ''' private void loadEnabledScripts(WebView v){
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
-  // Tag haelt die URL, nicht nur ein Flag: sonst wird nach dem ersten
-  // Seitenaufruf nie wieder injiziert.
   if(u.equals(v.getTag(0x0D1A0001)))return; v.setTag(0x0D1A0001,u); v.setTag(0x0D1A0002,null);
-  android.util.Log.i("ODIN_GODBOT","page ready: "+u);
+  setStatus("Seite bereit");
   for(long d:new long[]{2000L,5000L,9000L})v.postDelayed(()->{if(!isFinishing()&&webView==v)executeGodBotWhenReady(v);},d);
  }
  private void executeGodBotWhenReady(WebView v){
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$"))return;
-  // Bei aktiver Zugangssperre wird bewusst nichts injiziert, damit die
-  // Captcha-Seite unveraendert bleibt. Marker aus dem echten Seitenquelltext.
+  // Bei aktiver Zugangssperre bewusst nichts injizieren, damit die Captcha-
+  // Seite unveraendert bleibt. Marker aus dem echten Seitenquelltext.
   v.evaluateJavascript("(function(){try{return !!document.getElementById('botprotection_quest')}catch(e){return false}})()",bp->{
    if("true".equals(bp)){
-    android.util.Log.i("ODIN_GODBOT","bot protection active - injection skipped");
+    setStatus("Zugangssperre aktiv - pausiert");
     v.postDelayed(()->{if(!isFinishing()&&webView==v)executeGodBotWhenReady(v);},15000L);
     return;
    }
@@ -86,16 +85,52 @@ new = ''' private void loadEnabledScripts(WebView v){
   });
  }
  private void injectGodBot(WebView v){
+  if(v.getTag(0x0D1A0002)!=null)return; v.setTag(0x0D1A0002,Boolean.TRUE);
+  new Thread(()->{
+   try{
+    setStatus("lade Quelle...");
+    String src=new OdinNative().httpGet(GODBOT_URL);
+    if(src==null||src.length()<1000){setStatus("Quelle zu kurz ("+(src==null?0:src.length())+")");return;}
+    java.util.List<String> deps=new java.util.ArrayList<>();
+    java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+(\\\\S+)").matcher(src);
+    while(m.find()){try{deps.add(new OdinNative().httpGet(m.group(1)));}catch(Exception ig){deps.add("");}}
+    godbotSrc=src; godbotDeps=deps;
+    setStatus("Quelle bereit ("+src.length()+" Z., "+deps.size()+" Abh.)");
+    final String js=''' + json.dumps(js) + '''.replace("__DEPCOUNT__",String.valueOf(deps.size()));
+    runOnUiThread(()->v.evaluateJavascript(js,r->android.util.Log.i("ODIN_GODBOT","bootstrap="+r)));
+   }catch(Exception e){
+    setStatus("Abruf fehlgeschlagen: "+e.getMessage());
+    v.setTag(0x0D1A0002,null);
+   }
+  }).start();
+ }
+ // Liefert die Skripte unter der Origin der Spielseite aus: umgeht CSP
+ // (connect-src) und das Groessenlimit von evaluateJavascript.
+ private WebResourceResponse odinIntercept(WebResourceRequest r){
   try{
-   if(v.getTag(0x0D1A0002)!=null)return; v.setTag(0x0D1A0002,Boolean.TRUE);
-   final String js=''' + json.dumps(js) + ''';
-   android.util.Log.i("ODIN_GODBOT","injecting bootstrap, "+js.length()+" chars");
-   v.evaluateJavascript(js,r->android.util.Log.i("ODIN_GODBOT","bootstrap returned "+r));
-  }catch(Exception e){android.util.Log.e("ODIN_GODBOT","inject_failed",e);}
+   String path=r.getUrl().getPath(); if(path==null)return null;
+   String body=null;
+   if(path.equals("/__odin_godbot.js"))body=godbotSrc;
+   else if(path.startsWith("/__odin_req_")){
+    int i=Integer.parseInt(path.substring(12,path.length()-3));
+    java.util.List<String> d=godbotDeps; if(i>=0&&i<d.size())body=d.get(i);
+   }
+   if(body==null)return null;
+   java.util.Map<String,String> h=new java.util.HashMap<>();
+   h.put("Access-Control-Allow-Origin","*"); h.put("Cache-Control","no-store");
+   WebResourceResponse res=new WebResourceResponse("application/javascript","utf-8",
+     new java.io.ByteArrayInputStream(body.getBytes("UTF-8")));
+   res.setStatusCodeAndReasonPhrase(200,"OK"); res.setResponseHeaders(h);
+   return res;
+  }catch(Exception e){android.util.Log.e("ODIN_GODBOT","intercept",e);return null;}
  }
 '''
 
+s = s.replace(' private WebView webView;\n private TextView statusView;',
+              ' private static final String GODBOT_URL="%s";\n private WebView webView;\n private TextView statusView;' % GIST, 1)
+a = s.index(' private void loadEnabledScripts(WebView v){')
+b = s.index('\n @Override public void onWindowFocusChanged', a)
 s = s[:a] + new + s[b:]
 p.write_text(s)
-print('GodBot loader: bootstrap injected (%d chars of JS)' % len(js))
+print('GodBot loader: interception mode, bootstrap %d chars' % len(js))
 PY
