@@ -30,7 +30,10 @@ ui="""(function(){try{var V='VERSION';function f(){var A=document.querySelectorA
 qUi=json.dumps(ui)
 new=f''' private void loadEnabledScripts(WebView v){{
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
-  if(v.getTag(0x0D1A0001)!=null)return; v.setTag(0x0D1A0001,Boolean.TRUE);
+  // Frueher haftete hier ein Boolean an der WebView - nach dem ersten game.php
+  // wurde nie wieder injiziert. Jetzt pro Seitenaufruf.
+  if(u.equals(v.getTag(0x0D1A0001)))return; v.setTag(0x0D1A0001,u); v.setTag(0x0D1A0002,null);
+  android.util.Log.i("ODIN_GODBOT","page ready, scheduling injection: "+u);
   for(long d:new long[]{{2500L,5000L,9000L}})v.postDelayed(()->{{if(!isFinishing()&&webView==v)executeGodBotWhenReady(v);}},d);
  }}
  private void executeGodBotWhenReady(WebView v){{
@@ -55,13 +58,15 @@ new=f''' private void loadEnabledScripts(WebView v){{
     // sofort, ohne neues APK.
     try{{src=new OdinNative().httpGet("{GIST}");}}catch(Exception e){{android.util.Log.w("ODIN_GODBOT","gist fetch failed, using bundled copy",e);}}
     if(src==null||src.trim().isEmpty()){{
+     android.util.Log.i("ODIN_GODBOT","fallback to bundled copy");
      try{{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("godbot.user.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\\n');r.close();src=b.toString();}}catch(Exception e){{android.util.Log.e("ODIN_GODBOT","no source available",e);return;}}
     }}
     final String source=src;
+    android.util.Log.i("ODIN_GODBOT","source loaded, "+source.length()+" chars");
     java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+([^\\\\s]+)").matcher(source);java.util.ArrayList<String> reqs=new java.util.ArrayList<>();while(m.find())reqs.add(m.group(1));
     final String qSrc=JSONObject.quote(source);
    final String shim=JSONObject.quote("(function(){{if(window.__odinGMShim)return;window.__odinGMShim=1;var p='odin_gm_';function g(k,d){{try{{var x=localStorage.getItem(p+k);return x===null?d:JSON.parse(x)}}catch(e){{return d}}}}function s(k,v){{try{{localStorage.setItem(p+k,JSON.stringify(v))}}catch(e){{}}}}window.unsafeWindow=window;window.GM_info=window.GM_info||{{script:{{name:'GodBot',version:'{version}'}}}};window.GM_getValue=window.GM_getValue||g;window.GM_setValue=window.GM_setValue||s;window.GM_deleteValue=window.GM_deleteValue||function(k){{try{{localStorage.removeItem(p+k)}}catch(e){{}}}};window.GM_listValues=window.GM_listValues||function(){{var a=[];try{{for(var i=0;i<localStorage.length;i++){{var k=localStorage.key(i);if(k&&k.indexOf(p)===0)a.push(k.slice(p.length))}}}}catch(e){{}}return a}};window.GM_addStyle=window.GM_addStyle||function(c){{var x=document.createElement('style');x.textContent=c;(document.head||document.documentElement).appendChild(x);return x}};window.GM_registerMenuCommand=window.GM_registerMenuCommand||function(){{}};window.GM_xmlhttpRequest=window.GM_xmlhttpRequest||function(o){{try{{var z={{status:200,responseText:OdinNative.httpGet(String(o.url)),response:''}};z.response=z.responseText;if(o.onload)o.onload(z);return z}}catch(e){{if(o.onerror)o.onerror({{status:0,error:e}});return{{abort:function(){{}}}}}}}};}})();");
-   try{{java.util.ArrayList<String>d=new java.util.ArrayList<>();for(String x:reqs)try{{d.add(new OdinNative().httpGet(x));}}catch(Exception ignored){{}}StringBuilder z=new StringBuilder("[");for(int i=0;i<d.size();i++){{if(i>0)z.append(',');z.append(JSONObject.quote(d.get(i)));}}z.append(']');final String qDeps=z.toString();runOnUiThread(()->{{String js="try{{new Function("+shim+")();var d="+qDeps+";for(var i=0;i<d.length;i++)try{{(0,eval)(d[i])}}catch(e){{console.error('ODIN_REQUIRE',e)}}(0,eval)("+qSrc+");"+{qUi}+"}}catch(e){{console.error('ODIN_GODBOT_EVAL_ERROR',e&&e.stack?e.stack:e)}}";v.evaluateJavascript(js,null);}});}}catch(Exception e){{android.util.Log.e("ODIN_GODBOT","dependency_failed",e);}}}}).start();
+   try{{java.util.ArrayList<String>d=new java.util.ArrayList<>();for(String x:reqs)try{{d.add(new OdinNative().httpGet(x));}}catch(Exception ignored){{}}StringBuilder z=new StringBuilder("[");for(int i=0;i<d.size();i++){{if(i>0)z.append(',');z.append(JSONObject.quote(d.get(i)));}}z.append(']');final String qDeps=z.toString();runOnUiThread(()->{{String js="try{{new Function("+shim+")();var d="+qDeps+";for(var i=0;i<d.length;i++)try{{(0,eval)(d[i])}}catch(e){{console.error('ODIN_REQUIRE',e)}}(0,eval)("+qSrc+");"+{qUi}+"}}catch(e){{console.error('ODIN_GODBOT_EVAL_ERROR',e&&e.stack?e.stack:e)}}";android.util.Log.i("ODIN_GODBOT","evaluating, deps="+d.size());v.evaluateJavascript(js,r2->android.util.Log.i("ODIN_GODBOT","eval returned "+r2));}});}}catch(Exception e){{android.util.Log.e("ODIN_GODBOT","dependency_failed",e);}}}}).start();
   }}catch(Exception e){{android.util.Log.e("ODIN_GODBOT","inject_failed",e);}}
  }}
 '''

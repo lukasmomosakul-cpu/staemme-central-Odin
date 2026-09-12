@@ -6,17 +6,18 @@ declare global {
   interface Window {
     Android?: {
       openGame?: (accountId: string, username?: string, password?: string, scriptsJson?: string) => void;
+      openGameWithAccounts?: (accountId: string, username?: string, accountsJson?: string) => void;
     };
   }
 }
 
-type Props = { accountId: string; username?: string };
+type Props = { accountId: string; username?: string; accounts?: { name: string }[] };
 type ScriptEntry = { id:string; name:string; source:string; enabled:boolean; type:'Tampermonkey'|'Gist' };
 
 const GAME_URL = 'https://www.die-staemme.de/';
 const SCRIPTS_KEY = 'odin-script-library';
 
-export default function GameNativeButton({ accountId, username = '' }: Props) {
+export default function GameNativeButton({ accountId, username = '', accounts = [] }: Props) {
   const openGame = async () => {
     localStorage.setItem('odin-selected-game-account', accountId);
 
@@ -33,6 +34,13 @@ export default function GameNativeButton({ accountId, username = '' }: Props) {
       // Keep opening the game even if local settings cannot be read.
     }
 
+    // Fussleiste im Spiel zeigt alle Accounts des Teams.
+    const accountsJson = JSON.stringify(accounts.map((a) => ({ name: a.name })));
+
+    if (window.Android?.openGameWithAccounts) {
+      window.Android.openGameWithAccounts(accountId, username, accountsJson);
+      return;
+    }
     if (window.Android?.openGame) {
       // Kein Passwort: Anmeldung erfolgt bewusst manuell im Spiel.
       window.Android.openGame(accountId, username, '', scriptsJson);
