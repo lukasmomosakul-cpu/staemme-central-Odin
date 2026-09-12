@@ -646,7 +646,6 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
   Notification n=new Notification.Builder(c,OdinService.CH_WAKE)
     .setContentTitle("Rausstellen fällig").setContentText(info)
-    .setSilent(true)
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setCategory(Notification.CATEGORY_ALARM)
     .setFullScreenIntent(pi,true)     // oeffnet direkt, auch gesperrt
