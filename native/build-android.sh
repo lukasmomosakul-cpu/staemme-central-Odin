@@ -333,47 +333,57 @@ public final class OdinFloat {
    if(origParent!=null)origParent.removeView(web);
    held=web;
 
+   // Die WebView behaelt ihre volle Layoutbreite und wird nur SKALIERT
+   // dargestellt. Wuerde stattdessen das Fenster die WebView verkleinern,
+   // baute die Spielseite auf wenige hundert Pixel Breite um und GodBots
+   // Selektoren griffen auf ein anderes Layout zu.
+   final int LAY_W=420, LAY_H=740;
+   FrameLayout clip=new FrameLayout(app); clip.setBackgroundColor(0xFF000000);
+   FrameLayout.LayoutParams wlp=new FrameLayout.LayoutParams(LAY_W,LAY_H);
+   web.setLayoutParams(wlp);
+   web.setPivotX(0f); web.setPivotY(0f);
+   clip.addView(web);
+
    LinearLayout box=new LinearLayout(app); box.setOrientation(LinearLayout.VERTICAL);
    box.setBackgroundColor(0xFF000000);
-   LinearLayout bar=new LinearLayout(app); bar.setBackgroundColor(0xFF2B2B2B);
-   bar.setPadding(12,4,4,4); bar.setGravity(Gravity.CENTER_VERTICAL);
-   TextView t=new TextView(app); t.setText("Odin läuft"); t.setTextColor(0xFFFFFFFF); t.setTextSize(10f);
-   bar.addView(t,new LinearLayout.LayoutParams(0,-2,1f));
-   Button sz=new Button(app); sz.setText("⤢"); sz.setTextSize(8f); sz.setAllCaps(false);
-   sz.setPadding(6,0,6,0); bar.addView(sz,new LinearLayout.LayoutParams(-2,-2));
-   Button up=new Button(app); up.setText("▲"); up.setTextSize(8f); up.setAllCaps(false);
-   up.setPadding(6,0,6,0); bar.addView(up,new LinearLayout.LayoutParams(-2,-2));
+   // Die ganze Leiste ist Griff UND Schalter: ziehen verschiebt, tippen holt
+   // die App zurueck. So bleibt bei kleiner Darstellung nichts unerreichbar.
+   TextView bar=new TextView(app); bar.setText("Odin ▲");
+   bar.setTextColor(0xFFFFFFFF); bar.setTextSize(9f); bar.setBackgroundColor(0xFF2B2B2B);
+   bar.setGravity(Gravity.CENTER); bar.setPadding(4,3,4,3);
    box.addView(bar,new LinearLayout.LayoutParams(-1,-2));
-   box.addView(web,new LinearLayout.LayoutParams(-1,0,1f));
+   box.addView(clip,new LinearLayout.LayoutParams(-1,0,1f));
 
    int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                                      :WindowManager.LayoutParams.TYPE_PHONE;
-   // Klein genug, um kaum zu stoeren. Sichtbar muss es bleiben, sonst
-   // drosselt Chromium die Zeitgeber wieder.
-   final int[] sizes={160,120, 300,240, 520,420}; final int[] step={0};
-   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(sizes[0],sizes[1],type,
+   // Sichtbarkeit entscheidet ueber die Drosselung, nicht die Groesse - das
+   // Fenster darf also klein sein, nur nicht unsichtbar oder null.
+   final int WIN_W=140, WIN_H=250;
+   float scale=Math.min((float)WIN_W/LAY_W,(float)(WIN_H-18)/LAY_H);
+   web.setScaleX(scale); web.setScaleY(scale);
+   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WIN_W,WIN_H,type,
      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.OPAQUE);
    lp.gravity=Gravity.TOP|Gravity.START; lp.x=16; lp.y=180;
    wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
 
    bar.setOnTouchListener(new View.OnTouchListener(){
-    float dx,dy;
+    float dx,dy,sx,sy; boolean moved;
     @Override public boolean onTouch(View v,MotionEvent e){
      switch(e.getAction()){
-      case MotionEvent.ACTION_DOWN: dx=lp.x-e.getRawX(); dy=lp.y-e.getRawY(); return true;
+      case MotionEvent.ACTION_DOWN:
+       dx=lp.x-e.getRawX(); dy=lp.y-e.getRawY(); sx=e.getRawX(); sy=e.getRawY(); moved=false; return true;
       case MotionEvent.ACTION_MOVE:
        lp.x=(int)(e.getRawX()+dx); lp.y=(int)(e.getRawY()+dy);
+       if(Math.abs(e.getRawX()-sx)>10||Math.abs(e.getRawY()-sy)>10)moved=true;
        try{wm.updateViewLayout(frame,lp);}catch(Exception ig){} return true;
+      case MotionEvent.ACTION_UP:
+       if(!moved&&onRestore!=null)onRestore.run();
+       return true;
      }
      return false;
     }
    });
-   sz.setOnClickListener(x->{
-    step[0]=(step[0]+1)%3;
-    lp.width=sizes[step[0]*2]; lp.height=sizes[step[0]*2+1];
-    try{wm.updateViewLayout(frame,lp);}catch(Exception ig){}
-   });
-   up.setOnClickListener(x->{ if(onRestore!=null)onRestore.run(); });
+   // Kein eigener Knopf mehr: Tippen auf die Leiste maximiert.
 
    wm.addView(box,lp); frame=box;
    return true;
