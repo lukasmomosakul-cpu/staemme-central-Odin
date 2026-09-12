@@ -57,7 +57,7 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-sdk android:minSdkVersion="26" />
     <application android:theme="@style/AppTheme" android:label="Odin" android:usesCleartextTraffic="true">
-        <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
         <activity android:name=".GameWebViewActivity" android:exported="false" />
         <service android:name=".OdinService" android:exported="false"
             android:foregroundServiceType="dataSync" />
@@ -83,6 +83,7 @@ import android.annotation.SuppressLint; import android.app.Activity; import andr
 public class MainActivity extends Activity {
  private WebView webView;
  private static final String ODIN_URL="https://staemme-central-odin.vercel.app/";
+ private static final String PREFS="odin", LAST_URL="lastOdinUrl";
  static String SUPA_URL="",SUPA_KEY="",SUPA_TOKEN="",SUPA_TEAM="";
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){
   super.onCreate(b); Fullscreen.apply(this);
@@ -107,7 +108,18 @@ public class MainActivity extends Activity {
     return false;
    }
   });
-  webView.loadUrl(ODIN_URL);
+  // Dort weitermachen, wo man war - nicht wieder auf der Anmeldeseite landen.
+  String last=getSharedPreferences(PREFS,MODE_PRIVATE).getString(LAST_URL,ODIN_URL);
+  if(last==null||!last.startsWith("https://staemme-central-odin"))last=ODIN_URL;
+  if(last.contains("/login"))last=ODIN_URL;
+  webView.loadUrl(last);
+ }
+ @Override protected void onPause(){
+  super.onPause();
+  try{ String u=webView.getUrl();
+   if(u!=null&&!u.contains("/login"))
+    getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString(LAST_URL,u).apply();
+  }catch(Exception ignored){}
  }
  private void openGameActivity(String accountId,String username,String accountsJson){
   Intent i=new Intent(this,GameWebViewActivity.class);

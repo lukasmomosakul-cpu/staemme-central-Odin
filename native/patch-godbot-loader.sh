@@ -202,7 +202,10 @@ new = ''' private void loadEnabledScripts(WebView v){
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
   if(u.equals(v.getTag(0x0D1A0001)))return; v.setTag(0x0D1A0001,u); v.setTag(0x0D1A0002,null);
   setStatus("Seite bereit");
-  for(long d:new long[]{2000L,5000L,9000L})v.postDelayed(()->{if(!isFinishing()&&webView==v)executeGodBotWhenReady(v);},d);
+  // Dichter Takt am Anfang: die Bereitschaftspruefung sorgt dafuer, dass zu
+  // fruehe Versuche folgenlos bleiben.
+  for(long d:new long[]{250L,600L,1200L,2500L,5000L,9000L})
+   v.postDelayed(()->{if(!isFinishing()&&webView==v)executeGodBotWhenReady(v);},d);
  }
  private void executeGodBotWhenReady(WebView v){
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$"))return;
@@ -221,12 +224,20 @@ new = ''' private void loadEnabledScripts(WebView v){
   if(v.getTag(0x0D1A0002)!=null)return; v.setTag(0x0D1A0002,Boolean.TRUE);
   new Thread(()->{
    try{
-    setStatus("lade Quelle...");
-    String src=new OdinNative().httpGet(GODBOT_URL);
-    if(src==null||src.length()<1000){setStatus("Quelle zu kurz ("+(src==null?0:src.length())+")");return;}
-    java.util.List<String> deps=new java.util.ArrayList<>();
-    java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+(\\\\S+)").matcher(src);
-    while(m.find()){try{deps.add(new OdinNative().httpGet(m.group(1)));}catch(Exception ig){deps.add("");}}
+    // Frueher wurden bei JEDEM Seitenwechsel 2,88 MB neu geladen - das waren
+    // die 2-3 Sekunden Verzoegerung. Einmal je Sitzung reicht.
+    String src=godbotSrc;
+    if(src==null||src.length()<1000){
+     setStatus("lade Quelle...");
+     src=new OdinNative().httpGet(GODBOT_URL);
+     if(src==null||src.length()<1000){setStatus("Quelle zu kurz ("+(src==null?0:src.length())+")");return;}
+    }
+    java.util.List<String> deps=godbotDeps;
+    if(godbotSrc==null||deps.isEmpty()){
+     deps=new java.util.ArrayList<>();
+     java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+(\\\\S+)").matcher(src);
+     while(m.find()){try{deps.add(new OdinNative().httpGet(m.group(1)));}catch(Exception ig){deps.add("");}}
+    }
     godbotSrc=src; godbotDeps=deps;
     setStatus("Quelle bereit ("+src.length()+" Z., "+deps.size()+" Abh.)");
     final String js=''' + json.dumps(js) + '''.replace("__DEPCOUNT__",String.valueOf(deps.size()));
