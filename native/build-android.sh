@@ -50,6 +50,7 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-sdk android:minSdkVersion="26" />
     <application android:theme="@style/AppTheme" android:label="Odin" android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
@@ -176,6 +177,65 @@ public final class Fullscreen {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinBubble.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.Context; import android.content.Intent; import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable; import android.os.Build; import android.provider.Settings;
+import android.view.Gravity; import android.view.MotionEvent; import android.view.View; import android.view.WindowManager;
+import android.widget.TextView;
+// Frei bewegbares Overlay-Icon. Haengt am Application-Context, damit es die
+// Activity ueberlebt; es verschwindet, wenn der Prozess endet.
+public final class OdinBubble {
+ private OdinBubble(){}
+ private static View view; private static WindowManager wm;
+ public static boolean allowed(Context c){ return Settings.canDrawOverlays(c); }
+ public static void requestPermission(Context c){
+  Intent i=new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+    android.net.Uri.parse("package:"+c.getPackageName()));
+  i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); c.startActivity(i);
+ }
+ public static synchronized void show(Context ctx){
+  final Context app=ctx.getApplicationContext();
+  if(view!=null||!allowed(app))return;
+  wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
+  TextView b=new TextView(app); b.setText("O"); b.setTextColor(Color.WHITE);
+  b.setTextSize(22f); b.setGravity(Gravity.CENTER);
+  GradientDrawable g=new GradientDrawable(); g.setShape(GradientDrawable.OVAL);
+  g.setColor(0xFF2B2B2B); g.setStroke(3,0xFFFFFFFF); b.setBackground(g);
+  int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                                    :WindowManager.LayoutParams.TYPE_PHONE;
+  final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(150,150,type,
+    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, android.graphics.PixelFormat.TRANSLUCENT);
+  lp.gravity=Gravity.TOP|Gravity.START; lp.x=24; lp.y=300;
+  b.setOnTouchListener(new View.OnTouchListener(){
+   float dx,dy,sx,sy; boolean moved;
+   @Override public boolean onTouch(View v,MotionEvent e){
+    switch(e.getAction()){
+     case MotionEvent.ACTION_DOWN:
+      dx=lp.x-e.getRawX(); dy=lp.y-e.getRawY(); sx=e.getRawX(); sy=e.getRawY(); moved=false; return true;
+     case MotionEvent.ACTION_MOVE:
+      lp.x=(int)(e.getRawX()+dx); lp.y=(int)(e.getRawY()+dy);
+      if(Math.abs(e.getRawX()-sx)>12||Math.abs(e.getRawY()-sy)>12)moved=true;
+      try{wm.updateViewLayout(v,lp);}catch(Exception ig){} return true;
+     case MotionEvent.ACTION_UP:
+      if(!moved){ // Tippen holt die App zurueck
+       Intent i=new Intent(app,MainActivity.class);
+       i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+       app.startActivity(i); hide();
+      }
+      return true;
+    }
+    return false;
+   }
+  });
+  try{ wm.addView(b,lp); view=b; }catch(Exception e){ view=null; }
+ }
+ public static synchronized void hide(){
+  try{ if(view!=null&&wm!=null)wm.removeView(view); }catch(Exception ignored){}
+  view=null;
+ }
+}
+EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
@@ -216,8 +276,14 @@ public class GameWebViewActivity extends Activity {
   back.setOnClickListener(x->finish());
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
   Button min=new Button(this); min.setText("Minimieren"); min.setTextSize(12f); min.setAllCaps(false);
-  // moveTaskToBack legt die App in den Hintergrund, ohne die Spielsitzung zu beenden.
-  min.setOnClickListener(x->moveTaskToBack(true));
+  min.setOnClickListener(x->{
+   if(!OdinBubble.allowed(this)){
+    setStatus("Bitte 'Über anderen Apps anzeigen' erlauben");
+    OdinBubble.requestPermission(this); return;
+   }
+   OdinBubble.show(this);
+   moveTaskToBack(true);
+  });
   bar.addView(min,new LinearLayout.LayoutParams(-2,-2));
   return bar;
  }
@@ -248,7 +314,7 @@ public class GameWebViewActivity extends Activity {
  private void injectGodBot(WebView v){ }
  private WebResourceResponse odinIntercept(WebResourceRequest r){ return null; }
  @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
- @Override protected void onResume(){super.onResume();Fullscreen.apply(this);}
+ @Override protected void onResume(){super.onResume();Fullscreen.apply(this);OdinBubble.hide();}
  @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
  private void minimizeToApp(){finish();}
  private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);} @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
