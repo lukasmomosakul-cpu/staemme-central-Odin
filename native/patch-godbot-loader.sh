@@ -59,13 +59,20 @@ js = r"""
   window.__odinDefineFix=1;
   var _odp=Object.defineProperty;
   Object.defineProperty=function(o,prop,desc){
+   // Reine Getter-Bruecken auf window uebergehen. GodBot baut sie so:
+   //   const globalWin = typeof unsafeWindow!=='undefined' ? unsafeWindow : window;
+   //   Object.defineProperty(window,'game_data',{get:()=>globalWin.game_data||null});
+   // Unter Tampermonkey ist window die Sandbox und unsafeWindow die Seite.
+   // Hier sind beide dasselbe Objekt, der Getter ruft sich also selbst auf
+   // -> 'Maximum call stack size exceeded'. Die Spielobjekte liegen ohnehin
+   // schon auf window, die Bruecke ist im Seitenkontext ueberfluessig.
+   if(o===window && desc && typeof desc.get==='function' && !desc.set){
+    try{if(!window.__odinSkipped)window.__odinSkipped=[];window.__odinSkipped.push(prop);}catch(e0){}
+    return o;
+   }
    try{ return _odp(o,prop,desc); }
    catch(err){
     if(o!==window)throw err;
-    try{
-     var val = desc && (('value' in desc) ? desc.value : (desc.get ? desc.get() : undefined));
-     if(val!==undefined) o[prop]=val;
-    }catch(e2){}
     try{OdinNative.status('Bruecke uebersprungen: '+prop);}catch(e3){}
     return o;
    }
@@ -81,6 +88,10 @@ js = r"""
    // window.godbotCommands wird von GodBot gesetzt - damit laesst sich
    // 'Datei geladen' von 'Skript wirklich durchgelaufen' unterscheiden.
    function verdict(){try{
+    if(window.__odinSkipped&&window.__odinSkipped.length){
+     OdinNative.status('Bruecken uebergangen: '+window.__odinSkipped.join(', '));
+     window.__odinSkipped=[];
+    }
     if(window.__odinErrMsg){OdinNative.status(window.__odinErrMsg);return;}
     if(typeof window.godbotCommands==='function'){OdinNative.status('aktiv ('+done+' Teile)');return;}
     // Kein Fehler geworfen: das Skript lief durch, nur der Marker fehlt.
