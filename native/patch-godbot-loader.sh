@@ -127,11 +127,16 @@ js = r"""
  // sich der Geraeteabgleich, ohne GodBot selbst anzufassen. Der Ingame-
  // Notizblock wird damit als Transportweg ueberfluessig.
  var SYNC_PREFIX=/^(tw_|godbot_|gb_)/;
+ // tw_console_log ist ein reines Fehlerprotokoll und war mit ~288 KB der
+ // groesste Posten im Abgleich - er wird bei jeder Aenderung mitgeschickt,
+ // ohne dass ihn jemand liest. Ebenso der Zwischenspeicher fuer Produktion.
+ var SYNC_AUS=/^(tw_console_log|tw_debug_log)$/;
+ function sollAbgleichen(k){ return SYNC_PREFIX.test(k) && !SYNC_AUS.test(k); }
  try{
   if(OdinNative.syncReady()){
    var loaded=JSON.parse(OdinNative.settingsLoad()||'{}');
    var applied=0;
-   for(var k in loaded){ if(!SYNC_PREFIX.test(k))continue;
+   for(var k in loaded){ if(!sollAbgleichen(k))continue;
     try{ if(localStorage.getItem(k)!==loaded[k]){localStorage.setItem(k,loaded[k]);applied++;} }catch(e){}
    }
    OdinNative.status('Abgleich: '+applied+' uebernommen');
@@ -153,7 +158,7 @@ js = r"""
   }
   localStorage.setItem=function(k,v){
    origSet(k,v);
-   try{ if(SYNC_PREFIX.test(k)){ pending[k]=String(v);
+   try{ if(sollAbgleichen(k)){ pending[k]=String(v);
     if(timer)clearTimeout(timer); timer=setTimeout(flush,4000); } }catch(e){}
   };
   window.addEventListener('pagehide',flush);
