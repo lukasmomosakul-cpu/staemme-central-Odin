@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import VersionUpdater from '../../components/VersionUpdater';
+import OdinShell from '../../components/OdinShell';
 
 export default function EinstellungenSeite() {
   const [email, setEmail] = useState('');
@@ -27,37 +27,25 @@ export default function EinstellungenSeite() {
   };
 
   return (
-    <div className="shell">
-      <main className="main" style={{ paddingBottom: 90 }}>
-        <header className="top" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h1 className="title" style={{ margin: 0 }}>Einstellungen</h1>
-          <VersionUpdater />
-        </header>
+    <OdinShell titel="Einstellungen" aktiv="Einstellungen">
+      <section className="section card">
+        <h2>Konto</h2>
+        <div className="muted">{email || 'nicht angemeldet'}</div>
+        {team && <div className="muted" style={{ marginTop: 4 }}>{team}</div>}
+        <div style={{ marginTop: 12 }}>
+          <button type="button" onClick={abmelden}>Abmelden</button>
+        </div>
+      </section>
 
-        <section className="section card">
-          <h2>Konto</h2>
-          <div className="muted">{email || 'nicht angemeldet'}</div>
-          {team && <div className="muted" style={{ marginTop: 4 }}>{team}</div>}
-          <div style={{ marginTop: 12 }}>
-            <button type="button" onClick={abmelden}>Abmelden</button>
-          </div>
-        </section>
-
-        <section className="section card">
-          <h2>Bereiche</h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <a href="/">Dashboard und Accounts</a>
-            <a href="/godbot/">GodBot-Übersicht</a>
-            <a href="/team/">Team</a>
-            <a href="/scripts/">Scripts</a>
-          </div>
-        </section>
-      </main>
-
-      <nav className="bottomNav" aria-label="Navigation">
-        <a href="/protokoll/"><span>📋</span><span>Protokoll</span></a>
-        <a className="active" href="/einstellungen/"><span>⚙</span><span>Einstellungen</span></a>
-      </nav>
-    </div>
+      <section className="section card">
+        <h2>Bereiche</h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <a href="/">Dashboard und Accounts</a>
+          <a href="/godbot/">GodBot-Übersicht</a>
+          <a href="/team/">Team</a>
+          <a href="/scripts/">Scripts</a>
+        </div>
+      </section>
+    </OdinShell>
   );
 }

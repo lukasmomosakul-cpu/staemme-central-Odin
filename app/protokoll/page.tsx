@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import OdinShell from '../../components/OdinShell';
 
 type Ereignis = {
   id: string;
@@ -91,66 +92,58 @@ export default function ProtokollSeite() {
   const fehler = eintraege.filter((e) => e.level === 'FEHLER').length;
 
   return (
-    <div className="shell">
-      <main className="main" style={{ paddingBottom: 90 }}>
-        <header className="top" style={{ position: 'sticky', top: 0, zIndex: 30, background: 'var(--bg,#fff)', borderBottom: '1px solid rgba(0,0,0,.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h1 className="title" style={{ margin: 0 }}>Protokoll</h1>
-          {fehler > 0 && <span style={{ color: FARBE.FEHLER, fontSize: 13 }}>{fehler} Fehler</span>}
-        </header>
+    <OdinShell
+      titel="Protokoll"
+      aktiv="Protokoll"
+      rechts={fehler > 0 ? <span style={{ color: FARBE.FEHLER, fontSize: 13 }}>{fehler} Fehler</span> : null}
+    >
+      <section className="section card">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={stufe} onChange={(e) => setStufe(e.target.value)} aria-label="Stufe">
+            <option value="alle">alle Stufen</option>
+            <option value="FEHLER">nur Fehler</option>
+            <option value="WICHTIG">nur Wichtig</option>
+            <option value="info">nur Info</option>
+          </select>
+          <select value={bereich} onChange={(e) => setBereich(e.target.value)} aria-label="Bereich">
+            <option value="alle">alle Bereiche</option>
+            {bereiche.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <input value={suche} onChange={(e) => setSuche(e.target.value)} placeholder="Text suchen" style={{ flex: '1 1 140px', minWidth: 120 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+          <button type="button" onClick={() => exportieren('txt')}>Export .txt</button>
+          <button type="button" onClick={() => exportieren('json')}>Export .json</button>
+          <button type="button" onClick={kopieren}>Kopieren</button>
+          <button type="button" onClick={laden}>↻</button>
+          <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+            automatisch
+          </label>
+        </div>
+        <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+          {gefiltert.length} von {eintraege.length} Einträgen (Obergrenze {GRENZE})
+          {stand && ` · Stand ${stand}`}
+        </div>
+      </section>
 
-        <section className="section card">
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select value={stufe} onChange={(e) => setStufe(e.target.value)} aria-label="Stufe">
-              <option value="alle">alle Stufen</option>
-              <option value="FEHLER">nur Fehler</option>
-              <option value="WICHTIG">nur Wichtig</option>
-              <option value="info">nur Info</option>
-            </select>
-            <select value={bereich} onChange={(e) => setBereich(e.target.value)} aria-label="Bereich">
-              <option value="alle">alle Bereiche</option>
-              {bereiche.map((b) => <option key={b} value={b}>{b}</option>)}
-            </select>
-            <input value={suche} onChange={(e) => setSuche(e.target.value)} placeholder="Text suchen" style={{ flex: '1 1 140px', minWidth: 120 }} />
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-            <button type="button" onClick={() => exportieren('txt')}>Export .txt</button>
-            <button type="button" onClick={() => exportieren('json')}>Export .json</button>
-            <button type="button" onClick={kopieren}>Kopieren</button>
-            <button type="button" onClick={laden}>↻</button>
-            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-              automatisch
-            </label>
-          </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-            {gefiltert.length} von {eintraege.length} Einträgen (Obergrenze {GRENZE})
-            {stand && ` · Stand ${stand}`}
-          </div>
-        </section>
-
-        <section className="section card">
-          {laedt && <p className="muted">Lade…</p>}
-          {!laedt && gefiltert.length === 0 && <p className="muted">Keine Einträge.</p>}
-          {gefiltert.map((e) => (
-            <div key={e.id} style={{ padding: '7px 0', borderBottom: '1px solid rgba(0,0,0,.06)', fontSize: 13 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                <strong style={{ color: FARBE[e.level] ?? FARBE.info, fontSize: 11 }}>{e.level}</strong>
-                <span className="muted" style={{ fontSize: 11 }}>{zeit(e.created_at)}</span>
-                <span className="muted" style={{ fontSize: 11 }}>· {e.bereich}</span>
-                {e.account_id && namen[e.account_id] && (
-                  <span className="muted" style={{ fontSize: 11 }}>· {namen[e.account_id]}</span>
-                )}
-              </div>
-              <div style={{ wordBreak: 'break-word' }}>{e.message}</div>
+      <section className="section card">
+        {laedt && <p className="muted">Lade…</p>}
+        {!laedt && gefiltert.length === 0 && <p className="muted">Keine Einträge.</p>}
+        {gefiltert.map((e) => (
+          <div key={e.id} style={{ padding: '7px 0', borderBottom: '1px solid rgba(0,0,0,.06)', fontSize: 13 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <strong style={{ color: FARBE[e.level] ?? FARBE.info, fontSize: 11 }}>{e.level}</strong>
+              <span className="muted" style={{ fontSize: 11 }}>{zeit(e.created_at)}</span>
+              <span className="muted" style={{ fontSize: 11 }}>· {e.bereich}</span>
+              {e.account_id && namen[e.account_id] && (
+                <span className="muted" style={{ fontSize: 11 }}>· {namen[e.account_id]}</span>
+              )}
             </div>
-          ))}
-        </section>
-      </main>
-
-      <nav className="bottomNav" aria-label="Navigation">
-        <a className="active" href="/protokoll/"><span>📋</span><span>Protokoll</span></a>
-        <a href="/einstellungen/"><span>⚙</span><span>Einstellungen</span></a>
-      </nav>
-    </div>
+            <div style={{ wordBreak: 'break-word' }}>{e.message}</div>
+          </div>
+        ))}
+      </section>
+    </OdinShell>
   );
 }
