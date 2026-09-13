@@ -1166,10 +1166,20 @@ public class GameWebViewActivity extends Activity {
   decke.setGravity(android.view.Gravity.CENTER);
   decke.setBackgroundColor(0xFF000000);
   TextView hin=new TextView(this);
-  hin.setText("⚔  Odin läuft\n\nTippen zum Aufwecken");
-  hin.setTextColor(0xFF202020); hin.setTextSize(13f);
+  hin.setText("⚔\n\nODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nTippen zum Aufwecken");
+  // Vorher fast schwarz auf schwarz - dann sieht der gedimmte Bildschirm aus
+  // wie ein ausgeschalteter, und man sperrt beim Entsperrversuch erst recht.
+  // Bei Helligkeit 0 ist auch ein helleres Grau noch dezent.
+  hin.setTextColor(0xFF9A9A9A); hin.setTextSize(15f);
+  hin.setLineSpacing(0f,1.3f);
   hin.setGravity(android.view.Gravity.CENTER);
   decke.addView(hin);
+  // Langsames Pulsieren: ein stehendes Bild koennte ein Standbild sein, eine
+  // Bewegung zeigt eindeutig, dass das Geraet laeuft.
+  android.animation.ObjectAnimator puls=android.animation.ObjectAnimator.ofFloat(hin,"alpha",0.25f,1f);
+  puls.setDuration(1800); puls.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+  puls.setRepeatCount(android.animation.ValueAnimator.INFINITE); puls.start();
+  decke.setTag(puls);
   decke.setOnClickListener(v->dimmenAus());
   dimRahmen.addView(decke,new FrameLayout.LayoutParams(-1,-1));
   dimDecke=decke;
@@ -1181,6 +1191,9 @@ public class GameWebViewActivity extends Activity {
  }
  private void dimmenAus(){
   if(dimDecke==null)return;
+  try{ Object a=dimDecke.getTag();
+       if(a instanceof android.animation.ObjectAnimator)((android.animation.ObjectAnimator)a).cancel(); }
+  catch(Exception ignored){}
   try{ dimRahmen.removeView(dimDecke); }catch(Exception ignored){}
   dimDecke=null;
   android.view.Window w=getWindow();
@@ -1206,7 +1219,9 @@ public class GameWebViewActivity extends Activity {
    // und die Zeitgeber bleiben gedrosselt. Er darf aber dunkel sein:
    // Helligkeit 0 ist die niedrigste Stufe, nicht "aus".
    android.view.WindowManager.LayoutParams lp=w.getAttributes();
-   lp.screenBrightness=0f; w.setAttributes(lp);
+   // Nicht ganz auf 0: beim Wecken soll erkennbar bleiben, dass der
+   // Bildschirm an ist - sonst tippt man im Dunkeln daneben.
+   lp.screenBrightness=0.03f; w.setAttributes(lp);
    dunkelWegenWecker=true;
    // Bei gesichertem Sperrbildschirm NICHT requestDismissKeyguard aufrufen:
    // das entsperrt nichts, sondern blendet die PIN-/Musterabfrage ein - und
