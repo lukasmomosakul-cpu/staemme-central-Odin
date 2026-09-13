@@ -134,26 +134,44 @@ js = r"""
  // tw_console_log ist ein reines Fehlerprotokoll und war mit ~288 KB der
  // groesste Posten im Abgleich - er wird bei jeder Aenderung mitgeschickt,
  // ohne dass ihn jemand liest. Ebenso der Zwischenspeicher fuer Produktion.
- // Reiner Laufzeitzustand gehoert NICHT in den Abgleich: diese Schluessel
- // aendern sich im Sekundentakt, fluten das Protokoll und wuerden auf dem
- // zweiten Geraet den dortigen Zustand ueberschreiben. Echte Einstellungen und
- // Plaene - tw_settings, tw_tabben_plan, tw_attack_plans, tw_next_recheck_at,
- // tw_loop_active - bleiben selbstverstaendlich drin.
- var SYNC_AUS=/^(tw_console_log|tw_debug_log|tw_request_log|tw_expected_navigation|tw_next_farm_burst_at|tw_farm_restart_scheduled|tw_dim_was_active|tw_overlay_minimized|tw_scavenge_run_killed|tw_scavenge_run_started_at|tw_pending_assignment|tw_load_farmgod_settings_only|tw_process_lock|tw_bot_reload_done|tw_instance_registry)$/;
- // odin_lw_* sind lokale Schreibzeitpunkte und gehoeren niemandem sonst.
- function sollAbgleichen(k){ return SYNC_PREFIX.test(k) && !SYNC_AUS.test(k); }
+ // Positivliste statt Ausschlussliste. Eine Liste der schlechten Schluessel
+ // hinkt immer hinterher - GodBot fuehrt rund achtzig, und jeder neue
+ // Laufzeitschluessel landete ungefragt im Abgleich.
+ //
+ // Getrennt nach Richtung:
+ //  HOCH   - Einstellungen, Plaene, dazu die Schluessel, aus denen der Wecker
+ //           seine Termine liest
+ //  RUNTER - nur Einstellungen und Plaene. Laufzeitzustand NIE: er wuerde auf
+ //           dem zweiten Geraet den dortigen Stand kippen.
+ var SYNC_KERN=[
+  'tw_settings',
+  'tw_build_templates','tw_build_templates_deleted','tw_build_plans','tw_build_assign',
+  'tw_troop_templates','tw_troop_templates_deleted','tw_troop_plans','tw_troop_assign',
+  'tw_attack_plans','tw_attack_plans_deleted','tw_tabben_plan',
+  'tw_fake_vorlagen','tw_fake_quelle','tw_fake_tarnen',
+  'tw_farm_template_counts','tw_farm_template_units',
+  'tw_scavenge_options_config','tw_scavenge_mode','tw_village_groups_cache',
+  'tw_am_template_catalog','tw_am_assignments'
+ ];
+ var SYNC_NUR_HOCH=['tw_next_recheck_at','tw_loop_active','tw_scavenge_slots','tw_aktivitaet'];
+ function sollHoch(k){ return SYNC_KERN.indexOf(k)>=0 || SYNC_NUR_HOCH.indexOf(k)>=0; }
+ function sollRunter(k){ return SYNC_KERN.indexOf(k)>=0; }
  try{
   if(OdinNative.syncReady()){
    var loaded=JSON.parse(OdinNative.settingsLoad()||'{}');
    var applied=0, behalten=0;
-   for(var k in loaded){ if(!sollAbgleichen(k))continue;
+   for(var k in loaded){ if(!sollRunter(k))continue;
     try{
      var eintrag=loaded[k], wert=eintrag&&eintrag.v!==undefined?eintrag.v:eintrag;
      var fremdStand=eintrag&&eintrag.u?Date.parse(eintrag.u):0;
      var eigenStand=parseInt(localStorage.getItem('odin_lw_'+k)||'0',10);
      // Frueher wurde blind ueberschrieben: eine hier geaenderte Einstellung
      // wurde beim naechsten Oeffnen vom aelteren Serverstand ersetzt.
-     if(localStorage.getItem(k)!==null && eigenStand>fremdStand){ behalten++; continue; }
+     // 90 s Toleranz: Geraeteuhr und Serveruhr laufen nie genau gleich, und
+     // zwischen Schreiben und Hochladen vergehen bis zu vier Sekunden. Ohne
+     // Toleranz galt am Ende ALLES als "lokal neuer" - es wurde gar nichts
+     // mehr uebernommen, der Geraeteabgleich war faktisch tot.
+     if(localStorage.getItem(k)!==null && eigenStand>fremdStand+90000){ behalten++; continue; }
      if(localStorage.getItem(k)!==wert){ origSetRoh(k,wert); applied++; }
     }catch(e){}
    }
@@ -192,7 +210,7 @@ js = r"""
    // in den localStorage. Hoert das auf, ist der Durchlauf fertig und das
    // Weckfenster kann schliessen. Auf einmal je Sekunde begrenzt.
    try{ if(SYNC_PREFIX.test(k)){ var n=Date.now(); if(n-letzterPuls>1000){letzterPuls=n;OdinNative.puls();} } }catch(e){}
-   try{ if(sollAbgleichen(k)){ pending[k]=String(v);
+   try{ if(sollHoch(k)){ pending[k]=String(v);
     try{ origSet.call(localStorage,'odin_lw_'+k,String(Date.now())); }catch(e2){}
     if(!timer)timer=setTimeout(flush,4000);   // laeuft ab dem ERSTEN Eintrag
    } }catch(e){}
