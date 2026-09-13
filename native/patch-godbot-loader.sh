@@ -135,15 +135,24 @@ js = r"""
  // groesste Posten im Abgleich - er wird bei jeder Aenderung mitgeschickt,
  // ohne dass ihn jemand liest. Ebenso der Zwischenspeicher fuer Produktion.
  var SYNC_AUS=/^(tw_console_log|tw_debug_log)$/;
+ // odin_lw_* sind lokale Schreibzeitpunkte und gehoeren niemandem sonst.
  function sollAbgleichen(k){ return SYNC_PREFIX.test(k) && !SYNC_AUS.test(k); }
  try{
   if(OdinNative.syncReady()){
    var loaded=JSON.parse(OdinNative.settingsLoad()||'{}');
-   var applied=0;
+   var applied=0, behalten=0;
    for(var k in loaded){ if(!sollAbgleichen(k))continue;
-    try{ if(localStorage.getItem(k)!==loaded[k]){localStorage.setItem(k,loaded[k]);applied++;} }catch(e){}
+    try{
+     var eintrag=loaded[k], wert=eintrag&&eintrag.v!==undefined?eintrag.v:eintrag;
+     var fremdStand=eintrag&&eintrag.u?Date.parse(eintrag.u):0;
+     var eigenStand=parseInt(localStorage.getItem('odin_lw_'+k)||'0',10);
+     // Frueher wurde blind ueberschrieben: eine hier geaenderte Einstellung
+     // wurde beim naechsten Oeffnen vom aelteren Serverstand ersetzt.
+     if(localStorage.getItem(k)!==null && eigenStand>fremdStand){ behalten++; continue; }
+     if(localStorage.getItem(k)!==wert){ origSetRoh(k,wert); applied++; }
+    }catch(e){}
    }
-   OdinNative.status('Abgleich: '+applied+' uebernommen');
+   OdinNative.status('Abgleich: '+applied+' uebernommen, '+behalten+' lokal neuer');
   }else{
    OdinNative.status('Abgleich inaktiv (keine Sitzung)');
   }
@@ -153,7 +162,10 @@ js = r"""
  // Einzelaenderung eine eigene Anfrage ausloest.
  (function(){
   var pending={}, timer=null;
-  var origSet=localStorage.setItem.bind(localStorage);
+  // Am Prototyp ansetzen, damit auch Schreibzugriffe aus Arbeitsrahmen
+  // (iframes) erfasst werden - die haben ein eigenes localStorage-Objekt.
+  var origSet=Storage.prototype.setItem;
+  var origSetRoh=function(k,v){ origSet.call(localStorage,k,v); };
   function flush(){
    timer=null;
    var batch=pending; pending={};
@@ -161,14 +173,19 @@ js = r"""
    try{ if(OdinNative.syncReady())OdinNative.settingsSave(JSON.stringify(batch)); }catch(e){}
   }
   var letzterPuls=0;
-  localStorage.setItem=function(k,v){
-   origSet(k,v);
+  // Frueher setzte jeder Schreibvorgang den Timer zurueck. GodBot schreibt
+  // dauernd, also lief er nie ab und nichts wurde hochgeladen.
+  Storage.prototype.setItem=function(k,v){
+   origSet.call(this,k,v);
+   if(this!==localStorage)return;
    // Lebenszeichen an die App: solange GodBot arbeitet, schreibt es staendig
    // in den localStorage. Hoert das auf, ist der Durchlauf fertig und das
    // Weckfenster kann schliessen. Auf einmal je Sekunde begrenzt.
    try{ if(SYNC_PREFIX.test(k)){ var n=Date.now(); if(n-letzterPuls>1000){letzterPuls=n;OdinNative.puls();} } }catch(e){}
    try{ if(sollAbgleichen(k)){ pending[k]=String(v);
-    if(timer)clearTimeout(timer); timer=setTimeout(flush,4000); } }catch(e){}
+    try{ origSet.call(localStorage,'odin_lw_'+k,String(Date.now())); }catch(e2){}
+    if(!timer)timer=setTimeout(flush,4000);   // laeuft ab dem ERSTEN Eintrag
+   } }catch(e){}
   };
   window.addEventListener('pagehide',flush);
   window.__odinSyncFlush=flush;

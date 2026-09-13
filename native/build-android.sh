@@ -460,6 +460,47 @@ public class OdinService extends Service {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinMark.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.Context; import android.graphics.*; import android.view.View;
+// Valknut - Odins Zeichen, drei verschlungene Dreiecke.
+//
+// Als reine Linienzeichnung auf schwarzem Grund leuchten nur wenige Pixel.
+// Auf OLED kostet das kaum Strom, waehrend eine Flaeche oder eine Animation
+// deutlich mehr zieht. Statisch, also auch keine Rechenlast.
+public class OdinMark extends View {
+ private final Paint stift=new Paint(Paint.ANTI_ALIAS_FLAG);
+ public OdinMark(Context c){
+  super(c);
+  stift.setStyle(Paint.Style.STROKE);
+  stift.setStrokeWidth(4f);
+  stift.setStrokeJoin(Paint.Join.ROUND);
+  stift.setColor(0xFFC9C9C9);
+ }
+ public void setFarbe(int f){ stift.setColor(f); invalidate(); }
+
+ @Override protected void onDraw(Canvas k){
+  float b=getWidth(), h=getHeight();
+  float cx=b/2f, cy=h/2f;
+  float r=Math.min(b,h)*0.27f;      // Umkreis eines Dreiecks
+  float d=r*0.62f;                  // Versatz der drei Mittelpunkte
+  // Drei gleichseitige Dreiecke, deren Mittelpunkte um 120 Grad versetzt
+  // liegen - dadurch ueberlappen die Kanten und ergeben das verschlungene Bild.
+  for(int i=0;i<3;i++){
+   double m=Math.toRadians(90+i*120);
+   float mx=cx+(float)Math.cos(m)*d, my=cy-(float)Math.sin(m)*d;
+   Path p=new Path();
+   for(int e=0;e<3;e++){
+    double a=Math.toRadians(-90+e*120);
+    float x=mx+(float)Math.cos(a)*r, y=my+(float)Math.sin(a)*r;
+    if(e==0)p.moveTo(x,y); else p.lineTo(x,y);
+   }
+   p.close();
+   k.drawPath(p,stift);
+  }
+ }
+}
+EOF
 cat > "$JAVA_DIR/OdinLog.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.content.Context; import java.io.*; import java.text.SimpleDateFormat;
@@ -1165,35 +1206,32 @@ public class GameWebViewActivity extends Activity {
   decke.setOrientation(android.widget.LinearLayout.VERTICAL);
   decke.setGravity(android.view.Gravity.CENTER);
   decke.setBackgroundColor(0xFF000000);
+  OdinMark zeichen=new OdinMark(this);
+  int gr=(int)(getResources().getDisplayMetrics().density*150);
+  decke.addView(zeichen,new android.widget.LinearLayout.LayoutParams(gr,gr));
   TextView hin=new TextView(this);
-  hin.setText("⚔\n\nODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nTippen zum Aufwecken");
-  // Vorher fast schwarz auf schwarz - dann sieht der gedimmte Bildschirm aus
-  // wie ein ausgeschalteter, und man sperrt beim Entsperrversuch erst recht.
-  // Bei Helligkeit 0 ist auch ein helleres Grau noch dezent.
-  hin.setTextColor(0xFF9A9A9A); hin.setTextSize(15f);
-  hin.setLineSpacing(0f,1.3f);
+  hin.setText("ODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nTippen zum Aufwecken");
+  // Deutlich sichtbar: bei Helligkeit 0 wirkt selbst helles Grau gedaempft,
+  // ein dunkler Hinweis dagegen wie ein ausgeschalteter Bildschirm.
+  hin.setTextColor(0xFFC9C9C9); hin.setTextSize(16f);
+  hin.setLetterSpacing(0.15f);
+  hin.setLineSpacing(0f,1.4f);
+  hin.setPadding(0,(int)(getResources().getDisplayMetrics().density*20),0,0);
   hin.setGravity(android.view.Gravity.CENTER);
   decke.addView(hin);
-  // Langsames Pulsieren: ein stehendes Bild koennte ein Standbild sein, eine
-  // Bewegung zeigt eindeutig, dass das Geraet laeuft.
-  android.animation.ObjectAnimator puls=android.animation.ObjectAnimator.ofFloat(hin,"alpha",0.25f,1f);
-  puls.setDuration(1800); puls.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-  puls.setRepeatCount(android.animation.ValueAnimator.INFINITE); puls.start();
-  decke.setTag(puls);
   decke.setOnClickListener(v->dimmenAus());
   dimRahmen.addView(decke,new FrameLayout.LayoutParams(-1,-1));
   dimDecke=decke;
   android.view.Window w=getWindow();
   android.view.WindowManager.LayoutParams lp=w.getAttributes();
-  lp.screenBrightness=0f; w.setAttributes(lp);
+  // Nicht ganz auf 0: sonst ist der Bildschirm von einem ausgeschalteten
+  // nicht zu unterscheiden. 0.04 bleibt nachts dezent.
+  lp.screenBrightness=0.04f; w.setAttributes(lp);
   w.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   setStatus("gedimmt - läuft im vollen Takt weiter");
  }
  private void dimmenAus(){
   if(dimDecke==null)return;
-  try{ Object a=dimDecke.getTag();
-       if(a instanceof android.animation.ObjectAnimator)((android.animation.ObjectAnimator)a).cancel(); }
-  catch(Exception ignored){}
   try{ dimRahmen.removeView(dimDecke); }catch(Exception ignored){}
   dimDecke=null;
   android.view.Window w=getWindow();
@@ -1433,11 +1471,18 @@ public class GameWebViewActivity extends Activity {
   @JavascriptInterface public String settingsLoad(){
    try{
     if(!syncReady())return "{}";
-    String q="godbot_settings?select=skey,value&account_id=eq."+java.net.URLEncoder.encode(gameAccountId,"UTF-8");
+    // Mit updated_at: der Bootstrap entscheidet damit, ob der Serverstand
+    // juenger ist als die letzte oertliche Aenderung.
+    String q="godbot_settings?select=skey,value,updated_at&account_id=eq."+java.net.URLEncoder.encode(gameAccountId,"UTF-8");
     String json=supaRequest("GET",q,null);
     org.json.JSONArray arr=new org.json.JSONArray(json);
     org.json.JSONObject out=new org.json.JSONObject();
-    for(int i=0;i<arr.length();i++){org.json.JSONObject o=arr.getJSONObject(i);out.put(o.getString("skey"),o.getString("value"));}
+    for(int i=0;i<arr.length();i++){
+     org.json.JSONObject o=arr.getJSONObject(i);
+     org.json.JSONObject e=new org.json.JSONObject();
+     e.put("v",o.getString("value")); e.put("u",o.optString("updated_at",""));
+     out.put(o.getString("skey"),e);
+    }
     setStatus("Einstellungen geladen ("+out.length()+")");
     return out.toString();
    }catch(Exception e){ setStatus("Abgleich lesen fehlgeschlagen: "+e.getMessage()); return "{}"; }
