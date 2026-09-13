@@ -932,9 +932,10 @@ public class GameWebViewActivity extends Activity {
   String stufe = (msg.contains("Fehler")||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
                : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
   OdinLog.schreib(this,kopfName,stufe,msg);
-  // Nur Auffaelliges wandert nach Odin: sonst wuerde jede Routinemeldung eine
-  // eigene Anfrage ausloesen, und im Protokoll ginge das Wesentliche unter.
-  if(!"info".equals(stufe))ereignisMelden(stufe,bereichVon(msg),msg);
+  // Alles wandert nach Odin, aber gebuendelt: einzelne Anfragen je Meldung
+  // waeren zu viele. Die Warteschlange wird alle 30 s oder ab 25 Eintraegen
+  // in einem Rutsch geschickt.
+  ereignisMelden(stufe,bereichVon(msg),msg);
  }
  private static String bereichVon(String m){
   if(m.contains("Anmeldung"))return "anmeldung";
@@ -943,17 +944,39 @@ public class GameWebViewActivity extends Activity {
   if(m.contains("Zugangssperre")||m.contains("Bruecke")||m.contains("Quelle"))return "godbot";
   return "app";
  }
+ private final org.json.JSONArray warteschlange=new org.json.JSONArray();
+ private long letzterVersand=0L;
  private void ereignisMelden(String stufe,String bereich,String text){
   if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return;
-  new Thread(()->{
+  boolean jetztSenden;
+  synchronized(warteschlange){
    try{
     org.json.JSONObject r=new org.json.JSONObject();
     r.put("team_id",supaTeam);
     if(!gameAccountId.isEmpty())r.put("account_id",gameAccountId);
-    r.put("level",stufe); r.put("bereich",bereich); r.put("message",text);
+    r.put("level",stufe); r.put("bereich",bereich);
+    // Sehr lange Meldungen kuerzen, damit einzelne Zeilen die Tabelle nicht
+    // aufblaehen - dieselbe Falle wie beim 288 KB grossen tw_console_log.
+    r.put("message",text.length()>500?text.substring(0,500)+" …":text);
     r.put("device",android.os.Build.MODEL); r.put("app_version",apkVersion());
-    supaRequest("POST","app_events",new org.json.JSONArray().put(r).toString());
-   }catch(Exception e){ android.util.Log.w("ODIN_EVENT","melden",e); }
+    warteschlange.put(r);
+   }catch(Exception ignored){}
+   long jetzt=System.currentTimeMillis();
+   jetztSenden = warteschlange.length()>=25 || (jetzt-letzterVersand>30_000L&&warteschlange.length()>0);
+   if(jetztSenden)letzterVersand=jetzt;
+  }
+  if(jetztSenden)warteschlangeLeeren();
+ }
+ void warteschlangeLeeren(){
+  final String rumpf;
+  synchronized(warteschlange){
+   if(warteschlange.length()==0)return;
+   rumpf=warteschlange.toString();
+   for(int i=warteschlange.length()-1;i>=0;i--)warteschlange.remove(i);
+  }
+  new Thread(()->{
+   try{ supaRequest("POST","app_events",rumpf); }
+   catch(Exception e){ android.util.Log.w("ODIN_EVENT","melden",e); }
   }).start();
  }
  private String kopfName="";
@@ -1171,6 +1194,10 @@ public class GameWebViewActivity extends Activity {
   try{
    if(!getIntent().getBooleanExtra("fromAlarm",false))return;
    android.view.Window w=getWindow();
+   // Kein Vollbild beim Wecken: sonst ist nicht zu erkennen, ob das Geraet
+   // noch gesperrt ist. Die Systemleisten bleiben sichtbar.
+   vollbildUnterdruecken=true;
+   systemleistenZeigen();
    if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(true); setTurnScreenOn(true); }
    else w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                   |android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
@@ -1243,6 +1270,20 @@ public class GameWebViewActivity extends Activity {
  private boolean dunkelWegenWecker=false, weckerAktiv=false, warGeschwebt=false;
  private Runnable weckFensterEnde=null, ruhePruefer=null;
  volatile long letzteAktivitaet=0L;
+ private boolean vollbildUnterdruecken=false;
+ private void systemleistenZeigen(){
+  try{
+   android.view.Window w=getWindow();
+   w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
+   if(Build.VERSION.SDK_INT>=30){
+    android.view.WindowInsetsController c=w.getInsetsController();
+    if(c!=null)c.show(android.view.WindowInsets.Type.statusBars()
+                     |android.view.WindowInsets.Type.navigationBars());
+   }else{
+    w.getDecorView().setSystemUiVisibility(android.view.View.SYSTEM_UI_FLAG_VISIBLE);
+   }
+  }catch(Exception ignored){}
+ }
  // Das Fenster endet nicht nach fester Zeit, sondern wenn nichts mehr
  // passiert. Ein Rausstellen ist nach Sekunden erledigt, ein Raubzug ueber
  // zwanzig Doerfer braucht Minuten - eine feste Dauer passt fuer keines von
@@ -1259,6 +1300,8 @@ public class GameWebViewActivity extends Activity {
    if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(false); setTurnScreenOn(false); }
   }catch(Exception ignored){}
   dunkelWegenWecker=false;
+  // Nach dem Weckfenster wieder normal: im Alltag ist Vollbild gewuenscht.
+  vollbildUnterdruecken=false;
  }
  // Sobald du das Geraet anfasst, wieder normale Helligkeit.
  @Override public void onUserInteraction(){
@@ -1309,7 +1352,10 @@ public class GameWebViewActivity extends Activity {
  private void executeGodBotWhenReady(WebView v){ }
  private void injectGodBot(WebView v){ }
  private WebResourceResponse odinIntercept(WebResourceRequest r){ return null; }
- @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
+ @Override public void onWindowFocusChanged(boolean f){
+  super.onWindowFocusChanged(f);
+  if(f){ if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this); }
+ }
  @Override protected void onNewIntent(Intent in){
   super.onNewIntent(in); setIntent(in);
   // Nur die Sitzungsdaten auffrischen - die WebView bleibt unberuehrt,
@@ -1321,12 +1367,17 @@ public class GameWebViewActivity extends Activity {
   // bereits, kam onNewIntent dran und der Bildschirm blieb aus.
   weckerModus();
  }
- @Override protected void onResume(){super.onResume();Fullscreen.apply(this);OdinBubble.hide();restoreFromFloat();}
+ @Override protected void onResume(){
+  super.onResume();
+  if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
+  OdinBubble.hide(); restoreFromFloat();
+ }
  @Override protected void onPause(){
   super.onPause();
   // Ohne flush() bleiben die Anmeldecookies nur im Speicher und sind nach
   // einem Neuaufbau des Prozesses weg.
   try{ android.webkit.CookieManager.getInstance().flush(); }catch(Exception ignored){}
+  warteschlangeLeeren();   // offene Protokolleintraege nicht verlieren
   try{ if(webView!=null&&webView.getUrl()!=null)
         getSharedPreferences("odin",MODE_PRIVATE).edit()
           .putString("lastGameUrl",webView.getUrl()).apply(); }catch(Exception ignored){}
