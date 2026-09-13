@@ -767,8 +767,14 @@ public final class OdinFloat {
 
    FrameLayout box=new FrameLayout(app);
    FrameLayout.LayoutParams wlp=new FrameLayout.LayoutParams(LAY_W,LAY_H);
-   web.setLayoutParams(wlp); web.setPivotX(0f); web.setPivotY(0f);
-   float scale=Math.min((float)WIN/LAY_W,(float)WIN/LAY_H);
+   wlp.gravity=Gravity.CENTER;
+   web.setLayoutParams(wlp);
+   // Die WebView muss gerendert bleiben, darf aber nicht zu sehen sein. Sie
+   // wird deshalb winzig in die Mitte skaliert - deutlich kleiner als der
+   // Kreis darueber. Vorher fuellte sie das Fenster fast aus und schaute an
+   // den Ecken unter dem runden Symbol hervor.
+   web.setPivotX(LAY_W/2f); web.setPivotY(LAY_H/2f);
+   float scale=(WIN*0.40f)/LAY_H;
    web.setScaleX(scale); web.setScaleY(scale);
    box.addView(web);
 
@@ -777,13 +783,16 @@ public final class OdinFloat {
    symbol.setGravity(Gravity.CENTER);
    android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
    g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-   g.setColor(0xFF2B2B2B); g.setStroke(3,0xFFFFFFFF); symbol.setBackground(g);
+   g.setColor(0xFF2B2B2B); g.setStroke(4,0xFFE8E8E8); symbol.setBackground(g);
+   symbol.setElevation(8f);   // liegt sicher ueber der WebView
    box.addView(symbol,new FrameLayout.LayoutParams(-1,-1));
 
    int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                                      :WindowManager.LayoutParams.TYPE_PHONE;
+   // Durchscheinend, damit ausserhalb des Kreises nichts steht - sonst waere
+   // das Symbol ein schwarzes Quadrat.
    final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WIN,WIN,type,
-     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.OPAQUE);
+     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
    lp.gravity=Gravity.TOP|Gravity.START; lp.x=16;
    // Versetzt stapeln, damit sich mehrere Symbole nicht ueberdecken.
    lp.y=180+offen.size()*(WIN+24);
