@@ -160,8 +160,13 @@ js = r"""
    if(!Object.keys(batch).length)return;
    try{ if(OdinNative.syncReady())OdinNative.settingsSave(JSON.stringify(batch)); }catch(e){}
   }
+  var letzterPuls=0;
   localStorage.setItem=function(k,v){
    origSet(k,v);
+   // Lebenszeichen an die App: solange GodBot arbeitet, schreibt es staendig
+   // in den localStorage. Hoert das auf, ist der Durchlauf fertig und das
+   // Weckfenster kann schliessen. Auf einmal je Sekunde begrenzt.
+   try{ if(SYNC_PREFIX.test(k)){ var n=Date.now(); if(n-letzterPuls>1000){letzterPuls=n;OdinNative.puls();} } }catch(e){}
    try{ if(sollAbgleichen(k)){ pending[k]=String(v);
     if(timer)clearTimeout(timer); timer=setTimeout(flush,4000); } }catch(e){}
   };

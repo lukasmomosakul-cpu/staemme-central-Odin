@@ -400,6 +400,20 @@ public class OdinService extends Service {
      +java.net.URLEncoder.encode(id,"UTF-8")));
    if(s.length()==0)continue;
    gesamt+=OdinAlarm.planen(this,s.getJSONObject(0).optString("value","{}"),id,bez);
+   // Wartungsfenster fuer den Raubzug
+   try{
+    JSONArray loop=new JSONArray(hole("godbot_settings?select=value&skey=eq.tw_loop_active&account_id=eq."
+      +java.net.URLEncoder.encode(id,"UTF-8")));
+    boolean aktiv=loop.length()>0&&"1".equals(loop.getJSONObject(0).optString("value","").replace("\"",""));
+    if(aktiv){
+     JSONArray nx=new JSONArray(hole("godbot_settings?select=value&skey=eq.tw_next_recheck_at&account_id=eq."
+       +java.net.URLEncoder.encode(id,"UTF-8")));
+     if(nx.length()>0){
+      double ms=Double.parseDouble(nx.getJSONObject(0).optString("value","0").replace("\"",""));
+      gesamt+=OdinAlarm.wartungPlanen(this,(long)ms,id,bez);
+     }
+    }
+   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","wartung",e); }
   }
   android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+gesamt+" ueber "+accs.length()+" Accounts");
  }
@@ -590,7 +604,7 @@ public final class OdinAlarm {
  public static final long VORLAUF_MS = 90_000L;   // 90 s vor Einschlag
  private static final int MAX_WECKER = 12;        // Android begrenzt exakte Alarme
  public static final String EXTRA_AT="odin_at", EXTRA_INFO="odin_info",
-   EXTRA_ACCOUNT="odin_account";
+   EXTRA_ACCOUNT="odin_account", EXTRA_WARTUNG="odin_wartung";
  // Fortlaufende Kennung ueber alle Accounts hinweg, damit sich die Wecker
  // verschiedener Konten nicht gegenseitig ueberschreiben.
  private static int naechsteId=9000;
@@ -617,6 +631,29 @@ public final class OdinAlarm {
    else am.set(AlarmManager.RTC_WAKEUP,at,pi);
   }catch(Exception e){ android.util.Log.e("ODIN_ALARM","test",e); return 0L; }
   return at;
+ }
+
+ // Wartungswecker: GodBot berechnet den naechsten Raubzug-Durchlauf selbst und
+ // legt ihn in tw_next_recheck_at ab (Millisekunden). Wir wecken kurz davor,
+ // statt starr alle 30 Minuten - so gibt es nur so viele Aufwachvorgaenge wie
+ // noetig. tw_loop_active=1 heisst, der Kreislauf laeuft ueberhaupt.
+ public static synchronized int wartungPlanen(Context c,long naechsterLaufMs,String accountId,String bez){
+  long jetzt=System.currentTimeMillis();
+  long weck=naechsterLaufMs-20_000L;      // 20 s Vorlauf zum Laden
+  if(naechsterLaufMs<=0||weck<=jetzt+5000L)return 0;
+  try{
+   AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
+   Intent i=new Intent(c,OdinAlarmReceiver.class);
+   i.putExtra(EXTRA_AT,naechsterLaufMs); i.putExtra(EXTRA_INFO,bez+" · Raubzug");
+   i.putExtra(EXTRA_ACCOUNT,accountId==null?"":accountId);
+   i.putExtra(EXTRA_WARTUNG,true);
+   i.setData(android.net.Uri.parse("odin://wartung/"+accountId));
+   PendingIntent pi=PendingIntent.getBroadcast(c,naechsteId++,i,
+     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+   if(exactAllowed(c)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,weck,pi);
+   else am.set(AlarmManager.RTC_WAKEUP,weck,pi);
+   return 1;
+  }catch(Exception e){ android.util.Log.e("ODIN_ALARM","wartung",e); return 0; }
  }
 
  // Liefert die Anzahl gesetzter Wecker zurueck.
@@ -682,6 +719,7 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
   if(!acc.isEmpty()){ open.setData(android.net.Uri.parse("odin://account/"+acc));
                       open.putExtra("accountId",acc); }
   open.putExtra("fromAlarm",true);
+  open.putExtra("wartung",in.getBooleanExtra(OdinAlarm.EXTRA_WARTUNG,false));
   PendingIntent pi=PendingIntent.getActivity(c,4242,open,
     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
   Notification n=new Notification.Builder(c,OdinService.CH_WAKE)
@@ -1155,9 +1193,30 @@ public class GameWebViewActivity extends Activity {
    warGeschwebt=OdinFloat.active(gameAccountId);
    if(warGeschwebt){ restoreFromFloat(); setStatus("Wecker: aus dem Symbol zurückgeholt"); }
    if(weckFensterEnde!=null)w.getDecorView().removeCallbacks(weckFensterEnde);
+   if(ruhePruefer!=null)w.getDecorView().removeCallbacks(ruhePruefer);
+   final long start=System.currentTimeMillis();
+   letzteAktivitaet=start;
+   final boolean wartung=getIntent().getBooleanExtra("wartung",false);
+   ruhePruefer=new Runnable(){
+    @Override public void run(){
+     if(!weckerAktiv)return;
+     long jetzt=System.currentTimeMillis(), lief=jetzt-start, still=jetzt-letzteAktivitaet;
+     if(lief>FENSTER_MAX_MS){
+      setStatus("Weckfenster: Höchstdauer erreicht");
+      if(weckFensterEnde!=null)weckFensterEnde.run(); return;
+     }
+     if(lief>FENSTER_MIN_MS&&still>RUHE_MS){
+      setStatus("Weckfenster: "+(wartung?"Raubzug":"Aktion")+" fertig nach "+(lief/1000)+" s");
+      if(weckFensterEnde!=null)weckFensterEnde.run(); return;
+     }
+     w.getDecorView().postDelayed(this,10_000L);
+    }
+   };
+   w.getDecorView().postDelayed(ruhePruefer,10_000L);
    weckFensterEnde=()->{
     if(!weckerAktiv)return;
     weckerAktiv=false;
+    if(ruhePruefer!=null)getWindow().getDecorView().removeCallbacks(ruhePruefer);
     anzeigeZuruecksetzen();
     if(warGeschwebt&&OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat)){
      // Zurueck ins schwebende Fenster statt in den Hintergrund: dort bleibt
@@ -1169,13 +1228,18 @@ public class GameWebViewActivity extends Activity {
     moveTaskToBack(true);
    };
    weckerAktiv=true;
-   w.getDecorView().postDelayed(weckFensterEnde,WECK_FENSTER_MS);
+   w.getDecorView().postDelayed(weckFensterEnde,FENSTER_MAX_MS+30_000L);
   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","weckerModus",e); }
  }
  private boolean dunkelWegenWecker=false, weckerAktiv=false, warGeschwebt=false;
- private Runnable weckFensterEnde=null;
- // Vorlauf (90 s) plus Puffer fuer Laden und Absetzen des Befehls.
- private static final long WECK_FENSTER_MS=180_000L;
+ private Runnable weckFensterEnde=null, ruhePruefer=null;
+ volatile long letzteAktivitaet=0L;
+ // Das Fenster endet nicht nach fester Zeit, sondern wenn nichts mehr
+ // passiert. Ein Rausstellen ist nach Sekunden erledigt, ein Raubzug ueber
+ // zwanzig Doerfer braucht Minuten - eine feste Dauer passt fuer keines von
+ // beiden. MIN verhindert ein Schliessen waehrend des Ladens, MAX ist die
+ // Reissleine, falls der Puls nie verstummt.
+ private static final long FENSTER_MIN_MS=45_000L, FENSTER_MAX_MS=12*60_000L, RUHE_MS=40_000L;
  private void anzeigeZuruecksetzen(){
   try{
    android.view.Window w=getWindow();
@@ -1287,6 +1351,9 @@ public class GameWebViewActivity extends Activity {
  }
  private void minimizeToApp(){finish();}
  private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);}
+  // Lebenszeichen aus der Seite: GodBot schreibt bei jedem Arbeitsschritt in
+  // den localStorage. Bleibt das aus, ist der Durchlauf fertig.
+  @JavascriptInterface public void puls(){ letzteAktivitaet=System.currentTimeMillis(); }
   @JavascriptInterface public boolean syncReady(){ return !supaUrl.isEmpty()&&!supaToken.isEmpty()&&!gameAccountId.isEmpty(); }
   @JavascriptInterface public String settingsLoad(){
    try{
