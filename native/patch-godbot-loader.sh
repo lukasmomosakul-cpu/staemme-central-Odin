@@ -142,6 +142,14 @@ js = r"""
  // Stattdessen selbstlernend: abgeglichen wird alles mit tw_-Praefix, ausser
  // was sich nachweislich staendig aendert. Laufzeitzustand schreibt im
  // Sekundentakt, Einstellungen und Plaene nicht.
+ // Schreiben am Spiegel vorbei. Muss VOR jeder Verwendung stehen: bisher war
+ // origSetRoh erst weiter unten in einer anderen Funktion definiert, weshalb
+ // sowohl der Volatilitaets-Merker als auch das Hydrieren beim Zugriff warfen.
+ // Der Fehler wurde verschluckt - daher "Abgleich: 0 uebernommen" und die
+ // 341 identischen Meldungen fuer denselben Schluessel.
+ var ROH_SETZEN=Storage.prototype.setItem;
+ function rohSetzen(k,v){ ROH_SETZEN.call(localStorage,k,String(v)); }
+ var schonGemeldet={};
  var VOLATIL_SCHWELLE=5, VOLATIL_FENSTER=180000;   // 5 Schreibzugriffe in 3 min
  var schreibZaehler={};
  // Diese gelten immer als Nutzlast, auch wenn ein Import sie mehrfach
@@ -165,8 +173,10 @@ js = r"""
   z.n++;
   if(z.n>=VOLATIL_SCHWELLE){
    // Einmal erkannt, dauerhaft gemerkt - spart die Zaehlung beim naechsten Start.
-   try{ origSetRoh('odin_vol_'+k,'1'); }catch(e){}
-   try{ OdinNative.status('nicht abgeglichen (Laufzeitwert): '+k); }catch(e){}
+   try{ rohSetzen('odin_vol_'+k,'1'); }catch(e){}
+   // Einmal je Schluessel melden, nicht bei jedem Schreibzugriff.
+   if(!schonGemeldet[k]){ schonGemeldet[k]=1;
+    try{ OdinNative.status('nicht abgeglichen (Laufzeitwert): '+k); }catch(e){} }
    return true;
   }
   return false;
@@ -203,7 +213,7 @@ js = r"""
      // Toleranz galt am Ende ALLES als "lokal neuer" - es wurde gar nichts
      // mehr uebernommen, der Geraeteabgleich war faktisch tot.
      if(localStorage.getItem(k)!==null && eigenStand>fremdStand+90000){ behalten++; continue; }
-     if(localStorage.getItem(k)!==wert){ origSetRoh(k,wert); applied++; }
+     if(localStorage.getItem(k)!==wert){ rohSetzen(k,wert); applied++; }
     }catch(e){}
    }
    OdinNative.status('Abgleich: '+applied+' uebernommen, '+behalten+' lokal neuer');
@@ -218,8 +228,7 @@ js = r"""
   var pending={}, timer=null;
   // Am Prototyp ansetzen, damit auch Schreibzugriffe aus Arbeitsrahmen
   // (iframes) erfasst werden - die haben ein eigenes localStorage-Objekt.
-  var origSet=Storage.prototype.setItem;
-  var origSetRoh=function(k,v){ origSet.call(localStorage,k,v); };
+  var origSet=ROH_SETZEN;
   function flush(){
    timer=null;
    var batch=pending; pending={};
@@ -242,7 +251,7 @@ js = r"""
    // Weckfenster kann schliessen. Auf einmal je Sekunde begrenzt.
    try{ if(SYNC_PREFIX.test(k)){ var n=Date.now(); if(n-letzterPuls>1000){letzterPuls=n;OdinNative.puls();} } }catch(e){}
    try{ if(sollHoch(k)){ pending[k]=String(v);
-    try{ origSet.call(localStorage,'odin_lw_'+k,String(Date.now())); }catch(e2){}
+    try{ rohSetzen('odin_lw_'+k,Date.now()); }catch(e2){}
     if(!timer)timer=setTimeout(flush,4000);   // laeuft ab dem ERSTEN Eintrag
    } }catch(e){}
   };
