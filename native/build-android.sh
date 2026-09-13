@@ -473,7 +473,7 @@ public class OdinMark extends View {
  public OdinMark(Context c){
   super(c);
   stift.setStyle(Paint.Style.STROKE);
-  stift.setStrokeWidth(4f);
+  stift.setStrokeWidth(3.5f);
   stift.setStrokeJoin(Paint.Join.ROUND);
   stift.setColor(0xFFC9C9C9);
  }
@@ -481,9 +481,11 @@ public class OdinMark extends View {
 
  @Override protected void onDraw(Canvas k){
   float b=getWidth(), h=getHeight();
-  float cx=b/2f, cy=h/2f;
-  float r=Math.min(b,h)*0.27f;      // Umkreis eines Dreiecks
-  float d=r*0.62f;                  // Versatz der drei Mittelpunkte
+  float r=Math.min(b,h)*0.30f;      // Umkreis eines Dreiecks
+  float d=r*0.60f;                  // Versatz der drei Mittelpunkte
+  // Die Figur reicht von -(d+r) bis +(0.5d+0.5r) um den Bezugspunkt, sitzt
+  // also um 0.25*(d+r) zu hoch. Das wird hier ausgeglichen.
+  float cx=b/2f, cy=h/2f+0.25f*(d+r);
   // Drei gleichseitige Dreiecke, deren Mittelpunkte um 120 Grad versetzt
   // liegen - dadurch ueberlappen die Kanten und ergeben das verschlungene Bild.
   for(int i=0;i<3;i++){
@@ -491,8 +493,8 @@ public class OdinMark extends View {
    float mx=cx+(float)Math.cos(m)*d, my=cy-(float)Math.sin(m)*d;
    Path p=new Path();
    for(int e=0;e<3;e++){
-    double a=Math.toRadians(-90+e*120);
-    float x=mx+(float)Math.cos(a)*r, y=my+(float)Math.sin(a)*r;
+    double a=Math.toRadians(90+e*120);
+    float x=mx+(float)Math.cos(a)*r, y=my-(float)Math.sin(a)*r;
     if(e==0)p.moveTo(x,y); else p.lineTo(x,y);
    }
    p.close();
@@ -1213,8 +1215,9 @@ public class GameWebViewActivity extends Activity {
   hin.setText("ODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nTippen zum Aufwecken");
   // Deutlich sichtbar: bei Helligkeit 0 wirkt selbst helles Grau gedaempft,
   // ein dunkler Hinweis dagegen wie ein ausgeschalteter Bildschirm.
-  hin.setTextColor(0xFFC9C9C9); hin.setTextSize(16f);
-  hin.setLetterSpacing(0.15f);
+  // Dezenter als das Zeichen: der Valknut traegt, die Schrift erklaert nur.
+  hin.setTextColor(0xFF7C7C7C); hin.setTextSize(13f);
+  hin.setLetterSpacing(0.08f);
   hin.setLineSpacing(0f,1.4f);
   hin.setPadding(0,(int)(getResources().getDisplayMetrics().density*20),0,0);
   hin.setGravity(android.view.Gravity.CENTER);
