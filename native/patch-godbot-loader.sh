@@ -213,7 +213,15 @@ js = r"""
      // Toleranz galt am Ende ALLES als "lokal neuer" - es wurde gar nichts
      // mehr uebernommen, der Geraeteabgleich war faktisch tot.
      if(localStorage.getItem(k)!==null && eigenStand>fremdStand+90000){ behalten++; continue; }
-     if(localStorage.getItem(k)!==wert){ rohSetzen(k,wert); applied++; }
+     // Niemals Gefuelltes durch Leeres ersetzen. Seit das Hydrieren wirkt,
+     // koennte ein leerer Serverwert ({} oder []) oertliche Vorlagen und
+     // Plaene loeschen - und vor v1.30.2 gab es die Zeitstempel odin_lw_
+     // nicht, dort steht also 0 und der Server gewinnt immer.
+     var leerFremd=(!wert||wert.length<=2||wert==='null'||wert==='""');
+     var eigen=localStorage.getItem(k);
+     var vollEigen=(eigen&&eigen.length>2&&eigen!=='null'&&eigen!=='""');
+     if(leerFremd&&vollEigen){ behalten++; continue; }
+     if(eigen!==wert){ rohSetzen(k,wert); applied++; }
     }catch(e){}
    }
    OdinNative.status('Abgleich: '+applied+' uebernommen, '+behalten+' lokal neuer');
