@@ -134,28 +134,54 @@ js = r"""
  // tw_console_log ist ein reines Fehlerprotokoll und war mit ~288 KB der
  // groesste Posten im Abgleich - er wird bei jeder Aenderung mitgeschickt,
  // ohne dass ihn jemand liest. Ebenso der Zwischenspeicher fuer Produktion.
- // Positivliste statt Ausschlussliste. Eine Liste der schlechten Schluessel
- // hinkt immer hinterher - GodBot fuehrt rund achtzig, und jeder neue
- // Laufzeitschluessel landete ungefragt im Abgleich.
+ // Weder Positiv- noch Ausschlussliste: beide gehen zwangslaeufig schief.
+ // Die Ausschlussliste hinkte hinterher (GodBot fuehrt rund achtzig
+ // Schluessel), die Positivliste uebersah stillschweigend Neues - zuletzt
+ // tw_attack_scavenge_profiles, weshalb ohne Profile kein Raubzug lief.
  //
- // Getrennt nach Richtung:
- //  HOCH   - Einstellungen, Plaene, dazu die Schluessel, aus denen der Wecker
- //           seine Termine liest
- //  RUNTER - nur Einstellungen und Plaene. Laufzeitzustand NIE: er wuerde auf
- //           dem zweiten Geraet den dortigen Stand kippen.
- var SYNC_KERN=[
-  'tw_settings',
-  'tw_build_templates','tw_build_templates_deleted','tw_build_plans','tw_build_assign',
-  'tw_troop_templates','tw_troop_templates_deleted','tw_troop_plans','tw_troop_assign',
-  'tw_attack_plans','tw_attack_plans_deleted','tw_tabben_plan',
-  'tw_fake_vorlagen','tw_fake_quelle','tw_fake_tarnen',
-  'tw_farm_template_counts','tw_farm_template_units',
-  'tw_scavenge_options_config','tw_scavenge_mode','tw_village_groups_cache',
-  'tw_am_template_catalog','tw_am_assignments'
- ];
- var SYNC_NUR_HOCH=['tw_next_recheck_at','tw_loop_active','tw_scavenge_slots','tw_aktivitaet'];
- function sollHoch(k){ return SYNC_KERN.indexOf(k)>=0 || SYNC_NUR_HOCH.indexOf(k)>=0; }
- function sollRunter(k){ return SYNC_KERN.indexOf(k)>=0; }
+ // Stattdessen selbstlernend: abgeglichen wird alles mit tw_-Praefix, ausser
+ // was sich nachweislich staendig aendert. Laufzeitzustand schreibt im
+ // Sekundentakt, Einstellungen und Plaene nicht.
+ var VOLATIL_SCHWELLE=5, VOLATIL_FENSTER=180000;   // 5 Schreibzugriffe in 3 min
+ var schreibZaehler={};
+ // Diese gelten immer als Nutzlast, auch wenn ein Import sie mehrfach
+ // hintereinander schreibt.
+ var IMMER=['tw_settings','tw_build_templates','tw_build_plans','tw_build_assign',
+  'tw_troop_templates','tw_troop_plans','tw_troop_assign','tw_attack_plans',
+  'tw_tabben_plan','tw_attack_scavenge_profiles','tw_scavenge_options_config',
+  'tw_scavenge_mode','tw_scavenge_min_value','tw_mass_support','tw_mass_single_run',
+  'tw_fake_vorlagen','tw_fake_quelle','tw_fake_tarnen','tw_village_groups_cache',
+  'tw_am_template_catalog','tw_am_assignments',
+  'tw_farm_template_counts','tw_farm_template_units'];
+ // Nur hochladen: der Wecker und die Uebersicht brauchen sie, uebernommen
+ // werden duerfen sie nie - sonst kippt der Stand des zweiten Geraets.
+ var NUR_HOCH=['tw_next_recheck_at','tw_loop_active','tw_scavenge_slots','tw_aktivitaet'];
+
+ function istVolatil(k){
+  if(IMMER.indexOf(k)>=0)return false;
+  try{ if(localStorage.getItem('odin_vol_'+k))return true; }catch(e){}
+  var jetzt=Date.now(), z=schreibZaehler[k];
+  if(!z||jetzt-z.seit>VOLATIL_FENSTER){ schreibZaehler[k]={seit:jetzt,n:1}; return false; }
+  z.n++;
+  if(z.n>=VOLATIL_SCHWELLE){
+   // Einmal erkannt, dauerhaft gemerkt - spart die Zaehlung beim naechsten Start.
+   try{ origSetRoh('odin_vol_'+k,'1'); }catch(e){}
+   try{ OdinNative.status('nicht abgeglichen (Laufzeitwert): '+k); }catch(e){}
+   return true;
+  }
+  return false;
+ }
+ function sollHoch(k){
+  if(!SYNC_PREFIX.test(k))return false;
+  if(NUR_HOCH.indexOf(k)>=0)return true;
+  return !istVolatil(k);
+ }
+ function sollRunter(k){
+  if(!SYNC_PREFIX.test(k))return false;
+  if(NUR_HOCH.indexOf(k)>=0)return false;
+  if(IMMER.indexOf(k)>=0)return true;
+  try{ return !localStorage.getItem('odin_vol_'+k); }catch(e){ return true; }
+ }
  try{
   if(OdinNative.syncReady()){
    var loaded=JSON.parse(OdinNative.settingsLoad()||'{}');
