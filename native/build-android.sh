@@ -1515,7 +1515,7 @@ public class GameWebViewActivity extends Activity {
      r.put("skey",k); r.put("value",in.getString(k)); rows.put(r); }
     if(rows.length()==0)return true;
     supaRequest("POST","godbot_settings?on_conflict=account_id,skey",rows.toString());
-    setStatus("Einstellungen gesichert ("+rows.length()+")");
+    // Meldung kommt aus dem Bootstrap inklusive Schluesselnamen.
     return true;
    }catch(Exception e){ setStatus("Abgleich schreiben fehlgeschlagen: "+e.getMessage()); return false; }
   } @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}

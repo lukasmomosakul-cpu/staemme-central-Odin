@@ -134,7 +134,12 @@ js = r"""
  // tw_console_log ist ein reines Fehlerprotokoll und war mit ~288 KB der
  // groesste Posten im Abgleich - er wird bei jeder Aenderung mitgeschickt,
  // ohne dass ihn jemand liest. Ebenso der Zwischenspeicher fuer Produktion.
- var SYNC_AUS=/^(tw_console_log|tw_debug_log)$/;
+ // Reiner Laufzeitzustand gehoert NICHT in den Abgleich: diese Schluessel
+ // aendern sich im Sekundentakt, fluten das Protokoll und wuerden auf dem
+ // zweiten Geraet den dortigen Zustand ueberschreiben. Echte Einstellungen und
+ // Plaene - tw_settings, tw_tabben_plan, tw_attack_plans, tw_next_recheck_at,
+ // tw_loop_active - bleiben selbstverstaendlich drin.
+ var SYNC_AUS=/^(tw_console_log|tw_debug_log|tw_request_log|tw_expected_navigation|tw_next_farm_burst_at|tw_farm_restart_scheduled|tw_dim_was_active|tw_overlay_minimized|tw_scavenge_run_killed|tw_scavenge_run_started_at|tw_pending_assignment|tw_load_farmgod_settings_only|tw_process_lock|tw_bot_reload_done|tw_instance_registry)$/;
  // odin_lw_* sind lokale Schreibzeitpunkte und gehoeren niemandem sonst.
  function sollAbgleichen(k){ return SYNC_PREFIX.test(k) && !SYNC_AUS.test(k); }
  try{
@@ -170,7 +175,12 @@ js = r"""
    timer=null;
    var batch=pending; pending={};
    if(!Object.keys(batch).length)return;
-   try{ if(OdinNative.syncReady())OdinNative.settingsSave(JSON.stringify(batch)); }catch(e){}
+   try{ if(OdinNative.syncReady()){
+     // Namen statt blosser Anzahl melden - sonst sieht man im Protokoll nicht,
+     // WAS gesichert wurde, und kann Rauschen nicht von Nutzlast trennen.
+     OdinNative.settingsSave(JSON.stringify(batch));
+     OdinNative.status('gesichert: '+Object.keys(batch).join(', ').slice(0,120));
+   } }catch(e){}
   }
   var letzterPuls=0;
   // Frueher setzte jeder Schreibvorgang den Timer zurueck. GodBot schreibt
