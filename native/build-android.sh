@@ -958,6 +958,8 @@ public class GameWebViewActivity extends Activity {
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
  private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  private LinearLayout rootLayout;
+ // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
+ private static final java.util.Map<String,GameWebViewActivity> OFFEN=new java.util.HashMap<>();
  private FrameLayout dimRahmen;
  private android.view.View dimDecke;
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
@@ -1059,6 +1061,16 @@ public class GameWebViewActivity extends Activity {
   String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
   kopfName=activeName;
   String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
+  // Nur EINE Spielansicht je Account. Zwei Instanzen teilen sich dasselbe
+  // WebView-Profil und damit denselben localStorage; GodBots eigene
+  // Mehrfachstart-Sperre erkennt das und legt die Oberflaeche still.
+  String wer=nz(getIntent().getStringExtra("accountId"));
+  GameWebViewActivity vorhanden=OFFEN.get(wer);
+  if(vorhanden!=null&&vorhanden!=this&&!vorhanden.isFinishing()){
+   android.util.Log.i("ODIN_GODBOT","zweite Ansicht fuer "+wer+" verworfen");
+   finish(); return;
+  }
+  OFFEN.put(wer,this);
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
   supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
   gameAccountId=nz(getIntent().getStringExtra("accountId"));
@@ -1460,6 +1472,10 @@ public class GameWebViewActivity extends Activity {
     setStatus("zurueck im Vordergrund");
    }catch(Exception e){android.util.Log.e("ODIN_FLOAT","restore",e);}
   });
+ }
+ @Override protected void onDestroy(){
+  if(OFFEN.get(gameAccountId)==this)OFFEN.remove(gameAccountId);
+  super.onDestroy();
  }
  @Override public void onBackPressed(){
   if(dimDecke!=null){dimmenAus();return;}

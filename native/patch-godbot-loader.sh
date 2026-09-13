@@ -171,13 +171,18 @@ js = r"""
   }
   return false;
  }
+ // Harte Sperre unabhaengig von der Volatilitaet: diese Schluessel sind
+ // reine Protokolle und werden gross (tw_console_log lag bei 288 KB). Die
+ // Volatilitaetsregel greift erst nach fuenf Schreibzugriffen - bis dahin
+ // waeren sie laengst hochgeladen.
+ var NIE=/^(tw_console_log|tw_debug_log|tw_request_log)$/;
  function sollHoch(k){
-  if(!SYNC_PREFIX.test(k))return false;
+  if(!SYNC_PREFIX.test(k)||NIE.test(k))return false;
   if(NUR_HOCH.indexOf(k)>=0)return true;
   return !istVolatil(k);
  }
  function sollRunter(k){
-  if(!SYNC_PREFIX.test(k))return false;
+  if(!SYNC_PREFIX.test(k)||NIE.test(k))return false;
   if(NUR_HOCH.indexOf(k)>=0)return false;
   if(IMMER.indexOf(k)>=0)return true;
   try{ return !localStorage.getItem('odin_vol_'+k); }catch(e){ return true; }
