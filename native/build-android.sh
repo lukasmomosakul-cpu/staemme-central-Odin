@@ -395,6 +395,23 @@ public class OdinService extends Service {
   synchronized(faellig){ faellig.remove(e.getKey()); }
   zuletztGeweckt=jetzt;
   String konto=e.getValue()[0], text=e.getValue()[1], art=e.getValue()[2];
+
+  // Benutzt du das Geraet gerade, nicht in den Vordergrund draengen. Die
+  // Seite muss sichtbar sein, damit die Zeitgeber laufen - das leistet auch
+  // das schwebende Symbol, ohne zu stoeren.
+  boolean inBenutzung=false;
+  try{
+   android.os.PowerManager pm=(android.os.PowerManager)getSystemService(Context.POWER_SERVICE);
+   android.app.KeyguardManager km=getSystemService(android.app.KeyguardManager.class);
+   inBenutzung = pm!=null && pm.isInteractive() && (km==null || !km.isKeyguardLocked());
+  }catch(Exception ignored){}
+
+  if(inBenutzung && GameWebViewActivity.weckeLeise(konto)){
+   OdinLog.schreib(this,"-","WICHTIG","Dienst weckt leise ("+art+"): "+text);
+   protokoll(this,"WICHTIG","wecker","Dienst weckt leise ("+art+"): "+text);
+   return;
+  }
+
   OdinLog.schreib(this,"-","WICHTIG","Dienst weckt ("+art+"): "+text);
   protokoll(this,"WICHTIG","wecker","Dienst weckt ("+art+"): "+text);
   try{
@@ -1161,12 +1178,13 @@ cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
 public class GameWebViewActivity extends Activity {
- private WebView webView;
+ WebView webView;
  private TextView statusView;
  // Zwischenspeicher fuer die vom Bootstrap angeforderten Skripte.
  private volatile String godbotSrc;
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
- private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
+ private String supaUrl="",supaKey="",supaToken="",supaTeam="";
+ String gameAccountId="";
  private LinearLayout rootLayout;
  // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
  private static final java.util.Map<String,GameWebViewActivity> OFFEN=new java.util.HashMap<>();
@@ -1414,6 +1432,28 @@ public class GameWebViewActivity extends Activity {
   sc.addView(row); return sc;
  }
  private static String nz(String x){ return x==null?"":x; }
+ // Leises Wecken: die Seite muss sichtbar sein, damit die Zeitgeber laufen -
+ // aber nicht im Vordergrund. Benutzt du das Geraet gerade, wandert die
+ // Ansicht ins schwebende Symbol statt dir dazwischenzufunken.
+ // Rueckgabe false heisst: keine Ansicht vorhanden, der Dienst muss sie
+ // regulaer starten.
+ static boolean weckeLeise(String accountId){
+  final GameWebViewActivity a=OFFEN.get(accountId==null?"":accountId);
+  if(a==null||a.isFinishing()||a.webView==null)return false;
+  if(OdinFloat.active(accountId)){
+   a.setStatus("Termin - schwebt bereits, läuft weiter");
+   return true;   // schon sichtbar, nichts zu tun
+  }
+  a.runOnUiThread(()->{
+   try{
+    if(OdinFloat.show(a,a.gameAccountId,a.webView,a::restoreFromFloat))
+     a.setStatus("Termin - leise ins Symbol, Gerät nicht gestört");
+    else
+     a.setStatus("Termin - Symbol nicht möglich");
+   }catch(Exception e){ android.util.Log.w("ODIN_GODBOT","weckeLeise",e); }
+  });
+  return true;
+ }
  // In der Datenbank steht die Welt oft nur als Zahl ("256"). Die Spielseite
  // erwartet aber den vollen Namen ("de256") - /page/play/256 antwortet mit
  // "invalid data". Deshalb hier vereinheitlichen statt saubere Eingaben
@@ -1687,7 +1727,7 @@ public class GameWebViewActivity extends Activity {
  }
  // Holt die WebView aus dem schwebenden Fenster zurueck in die Activity.
  // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
- private void restoreFromFloat(){
+ void restoreFromFloat(){
   if(!OdinFloat.active(gameAccountId))return;
   WebView w=OdinFloat.hide(gameAccountId);
   if(w==null||rootLayout==null)return;
