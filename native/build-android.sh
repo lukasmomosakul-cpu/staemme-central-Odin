@@ -1036,16 +1036,16 @@ public final class OdinFloat {
    // Kreis darueber. Vorher fuellte sie das Fenster fast aus und schaute an
    // den Ecken unter dem runden Symbol hervor.
    web.setPivotX(LAY_W/2f); web.setPivotY(LAY_H/2f);
-   float scale=(WIN*0.40f)/LAY_H;
+   float scale=(win*0.40f)/LAY_H;
    web.setScaleX(scale); web.setScaleY(scale);
    box.addView(web);
 
    TextView symbol=new TextView(app); symbol.setText("⚔");
-   symbol.setTextColor(0xFFFFFFFF); symbol.setTextSize(24f);
+   symbol.setTextColor(0xFFFFFFFF); symbol.setTextSize(win>=GROSS?24f:11f);
    symbol.setGravity(Gravity.CENTER);
    android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
    g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-   g.setColor(0xFF2B2B2B); g.setStroke(4,0xFFE8E8E8); symbol.setBackground(g);
+   g.setColor(0xFF2B2B2B); g.setStroke(win>=GROSS?4:2,0xFFE8E8E8); symbol.setBackground(g);
    symbol.setElevation(8f);   // liegt sicher ueber der WebView
    box.addView(symbol,new FrameLayout.LayoutParams(-1,-1));
 
@@ -1053,11 +1053,11 @@ public final class OdinFloat {
                                      :WindowManager.LayoutParams.TYPE_PHONE;
    // Durchscheinend, damit ausserhalb des Kreises nichts steht - sonst waere
    // das Symbol ein schwarzes Quadrat.
-   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WIN,WIN,type,
+   final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(win,win,type,
      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
    lp.gravity=Gravity.TOP|Gravity.START; lp.x=16;
    // Versetzt stapeln, damit sich mehrere Symbole nicht ueberdecken.
-   lp.y=180+offen.size()*(WIN+24);
+   lp.y=180+offen.size()*(win+24);
 
    final WindowManager wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
    final Fenster f=new Fenster(); f.web=web; f.wm=wm;
@@ -1448,8 +1448,10 @@ public class GameWebViewActivity extends Activity {
   try{
    if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
    if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
-   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat))
-    setStatus("Termin - leise ins Symbol, Gerät nicht gestört");
+   // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
+   // gerendert wird. Groesse spielt fuer die Drosselung keine Rolle.
+   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN))
+    setStatus("Termin - kleines Fenster, Gerät nicht gestört");
    else
     setStatus("Termin - Symbol nicht möglich");
   }catch(Exception e){ Log.w("ODIN_GODBOT","leiseSchweben",e); }
