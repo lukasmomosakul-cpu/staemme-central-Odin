@@ -376,10 +376,50 @@ public class OdinService extends Service {
   wk.enableVibration(false); wk.setVibrationPattern(null); wk.setSound(null,null);
   wk.setShowBadge(false); nm.createNotificationChannel(wk);
  }
+ // Faellige Termine, die der Dienst SELBST ausloest.
+ //
+ // Auswertung ueber 14 Stunden: der Dienst meldete sich durchgehend alle
+ // fuenf Minuten, auch bei gesperrtem Handy - waehrend kein einziger Alarm
+ // des AlarmManagers ankam, weder Testalarm noch Wachhund noch Termin.
+ // Die eigene Schleife ist auf diesem Geraet also der verlaessliche Weg.
+ // Die Alarme bleiben als zweites Standbein bestehen.
+ private final java.util.TreeMap<Long,String[]> faellig=new java.util.TreeMap<>();
+ private long zuletztGeweckt=0L;
+ private void faelligPruefen(){
+  long jetzt=System.currentTimeMillis();
+  // Nicht oefter als alle zwei Minuten wecken, sonst haengt das Geraet fest.
+  if(jetzt-zuletztGeweckt<120_000L)return;
+  java.util.Map.Entry<Long,String[]> e;
+  synchronized(faellig){ e=faellig.firstEntry(); }
+  if(e==null||e.getKey()>jetzt)return;
+  synchronized(faellig){ faellig.remove(e.getKey()); }
+  zuletztGeweckt=jetzt;
+  String konto=e.getValue()[0], text=e.getValue()[1], art=e.getValue()[2];
+  OdinLog.schreib(this,"-","WICHTIG","Dienst weckt ("+art+"): "+text);
+  protokoll(this,"WICHTIG","wecker","Dienst weckt ("+art+"): "+text);
+  try{
+   Intent i=new Intent(this,GameWebViewActivity.class);
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+             |Intent.FLAG_ACTIVITY_SINGLE_TOP);
+   if(!konto.isEmpty()){
+    i.setData(android.net.Uri.parse("odin://account/"+konto));
+    i.putExtra("accountId",konto);
+   }
+   i.putExtra("fromAlarm",true);
+   i.putExtra("wartung","Raubzug".equals(art));
+   // Das Starten aus dem Hintergrund ist zulaessig, weil die Berechtigung
+   // "Über anderen Apps anzeigen" erteilt ist - dieselbe, die das
+   // schwebende Fenster nutzt.
+   startActivity(i);
+  }catch(Exception ex){
+   OdinLog.schreib(this,"-","FEHLER","Wecken fehlgeschlagen: "+ex.getMessage());
+  }
+ }
  private void loop(){
   int runde=0;
   while(running){
    try{ poll(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","poll",e); }
+   try{ faelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","faellig",e); }
    // Wecker alle 10 Runden (5 Minuten) neu setzen: Plaene aendern sich, und
    // Android begrenzt die Zahl gleichzeitiger exakter Alarme.
    if(runde%10==0){ try{ weckerNeuSetzen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","alarm",e); } }
@@ -409,6 +449,27 @@ public class OdinService extends Service {
    x.getResponseCode();
   }catch(Exception e){ android.util.Log.w("ODIN_SVC","protokoll",e); }
  }
+ // Termine aus dem Rausstell-Plan in die eigene Liste uebernehmen.
+ private void merkeTermine(String planJson,String konto,String bez){
+  try{
+   JSONObject root=new JSONObject(planJson);
+   JSONArray doerfer=root.optJSONArray("attacks"); if(doerfer==null)return;
+   long jetzt=System.currentTimeMillis();
+   synchronized(faellig){
+    for(int i=0;i<doerfer.length();i++){
+     JSONObject d=doerfer.optJSONObject(i); if(d==null)continue;
+     JSONArray list=d.optJSONArray("attacks"); if(list==null)continue;
+     for(int k=0;k<list.length();k++){
+      JSONObject a=list.optJSONObject(k); if(a==null)continue;
+      long at=a.optLong("atMs",0L); if(at<=0)continue;
+      long weck=at-OdinAlarm.VORLAUF_MS;
+      if(weck<=jetzt)continue;
+      faellig.put(weck,new String[]{konto,bez+" · "+d.optString("coord",""),"Termin"});
+     }
+    }
+   }
+  }catch(Exception e){ android.util.Log.w("ODIN_SVC","merkeTermine",e); }
+ }
  private String hole(String pfad) throws Exception {
   HttpURLConnection c=(HttpURLConnection)new URL(url+"/rest/v1/"+pfad).openConnection();
   c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
@@ -429,14 +490,18 @@ public class OdinService extends Service {
   JSONArray accs=new JSONArray(hole("game_accounts?select=id,name,world&team_id=eq."
     +java.net.URLEncoder.encode(team,"UTF-8")));
   OdinAlarm.zuruecksetzen(this);
-  int gesamt=0;
+  synchronized(faellig){ faellig.clear(); }
+  int gesamt=0, uebersprungen=0;
   for(int i=0;i<accs.length();i++){
    JSONObject a=accs.getJSONObject(i);
    String id=a.optString("id",""); if(id.isEmpty())continue;
    String bez=a.optString("name","")+" · "+a.optString("world","");
    JSONArray s=new JSONArray(hole("godbot_settings?select=value&skey=eq.tw_tabben_plan&account_id=eq."
      +java.net.URLEncoder.encode(id,"UTF-8")));
-   if(s.length()==0)continue;
+   // Accounts ohne GodBot-Daten kosten sonst drei Abfragen alle fuenf
+   // Minuten fuer nichts - rund 860 am Tag je Account.
+   if(s.length()==0){ uebersprungen++; continue; }
+   merkeTermine(s.getJSONObject(0).optString("value","{}"),id,bez);
    gesamt+=OdinAlarm.planen(this,s.getJSONObject(0).optString("value","{}"),id,bez);
    // Wartungsfenster fuer den Raubzug
    try{
@@ -449,14 +514,18 @@ public class OdinService extends Service {
      if(nx.length()>0){
       double ms=Double.parseDouble(nx.getJSONObject(0).optString("value","0").replace("\"",""));
       gesamt+=OdinAlarm.wartungPlanen(this,(long)ms,id,bez);
+      long weck=(long)ms-20_000L;
+      if(weck>System.currentTimeMillis())
+       synchronized(faellig){ faellig.put(weck,new String[]{id,bez,"Raubzug"}); }
      }
     }
    }catch(Exception e){ android.util.Log.w("ODIN_ALARM","wartung",e); }
   }
   android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+gesamt+" ueber "+accs.length()+" Accounts");
-  protokoll(this,gesamt>0?"WICHTIG":"FEHLER","wecker",
-    "Wecker gesetzt: "+gesamt+" über "+accs.length()+" Accounts"
-    +(OdinAlarm.exactAllowed(this)?" (exakt)":" (ungenau)"));
+  int offen; synchronized(faellig){ offen=faellig.size(); }
+  protokoll(this,(gesamt>0||offen>0)?"WICHTIG":"FEHLER","wecker",
+    "Termine: "+offen+" vorgemerkt, "+gesamt+" Alarme, "
+    +uebersprungen+" Accounts ohne Daten übersprungen");
  }
  private void poll() throws Exception {
   if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
