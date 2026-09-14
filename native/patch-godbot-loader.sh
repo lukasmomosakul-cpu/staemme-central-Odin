@@ -205,6 +205,15 @@ js = r"""
  }
  try{
   if(OdinNative.syncReady()){
+   // NUR EINMAL je Profil. Bei jedem Seitenaufruf zu hydrieren erzeugt eine
+   // Rueckkopplung: GodBot loescht bestimmte Schluessel absichtlich als
+   // Erledigt-Markierung, wir schreiben sie aus der Datenbank zurueck, GodBot
+   // sieht sie erneut und laeuft wieder los. Im Protokoll sah das als
+   // "Abgleich: 1 ergaenzt" bei JEDEM Aufruf aus, dazu ein Seitenaufruf pro
+   // Minute - die Dauerschleife des Managers.
+   if(localStorage.getItem('odin_hydriert')){
+    OdinNative.status('Abgleich: bereits eingerichtet, nur Hochladen');
+   }else{
    var loaded=JSON.parse(OdinNative.settingsLoad()||'{}');
    var applied=0, behalten=0;
    for(var k in loaded){ if(!sollRunter(k))continue;
@@ -226,7 +235,9 @@ js = r"""
      rohSetzen(k,wert); applied++;
     }catch(e){}
    }
-   OdinNative.status('Abgleich: '+applied+' ergaenzt, '+behalten+' oertlich behalten');
+   rohSetzen('odin_hydriert',Date.now());
+   OdinNative.status('Erstabgleich: '+applied+' ergaenzt, '+behalten+' oertlich behalten');
+   }
   }else{
    OdinNative.status('Abgleich inaktiv (keine Sitzung)');
   }
