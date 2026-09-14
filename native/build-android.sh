@@ -1459,14 +1459,40 @@ public class GameWebViewActivity extends Activity {
  }
  // Laeuft auf der Oberflaechenschleife der eigenen Ansicht - dadurch keine
  // Zugriffe auf Felder einer fremden Instanz.
+ private Runnable leiseWaechter=null;
+ // Das kleine Fenster schliesst sich selbst, sobald der Durchlauf fertig ist.
+ // Erkannt am ausbleibenden Puls: GodBot schreibt bei jedem Arbeitsschritt in
+ // den localStorage. Danach ist die Ansicht bis zum naechsten Termin
+ // gedrosselt - bei einem Raubzug alle zwanzig Minuten vertretbar und
+ // deutlich sparsamer.
+ private void leiseSchliessenNachArbeit(){
+  final long start=System.currentTimeMillis();
+  letzteAktivitaet=start;
+  if(leiseWaechter!=null)getWindow().getDecorView().removeCallbacks(leiseWaechter);
+  leiseWaechter=new Runnable(){
+   @Override public void run(){
+    if(!OdinFloat.active(gameAccountId))return;   // von Hand zurueckgeholt
+    long jetzt=System.currentTimeMillis();
+    long lief=jetzt-start, still=jetzt-letzteAktivitaet;
+    if(lief>FENSTER_MAX_MS){ setStatus("Fenster: Höchstdauer erreicht"); holeAusFenster(false); return; }
+    if(lief>FENSTER_MIN_MS&&still>RUHE_MS){
+     setStatus("Fenster: fertig nach "+(lief/1000)+" s"); holeAusFenster(false); return;
+    }
+    getWindow().getDecorView().postDelayed(this,10_000L);
+   }
+  };
+  getWindow().getDecorView().postDelayed(leiseWaechter,10_000L);
+ }
  private void leiseSchweben(){
   try{
    if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
    if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
    // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
    // gerendert wird. Groesse spielt fuer die Drosselung keine Rolle.
-   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN))
+   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN)){
     setStatus("Termin - kleines Fenster, Gerät nicht gestört");
+    leiseSchliessenNachArbeit();
+   }
    else
     setStatus("Termin - Symbol nicht möglich");
   }catch(Exception e){ Log.w("ODIN_GODBOT","leiseSchweben",e); }
@@ -1744,7 +1770,9 @@ public class GameWebViewActivity extends Activity {
  }
  // Holt die WebView aus dem schwebenden Fenster zurueck in die Activity.
  // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
- private void restoreFromFloat(){
+ // Nur zurueckhaengen, ohne die App nach vorne zu holen. Wird gebraucht, wenn
+ // das kleine Fenster nach getaner Arbeit von selbst schliessen soll.
+ private void holeAusFenster(boolean nachVorne){
   if(!OdinFloat.active(gameAccountId))return;
   WebView w=OdinFloat.hide(gameAccountId);
   if(w==null||rootLayout==null)return;
@@ -1753,29 +1781,28 @@ public class GameWebViewActivity extends Activity {
    try{
     if(w.getParent() instanceof android.view.ViewGroup)
      ((android.view.ViewGroup)w.getParent()).removeView(w);
-    // Vollbild wiederherstellen: Skalierung und Layoutgroesse zuruecksetzen,
-    // sonst haengt die Seite verkleinert in der Ecke.
     w.setScaleX(1f); w.setScaleY(1f);
     w.setLayoutParams(new LinearLayout.LayoutParams(-1,0,1f));
     rootLayout.addView(w,1,new LinearLayout.LayoutParams(-1,0,1f));
     w.requestLayout(); w.invalidate();
-    // Ohne Kennung und Daten-URI legt Android eine NEUE Ansicht an: sie hat
-    // dann keine Account-Kennung, syncReady() liefert false, es werden keine
-    // Einstellungen geladen - und ohne Profile laeuft kein Raubzug. Genau das
-    // war das "nach dem Minimieren ausgeloggt".
-    Intent i=new Intent(this,GameWebViewActivity.class);
-    if(!gameAccountId.isEmpty()){
-     i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
-     i.putExtra("accountId",gameAccountId);
+    if(nachVorne){
+     Intent i=new Intent(this,GameWebViewActivity.class);
+     if(!gameAccountId.isEmpty()){
+      i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
+      i.putExtra("accountId",gameAccountId);
+     }
+     i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
+     i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
+     i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+     startActivity(i);
+     setStatus("zurueck im Vordergrund");
+    }else{
+     setStatus("Fenster geschlossen - bis zum nächsten Termin pausiert");
     }
-    i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
-    i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
-    i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|Intent.FLAG_ACTIVITY_SINGLE_TOP);
-    startActivity(i);
-    setStatus("zurueck im Vordergrund");
    }catch(Exception e){android.util.Log.e("ODIN_FLOAT","restore",e);}
   });
  }
+ private void restoreFromFloat(){ holeAusFenster(true); }
  @Override protected void onDestroy(){
   if(OFFEN.get(gameAccountId)==this)OFFEN.remove(gameAccountId);
   super.onDestroy();
