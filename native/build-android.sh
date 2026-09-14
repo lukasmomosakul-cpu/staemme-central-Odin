@@ -841,20 +841,25 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
   long probeZiel=in.getLongExtra(OdinAlarm.EXTRA_PROBE,0L);
   if(probeZiel>0){
    long spaet=(System.currentTimeMillis()-probeZiel)/1000;
-   OdinService.protokoll(c,"WICHTIG","probe",
-     "Testalarm gefeuert, Verspätung "+spaet+" s");
+   // ZUERST oertlich schreiben: im Doze-Modus ist der Netzzugriff fuer
+   // Hintergrund-Apps gesperrt. Ein Alarm kann also feuern, ohne dass die
+   // Meldung ankommt - genau daran ist der erste Test gescheitert.
+   OdinLog.schreib(c,"-","WICHTIG","Testalarm gefeuert, Verspätung "+spaet+" s");
+   OdinService.protokoll(c,"WICHTIG","probe","Testalarm gefeuert, Verspätung "+spaet+" s");
    return;
   }
   if(in.getBooleanExtra(OdinAlarm.EXTRA_WACHHUND,false)){
    // Nur den Dienst zurueckholen und sich selbst neu setzen - kein Spiel
    // oeffnen, kein Bildschirm an.
    OdinAlarm.wachhund(c);
+   OdinLog.schreib(c,"-","info","Wachhund: Dienst nachgestartet");
    OdinService.protokoll(c,"info","wachhund","Dienst nachgestartet");
    return;
   }
   String info=in.getStringExtra(OdinAlarm.EXTRA_INFO); if(info==null)info="";
   String acc=in.getStringExtra(OdinAlarm.EXTRA_ACCOUNT); if(acc==null)acc="";
   boolean wartung=in.getBooleanExtra(OdinAlarm.EXTRA_WARTUNG,false);
+  OdinLog.schreib(c,"-","WICHTIG","Wecker ausgelöst ("+(wartung?"Raubzug":"Termin")+"): "+info);
   OdinService.protokoll(c,"WICHTIG","wecker",
     "Wecker ausgelöst ("+(wartung?"Raubzug":"Termin")+"): "+info);
   Intent open=new Intent(c,GameWebViewActivity.class);
