@@ -1009,7 +1009,8 @@ import java.util.*;
 // GodBots Selektoren griffen auf ein anderes Layout zu.
 public final class OdinFloat {
  private OdinFloat(){}
- private static final int LAY_W=420, LAY_H=740, WIN=150;
+ private static final int LAY_W=420, LAY_H=740;
+ public static final int GROSS=150, KLEIN=44;   // Kantenlaenge in Pixeln
  private static class Fenster {
   View rahmen; WebView web; WindowManager wm;
  }
@@ -1021,6 +1022,11 @@ public final class OdinFloat {
  private static String schluessel(String a){ return a==null||a.isEmpty()?"_":a; }
 
  public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore){
+  return show(ctx,accountId,web,onRestore,GROSS);
+ }
+ // Fuer Aktionen im Hintergrund reicht ein sehr kleines Fenster: entscheidend
+ // ist, dass die WebView GERENDERT wird, nicht wie gross sie ist.
+ public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore,int win){
   final Context app=ctx.getApplicationContext();
   final String key=schluessel(accountId);
   if(offen.containsKey(key)||web==null||!allowed(app))return false;
