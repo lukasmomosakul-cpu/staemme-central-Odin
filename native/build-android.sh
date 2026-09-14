@@ -364,6 +364,7 @@ public class OdinService extends Service {
   else startForeground(1,n);
   try{ PowerManager pm=(PowerManager)getSystemService(Context.POWER_SERVICE);
    lock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"odin:bot"); lock.acquire(); }catch(Exception ignored){}
+  OdinAlarm.wachhund(this);   // haelt sich selbst am Leben
   running=true; poller=new Thread(this::loop); poller.start();
  }
  private void channels(){
@@ -687,7 +688,8 @@ public final class OdinAlarm {
  public static final long VORLAUF_MS = 90_000L;   // 90 s vor Einschlag
  private static final int MAX_WECKER = 12;        // Android begrenzt exakte Alarme
  public static final String EXTRA_AT="odin_at", EXTRA_INFO="odin_info",
-   EXTRA_ACCOUNT="odin_account", EXTRA_WARTUNG="odin_wartung";
+   EXTRA_ACCOUNT="odin_account", EXTRA_WARTUNG="odin_wartung",
+   EXTRA_WACHHUND="odin_wachhund";
  // Fortlaufende Kennung ueber alle Accounts hinweg, damit sich die Wecker
  // verschiedener Konten nicht gegenseitig ueberschreiben.
  private static int naechsteId=9000;
@@ -714,6 +716,26 @@ public final class OdinAlarm {
    else am.set(AlarmManager.RTC_WAKEUP,at,pi);
   }catch(Exception e){ android.util.Log.e("ODIN_ALARM","test",e); return 0L; }
   return at;
+ }
+
+ // Wachhund. Der Vordergrunddienst wird auf manchen Geraeten trotz
+ // START_STICKY abgeraeumt und kommt nicht von selbst zurueck - im Protokoll
+ // waren das 7,5 Stunden ohne eine einzige Meldung. Alarme des AlarmManagers
+ // ueberleben dagegen den Prozesstod. Dieser Alarm startet den Dienst neu und
+ // setzt sich anschliessend selbst wieder.
+ public static final long WACHHUND_MS=15*60_000L;
+ public static void wachhund(Context c){
+  try{
+   AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
+   Intent i=new Intent(c,OdinAlarmReceiver.class);
+   i.putExtra(EXTRA_WACHHUND,true);
+   i.setData(android.net.Uri.parse("odin://wachhund"));
+   PendingIntent pi=PendingIntent.getBroadcast(c,7777,i,
+     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+   long at=System.currentTimeMillis()+WACHHUND_MS;
+   if(exactAllowed(c)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,at,pi);
+   else am.set(AlarmManager.RTC_WAKEUP,at,pi);
+  }catch(Exception e){ android.util.Log.e("ODIN_ALARM","wachhund",e); }
  }
 
  // Wartungswecker: GodBot berechnet den naechsten Raubzug-Durchlauf selbst und
@@ -798,6 +820,13 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
   OdinService.ladeStatisch(c);
   try{ c.startForegroundService(new Intent(c,OdinService.class)); }
   catch(Exception e){ android.util.Log.w("ODIN_ALARM","dienst",e); }
+  if(in.getBooleanExtra(OdinAlarm.EXTRA_WACHHUND,false)){
+   // Nur den Dienst zurueckholen und sich selbst neu setzen - kein Spiel
+   // oeffnen, kein Bildschirm an.
+   OdinAlarm.wachhund(c);
+   OdinService.protokoll(c,"info","wachhund","Dienst nachgestartet");
+   return;
+  }
   String info=in.getStringExtra(OdinAlarm.EXTRA_INFO); if(info==null)info="";
   String acc=in.getStringExtra(OdinAlarm.EXTRA_ACCOUNT); if(acc==null)acc="";
   boolean wartung=in.getBooleanExtra(OdinAlarm.EXTRA_WARTUNG,false);
