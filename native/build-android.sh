@@ -975,7 +975,9 @@ public final class OdinBubble {
  // Merkt sich, aus welcher Ansicht minimiert wurde, damit das Tippen genau
  // dorthin zurueckfuehrt statt eine neue Spielsitzung zu starten.
  private static Class<?> returnTo=MainActivity.class;
+ private static String rueckKonto="";
  public static void setReturnTarget(Class<?> c){ if(c!=null)returnTo=c; }
+ public static void setReturnTarget(Class<?> c,String konto){ if(c!=null)returnTo=c; rueckKonto=konto==null?"":konto; }
  public static boolean allowed(Context c){ return Settings.canDrawOverlays(c); }
  public static void requestPermission(Context c){
   Intent i=new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -1008,7 +1010,13 @@ public final class OdinBubble {
      case MotionEvent.ACTION_UP:
       if(!moved){ // Tippen holt die App zurueck
        Intent i=new Intent(app,returnTo);
-       i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+       // Ohne Kennung entstuende eine neue, sitzungslose Ansicht.
+       if(rueckKonto!=null&&!rueckKonto.isEmpty()){
+        i.setData(android.net.Uri.parse("odin://account/"+rueckKonto));
+        i.putExtra("accountId",rueckKonto);
+       }
+       i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                 |Intent.FLAG_ACTIVITY_SINGLE_TOP);
        app.startActivity(i); hide();
       }
       return true;
@@ -1234,7 +1242,7 @@ public class GameWebViewActivity extends Activity {
     setStatus("schwebt ("+OdinFloat.anzahl()+" aktiv) – Symbol antippen");
     moveTaskToBack(true);
    }else{
-    OdinBubble.setReturnTarget(GameWebViewActivity.class);
+    OdinBubble.setReturnTarget(GameWebViewActivity.class,gameAccountId);
     OdinBubble.show(this);
     setStatus("minimiert (gedrosselt)");
     moveTaskToBack(true);
@@ -1556,8 +1564,19 @@ public class GameWebViewActivity extends Activity {
     w.setLayoutParams(new LinearLayout.LayoutParams(-1,0,1f));
     rootLayout.addView(w,1,new LinearLayout.LayoutParams(-1,0,1f));
     w.requestLayout(); w.invalidate();
+    // Ohne Kennung und Daten-URI legt Android eine NEUE Ansicht an: sie hat
+    // dann keine Account-Kennung, syncReady() liefert false, es werden keine
+    // Einstellungen geladen - und ohne Profile laeuft kein Raubzug. Genau das
+    // war das "nach dem Minimieren ausgeloggt".
     Intent i=new Intent(this,GameWebViewActivity.class);
-    i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT); startActivity(i);
+    if(!gameAccountId.isEmpty()){
+     i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
+     i.putExtra("accountId",gameAccountId);
+    }
+    i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
+    i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
+    i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+    startActivity(i);
     setStatus("zurueck im Vordergrund");
    }catch(Exception e){android.util.Log.e("ODIN_FLOAT","restore",e);}
   });
