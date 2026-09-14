@@ -374,6 +374,27 @@ public class OdinService extends Service {
    try{ Thread.sleep(30000); }catch(InterruptedException e){ return; }
   }
  }
+ // Bisher protokollierte der Dienst nur nach Logcat - genau der Teil, der im
+ // Hintergrund arbeitet, war im Protokoll unsichtbar. Ohne das laesst sich
+ // nicht feststellen, ob ueberhaupt Wecker gesetzt werden.
+ static void protokoll(Context c,String stufe,String bereich,String text){
+  try{
+   if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
+   JSONObject r=new JSONObject();
+   r.put("team_id",team); r.put("level",stufe); r.put("bereich",bereich);
+   r.put("message",text.length()>500?text.substring(0,500):text);
+   r.put("device",Build.MODEL); r.put("app_version","dienst");
+   HttpURLConnection x=(HttpURLConnection)new URL(url+"/rest/v1/app_events").openConnection();
+   x.setRequestMethod("POST"); x.setRequestProperty("apikey",key);
+   x.setRequestProperty("Authorization","Bearer "+token);
+   x.setRequestProperty("Content-Type","application/json");
+   x.setRequestProperty("Prefer","return=minimal");
+   x.setConnectTimeout(15000); x.setReadTimeout(20000); x.setDoOutput(true);
+   java.io.OutputStream os=x.getOutputStream();
+   os.write(new JSONArray().put(r).toString().getBytes("UTF-8")); os.close();
+   x.getResponseCode();
+  }catch(Exception e){ android.util.Log.w("ODIN_SVC","protokoll",e); }
+ }
  private String hole(String pfad) throws Exception {
   HttpURLConnection c=(HttpURLConnection)new URL(url+"/rest/v1/"+pfad).openConnection();
   c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
@@ -387,7 +408,10 @@ public class OdinService extends Service {
  // nur die sichtbare WebView laeuft ungedrosselt. Stattdessen wird jeweils
  // der Account nach vorne geholt, der als naechstes einen Termin hat.
  private void weckerNeuSetzen() throws Exception {
-  if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
+  if(url.isEmpty()||token.isEmpty()||team.isEmpty()){
+   android.util.Log.w("ODIN_ALARM","keine Sitzung - keine Wecker");
+   return;
+  }
   JSONArray accs=new JSONArray(hole("game_accounts?select=id,name,world&team_id=eq."
     +java.net.URLEncoder.encode(team,"UTF-8")));
   OdinAlarm.zuruecksetzen(this);
@@ -416,6 +440,9 @@ public class OdinService extends Service {
    }catch(Exception e){ android.util.Log.w("ODIN_ALARM","wartung",e); }
   }
   android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+gesamt+" ueber "+accs.length()+" Accounts");
+  protokoll(this,gesamt>0?"WICHTIG":"FEHLER","wecker",
+    "Wecker gesetzt: "+gesamt+" über "+accs.length()+" Accounts"
+    +(OdinAlarm.exactAllowed(this)?" (exakt)":" (ungenau)"));
  }
  private void poll() throws Exception {
   if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
@@ -755,6 +782,9 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
  @Override public void onReceive(Context c, Intent in){
   String info=in.getStringExtra(OdinAlarm.EXTRA_INFO); if(info==null)info="";
   String acc=in.getStringExtra(OdinAlarm.EXTRA_ACCOUNT); if(acc==null)acc="";
+  boolean wartung=in.getBooleanExtra(OdinAlarm.EXTRA_WARTUNG,false);
+  OdinService.protokoll(c,"WICHTIG","wecker",
+    "Wecker ausgelöst ("+(wartung?"Raubzug":"Termin")+"): "+info);
   Intent open=new Intent(c,GameWebViewActivity.class);
   open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
   // Dieselbe Daten-URI wie beim Oeffnen aus Odin: dadurch kommt genau die
