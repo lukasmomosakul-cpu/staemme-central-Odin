@@ -330,7 +330,19 @@ public class OdinService extends Service {
   c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).edit()
    .putString("url",u).putString("key",k).putString("token",t).putString("team",tm).apply();
  }
+ // Nach dem Abraeumen der App ist der Prozess weg und die statischen Felder
+ // sind leer. Der Wecker-Empfaenger laeuft dann in einem frischen Prozess -
+ // ohne Nachladen koennte er weder melden noch abgleichen.
+ static void ladeStatisch(Context c){
+  android.content.SharedPreferences p=c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE);
+  if(url.isEmpty())url=p.getString("url","");
+  if(key.isEmpty())key=p.getString("key","");
+  if(token.isEmpty())token=p.getString("token","");
+  if(team.isEmpty())team=p.getString("team","");
+  if(device.isEmpty())device=Build.MODEL;
+ }
  private void laden(){
+  ladeStatisch(this);
   android.content.SharedPreferences p=getSharedPreferences("odin_svc",Context.MODE_PRIVATE);
   if(url.isEmpty())url=p.getString("url","");
   if(key.isEmpty())key=p.getString("key","");
@@ -379,6 +391,7 @@ public class OdinService extends Service {
  // nicht feststellen, ob ueberhaupt Wecker gesetzt werden.
  static void protokoll(Context c,String stufe,String bereich,String text){
   try{
+   ladeStatisch(c);
    if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
    JSONObject r=new JSONObject();
    r.put("team_id",team); r.put("level",stufe); r.put("bereich",bereich);
@@ -780,6 +793,11 @@ import android.content.Intent;
 // Zeitgeber laufen wieder exakt.
 public class OdinAlarmReceiver extends BroadcastReceiver {
  @Override public void onReceive(Context c, Intent in){
+  // Zuerst die Sitzung: ohne sie ist der Wecker stumm und die Ansicht kann
+  // nichts abgleichen.
+  OdinService.ladeStatisch(c);
+  try{ c.startForegroundService(new Intent(c,OdinService.class)); }
+  catch(Exception e){ android.util.Log.w("ODIN_ALARM","dienst",e); }
   String info=in.getStringExtra(OdinAlarm.EXTRA_INFO); if(info==null)info="";
   String acc=in.getStringExtra(OdinAlarm.EXTRA_ACCOUNT); if(acc==null)acc="";
   boolean wartung=in.getBooleanExtra(OdinAlarm.EXTRA_WARTUNG,false);
@@ -1108,6 +1126,13 @@ public class GameWebViewActivity extends Activity {
   OFFEN.put(wer,this);
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
   supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
+  // Vom Wecker gestartet traegt das Intent keine Sitzung - dann aus der
+  // dauerhaften Ablage holen, sonst laeuft die Ansicht ohne Abgleich.
+  if(supaUrl.isEmpty()||supaToken.isEmpty()){
+   OdinService.ladeStatisch(this);
+   supaUrl=OdinService.url; supaKey=OdinService.key;
+   supaToken=OdinService.token; supaTeam=OdinService.team;
+  }
   gameAccountId=nz(getIntent().getStringExtra("accountId"));
   LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(0xFFFFFFFF);
   root.addView(buildHeader(activeName),new LinearLayout.LayoutParams(-1,-2));
