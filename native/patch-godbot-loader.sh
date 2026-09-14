@@ -210,27 +210,23 @@ js = r"""
    for(var k in loaded){ if(!sollRunter(k))continue;
     try{
      var eintrag=loaded[k], wert=eintrag&&eintrag.v!==undefined?eintrag.v:eintrag;
-     var fremdStand=eintrag&&eintrag.u?Date.parse(eintrag.u):0;
-     var eigenStand=parseInt(localStorage.getItem('odin_lw_'+k)||'0',10);
-     // Frueher wurde blind ueberschrieben: eine hier geaenderte Einstellung
-     // wurde beim naechsten Oeffnen vom aelteren Serverstand ersetzt.
-     // 90 s Toleranz: Geraeteuhr und Serveruhr laufen nie genau gleich, und
-     // zwischen Schreiben und Hochladen vergehen bis zu vier Sekunden. Ohne
-     // Toleranz galt am Ende ALLES als "lokal neuer" - es wurde gar nichts
-     // mehr uebernommen, der Geraeteabgleich war faktisch tot.
-     if(localStorage.getItem(k)!==null && eigenStand>fremdStand+90000){ behalten++; continue; }
-     // Niemals Gefuelltes durch Leeres ersetzen. Seit das Hydrieren wirkt,
-     // koennte ein leerer Serverwert ({} oder []) oertliche Vorlagen und
-     // Plaene loeschen - und vor v1.30.2 gab es die Zeitstempel odin_lw_
-     // nicht, dort steht also 0 und der Server gewinnt immer.
-     var leerFremd=(!wert||wert.length<=2||wert==='null'||wert==='""');
      var eigen=localStorage.getItem(k);
-     var vollEigen=(eigen&&eigen.length>2&&eigen!=='null'&&eigen!=='""');
-     if(leerFremd&&vollEigen){ behalten++; continue; }
-     if(eigen!==wert){ rohSetzen(k,wert); applied++; }
+     // Nur fuellen, nie ueberschreiben.
+     //
+     // Vorher gewann der Server, sobald sein Stand aelter als 90 s jung war.
+     // Bei einem Einstellungsblob wie tw_settings kippt damit irgendein
+     // frueherer Stand die aktuelle Konfiguration - der Raubzug stand danach
+     // wieder auf aus. Ein Blob laesst sich nicht sinnvoll zusammenfuehren,
+     // also darf er auch nicht automatisch ersetzt werden.
+     //
+     // Ein neues Geraet oder ein frisches Profil hat nichts und bekommt
+     // deshalb alles. Ein bestehendes behaelt, was es hat.
+     if(eigen!==null){ behalten++; continue; }
+     if(!wert||wert.length<=2||wert==='null'||wert==='""'){ continue; }
+     rohSetzen(k,wert); applied++;
     }catch(e){}
    }
-   OdinNative.status('Abgleich: '+applied+' uebernommen, '+behalten+' lokal neuer');
+   OdinNative.status('Abgleich: '+applied+' ergaenzt, '+behalten+' oertlich behalten');
   }else{
    OdinNative.status('Abgleich inaktiv (keine Sitzung)');
   }
