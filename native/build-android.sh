@@ -520,7 +520,7 @@ public class OdinService extends Service {
    try{
     String liste="tw_next_recheck_at,tw_next_farm_burst_at,tw_next_resource_scan_at,"
                 +"tw_am_check_at,tw_am_check_soon_at,tw_incoming_rename_due_at,"
-                +"tw_plan_aufraeumen_at";
+                +"tw_plan_aufraeumen_at,tw_mass_support_next_at";
     JSONArray nx=new JSONArray(hole("godbot_settings?select=skey,value&account_id=eq."
       +java.net.URLEncoder.encode(id,"UTF-8")
       +"&skey=in.("+java.net.URLEncoder.encode(liste,"UTF-8")+")"));
@@ -535,6 +535,7 @@ public class OdinService extends Service {
      if(weck<=jetzt)continue;
      String art=sk.contains("recheck")?"Raubzug":sk.contains("farm")?"Farmen"
                :sk.contains("resource")?"Rohstoffe":sk.contains("am_check")?"Manager"
+               :sk.contains("mass_support")?"Massenunterstützung"
                :sk.contains("rename")?"Eingehende":"Aufräumen";
      synchronized(faellig){ faellig.put(weck,new String[]{id,bez,art}); }
      if("Raubzug".equals(art))gesamt+=OdinAlarm.wartungPlanen(this,(long)ms,id,bez);
