@@ -723,6 +723,24 @@ public final class OdinAlarm {
  // waren das 7,5 Stunden ohne eine einzige Meldung. Alarme des AlarmManagers
  // ueberleben dagegen den Prozesstod. Dieser Alarm startet den Dienst neu und
  // setzt sich anschliessend selbst wieder.
+ public static final String EXTRA_PROBE="odin_probe";
+ // Testalarm zum Isolieren einer einzigen Frage: feuert der AlarmManager auf
+ // diesem Geraet ueberhaupt? Er oeffnet nichts und weckt nichts - er schreibt
+ // nur eine Zeile ins Protokoll, samt tatsaechlicher Verspaetung.
+ public static long probe(Context c,int sekunden){
+  long at=System.currentTimeMillis()+sekunden*1000L;
+  try{
+   AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
+   Intent i=new Intent(c,OdinAlarmReceiver.class);
+   i.putExtra(EXTRA_PROBE,at);
+   i.setData(android.net.Uri.parse("odin://probe/"+at));
+   PendingIntent pi=PendingIntent.getBroadcast(c,6666,i,
+     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+   if(exactAllowed(c)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,at,pi);
+   else am.set(AlarmManager.RTC_WAKEUP,at,pi);
+  }catch(Exception e){ android.util.Log.e("ODIN_ALARM","probe",e); return 0L; }
+  return at;
+ }
  public static final long WACHHUND_MS=15*60_000L;
  public static void wachhund(Context c){
   try{
@@ -820,6 +838,13 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
   OdinService.ladeStatisch(c);
   try{ c.startForegroundService(new Intent(c,OdinService.class)); }
   catch(Exception e){ android.util.Log.w("ODIN_ALARM","dienst",e); }
+  long probeZiel=in.getLongExtra(OdinAlarm.EXTRA_PROBE,0L);
+  if(probeZiel>0){
+   long spaet=(System.currentTimeMillis()-probeZiel)/1000;
+   OdinService.protokoll(c,"WICHTIG","probe",
+     "Testalarm gefeuert, Verspätung "+spaet+" s");
+   return;
+  }
   if(in.getBooleanExtra(OdinAlarm.EXTRA_WACHHUND,false)){
    // Nur den Dienst zurueckholen und sich selbst neu setzen - kein Spiel
    // oeffnen, kein Bildschirm an.
@@ -1225,6 +1250,19 @@ public class GameWebViewActivity extends Activity {
    startActivity(i);
   });
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
+  Button probe=new Button(this); probe.setText("⏱"); probe.setTextSize(12f);
+  probe.setAllCaps(false); probe.setPadding(10,0,10,0);
+  probe.setOnClickListener(x->{
+   long at=OdinAlarm.probe(this,120);
+   if(at==0){ setStatus("Testalarm konnte nicht gesetzt werden"); return; }
+   String uhr=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY)
+     .format(new java.util.Date(at));
+   setStatus("Testalarm für "+uhr+(OdinAlarm.exactAllowed(this)?" (exakt)":" (ungenau)"));
+   android.widget.Toast.makeText(this,
+     "Testalarm "+uhr+" — jetzt sperren und liegen lassen",
+     android.widget.Toast.LENGTH_LONG).show();
+  });
+  bar.addView(probe,new LinearLayout.LayoutParams(-2,-2));
   Button dim=new Button(this); dim.setText("🌙"); dim.setTextSize(12f); dim.setAllCaps(false);
   dim.setPadding(10,0,10,0);
   dim.setOnClickListener(x->dimmenAn());
