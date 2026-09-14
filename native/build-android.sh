@@ -1178,13 +1178,12 @@ cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
 public class GameWebViewActivity extends Activity {
- WebView webView;
+ private WebView webView;
  private TextView statusView;
  // Zwischenspeicher fuer die vom Bootstrap angeforderten Skripte.
  private volatile String godbotSrc;
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
- private String supaUrl="",supaKey="",supaToken="",supaTeam="";
- String gameAccountId="";
+ private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  private LinearLayout rootLayout;
  // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
  private static final java.util.Map<String,GameWebViewActivity> OFFEN=new java.util.HashMap<>();
@@ -1438,21 +1437,22 @@ public class GameWebViewActivity extends Activity {
  // Rueckgabe false heisst: keine Ansicht vorhanden, der Dienst muss sie
  // regulaer starten.
  static boolean weckeLeise(String accountId){
-  final GameWebViewActivity a=OFFEN.get(accountId==null?"":accountId);
-  if(a==null||a.isFinishing()||a.webView==null)return false;
-  if(OdinFloat.active(accountId)){
-   a.setStatus("Termin - schwebt bereits, läuft weiter");
-   return true;   // schon sichtbar, nichts zu tun
-  }
-  a.runOnUiThread(()->{
-   try{
-    if(OdinFloat.show(a,a.gameAccountId,a.webView,a::restoreFromFloat))
-     a.setStatus("Termin - leise ins Symbol, Gerät nicht gestört");
-    else
-     a.setStatus("Termin - Symbol nicht möglich");
-   }catch(Exception e){ android.util.Log.w("ODIN_GODBOT","weckeLeise",e); }
-  });
+  GameWebViewActivity a=OFFEN.get(accountId==null?"":accountId);
+  if(a==null||a.isFinishing())return false;
+  a.runOnUiThread(a::leiseSchweben);
   return true;
+ }
+ // Laeuft auf der Oberflaechenschleife der eigenen Ansicht - dadurch keine
+ // Zugriffe auf Felder einer fremden Instanz.
+ private void leiseSchweben(){
+  try{
+   if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
+   if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
+   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat))
+    setStatus("Termin - leise ins Symbol, Gerät nicht gestört");
+   else
+    setStatus("Termin - Symbol nicht möglich");
+  }catch(Exception e){ Log.w("ODIN_GODBOT","leiseSchweben",e); }
  }
  // In der Datenbank steht die Welt oft nur als Zahl ("256"). Die Spielseite
  // erwartet aber den vollen Namen ("de256") - /page/play/256 antwortet mit
@@ -1727,7 +1727,7 @@ public class GameWebViewActivity extends Activity {
  }
  // Holt die WebView aus dem schwebenden Fenster zurueck in die Activity.
  // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
- void restoreFromFloat(){
+ private void restoreFromFloat(){
   if(!OdinFloat.active(gameAccountId))return;
   WebView w=OdinFloat.hide(gameAccountId);
   if(w==null||rootLayout==null)return;
