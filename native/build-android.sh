@@ -388,7 +388,7 @@ public class OdinService extends Service {
  private void faelligPruefen(){
   long jetzt=System.currentTimeMillis();
   // Nicht oefter als alle zwei Minuten wecken, sonst haengt das Geraet fest.
-  if(jetzt-zuletztGeweckt<120_000L)return;
+  if(jetzt-zuletztGeweckt<90_000L)return;
   java.util.Map.Entry<Long,String[]> e;
   synchronized(faellig){ e=faellig.firstEntry(); }
   if(e==null||e.getKey()>jetzt)return;
@@ -424,7 +424,18 @@ public class OdinService extends Service {
    // Android begrenzt die Zahl gleichzeitiger exakter Alarme.
    if(runde%10==0){ try{ weckerNeuSetzen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","alarm",e); } }
    runde++;
-   try{ Thread.sleep(30000); }catch(InterruptedException e){ return; }
+   // Kurz vor einem Termin feiner takten: 30 s Raster wuerden sonst bis zu
+   // 30 s vom 90-Sekunden-Vorlauf fressen.
+   long schlaf=30000L;
+   try{
+    java.util.Map.Entry<Long,String[]> n;
+    synchronized(faellig){ n=faellig.firstEntry(); }
+    if(n!=null){
+     long hin=n.getKey()-System.currentTimeMillis();
+     if(hin<180000L)schlaf=5000L;
+    }
+   }catch(Exception ignored){}
+   try{ Thread.sleep(schlaf); }catch(InterruptedException e){ return; }
   }
  }
  // Bisher protokollierte der Dienst nur nach Logcat - genau der Teil, der im
@@ -503,23 +514,32 @@ public class OdinService extends Service {
    if(s.length()==0){ uebersprungen++; continue; }
    merkeTermine(s.getJSONObject(0).optString("value","{}"),id,bez);
    gesamt+=OdinAlarm.planen(this,s.getJSONObject(0).optString("value","{}"),id,bez);
-   // Wartungsfenster fuer den Raubzug
+   // Alle Planungszeitpunkte, die GodBot selbst vormerkt. Einzeln
+   // nachzuruesten hiesse, bei jeder neuen Funktion wieder etwas zu
+   // vergessen - deshalb in einem Rutsch.
    try{
-    JSONArray loop=new JSONArray(hole("godbot_settings?select=value&skey=eq.tw_loop_active&account_id=eq."
-      +java.net.URLEncoder.encode(id,"UTF-8")));
-    boolean aktiv=loop.length()>0&&"1".equals(loop.getJSONObject(0).optString("value","").replace("\"",""));
-    if(aktiv){
-     JSONArray nx=new JSONArray(hole("godbot_settings?select=value&skey=eq.tw_next_recheck_at&account_id=eq."
-       +java.net.URLEncoder.encode(id,"UTF-8")));
-     if(nx.length()>0){
-      double ms=Double.parseDouble(nx.getJSONObject(0).optString("value","0").replace("\"",""));
-      gesamt+=OdinAlarm.wartungPlanen(this,(long)ms,id,bez);
-      long weck=(long)ms-20_000L;
-      if(weck>System.currentTimeMillis())
-       synchronized(faellig){ faellig.put(weck,new String[]{id,bez,"Raubzug"}); }
-     }
+    String liste="tw_next_recheck_at,tw_next_farm_burst_at,tw_next_resource_scan_at,"
+                +"tw_am_check_at,tw_am_check_soon_at,tw_incoming_rename_due_at,"
+                +"tw_plan_aufraeumen_at";
+    JSONArray nx=new JSONArray(hole("godbot_settings?select=skey,value&account_id=eq."
+      +java.net.URLEncoder.encode(id,"UTF-8")
+      +"&skey=in.("+java.net.URLEncoder.encode(liste,"UTF-8")+")"));
+    long jetzt=System.currentTimeMillis();
+    for(int n=0;n<nx.length();n++){
+     JSONObject o=nx.getJSONObject(n);
+     String sk=o.optString("skey","");
+     double ms;
+     try{ ms=Double.parseDouble(o.optString("value","0").replace("\"","")); }catch(Exception ig){ continue; }
+     if(ms<=0)continue;
+     long weck=(long)ms-20_000L;
+     if(weck<=jetzt)continue;
+     String art=sk.contains("recheck")?"Raubzug":sk.contains("farm")?"Farmen"
+               :sk.contains("resource")?"Rohstoffe":sk.contains("am_check")?"Manager"
+               :sk.contains("rename")?"Eingehende":"Aufräumen";
+     synchronized(faellig){ faellig.put(weck,new String[]{id,bez,art}); }
+     if("Raubzug".equals(art))gesamt+=OdinAlarm.wartungPlanen(this,(long)ms,id,bez);
     }
-   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","wartung",e); }
+   }catch(Exception e){ android.util.Log.w("ODIN_ALARM","planzeiten",e); }
   }
   android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+gesamt+" ueber "+accs.length()+" Accounts");
   int offen; synchronized(faellig){ offen=faellig.size(); }
