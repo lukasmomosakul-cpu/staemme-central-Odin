@@ -1061,9 +1061,18 @@ public final class OdinFloat {
    // das Symbol ein schwarzes Quadrat.
    final WindowManager.LayoutParams lp=new WindowManager.LayoutParams(win,win,type,
      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
-   lp.gravity=Gravity.TOP|Gravity.START; lp.x=16;
-   // Versetzt stapeln, damit sich mehrere Symbole nicht ueberdecken.
-   lp.y=180+offen.size()*(win+24);
+   // Das kleine Fenster oben an den Rand, auf Hoehe der Statusleiste. In die
+   // Leiste selbst kann keine App zeichnen - das hier ist ein Overlay davor,
+   // sieht aber aehnlich aus. Ein blosses Benachrichtigungssymbol wuerde
+   // nichts nuetzen: es rendert die WebView nicht, und genau darauf kommt es
+   // gegen die Drosselung an.
+   if(win<GROSS){
+    lp.gravity=Gravity.TOP|Gravity.END;
+    lp.x=8+offen.size()*(win+8); lp.y=2;
+   }else{
+    lp.gravity=Gravity.TOP|Gravity.START;
+    lp.x=16; lp.y=180+offen.size()*(win+24);
+   }
 
    final WindowManager wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
    final Fenster f=new Fenster(); f.web=web; f.wm=wm;
