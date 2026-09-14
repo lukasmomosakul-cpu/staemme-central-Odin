@@ -186,13 +186,19 @@ js = r"""
  // Volatilitaetsregel greift erst nach fuenf Schreibzugriffen - bis dahin
  // waeren sie laengst hochgeladen.
  var NIE=/^(tw_console_log|tw_debug_log|tw_request_log)$/;
+ // Botschutz-Zustand darf NIE uebernommen werden. Diese Schluessel aendern
+ // sich selten, entgehen also der Volatilitaetserkennung - ein alter
+ // Serverstand von tw_bot_gesperrt_seit wuerde GodBot beim naechsten Oeffnen
+ // wieder in den gesperrten Zustand versetzen, obwohl die Sperre laengst
+ // geloest ist. Hochladen bleibt erlaubt, damit man den Verlauf sieht.
+ var NIE_RUNTER=/^(tw_bot_|tw_botschutz_|tw_captcha)/;
  function sollHoch(k){
   if(!SYNC_PREFIX.test(k)||NIE.test(k))return false;
   if(NUR_HOCH.indexOf(k)>=0)return true;
   return !istVolatil(k);
  }
  function sollRunter(k){
-  if(!SYNC_PREFIX.test(k)||NIE.test(k))return false;
+  if(!SYNC_PREFIX.test(k)||NIE.test(k)||NIE_RUNTER.test(k))return false;
   if(NUR_HOCH.indexOf(k)>=0)return false;
   if(IMMER.indexOf(k)>=0)return true;
   try{ return !localStorage.getItem('odin_vol_'+k); }catch(e){ return true; }
