@@ -1006,7 +1006,7 @@ public class GameWebViewActivity extends Activity {
   android.util.Log.i("ODIN_GODBOT",msg);
   String stufe = (msg.contains("Fehler")||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
                : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
-  OdinLog.schreib(this,kopfName,stufe,msg);
+  OdinLog.schreib(this,kopfName+"#"+instanz,stufe,msg);
   // Alles wandert nach Odin, aber gebuendelt: einzelne Anfragen je Meldung
   // waeren zu viele. Die Warteschlange wird alle 30 s oder ab 25 Eintraegen
   // in einem Rutsch geschickt.
@@ -1029,7 +1029,7 @@ public class GameWebViewActivity extends Activity {
     org.json.JSONObject r=new org.json.JSONObject();
     r.put("team_id",supaTeam);
     if(!gameAccountId.isEmpty())r.put("account_id",gameAccountId);
-    r.put("level",stufe); r.put("bereich",bereich);
+    r.put("level",stufe); r.put("bereich",bereich+"/"+instanz);
     // Sehr lange Meldungen kuerzen, damit einzelne Zeilen die Tabelle nicht
     // aufblaehen - dieselbe Falle wie beim 288 KB grossen tw_console_log.
     r.put("message",text.length()>500?text.substring(0,500)+" …":text);
@@ -1055,6 +1055,9 @@ public class GameWebViewActivity extends Activity {
   }).start();
  }
  private String kopfName="";
+ // Kurze Kennung je Ansicht. Ohne sie laesst sich bei doppelten Zeilen nicht
+ // sagen, ob zwei Instanzen laufen oder eine zweimal meldet.
+ private final String instanz=Integer.toHexString(System.identityHashCode(this)).substring(0,4);
  // Vollstaendiges Protokoll ansehen, kopieren oder leeren.
  private void protokollZeigen(){
   String text=OdinLog.lesen(this);
@@ -1098,6 +1101,8 @@ public class GameWebViewActivity extends Activity {
   GameWebViewActivity vorhanden=OFFEN.get(wer);
   if(vorhanden!=null&&vorhanden!=this&&!vorhanden.isFinishing()){
    android.util.Log.i("ODIN_GODBOT","zweite Ansicht fuer "+wer+" verworfen");
+   OdinService.protokoll(this,"WICHTIG","doppelstart",
+     "zweite Ansicht verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
    finish(); return;
   }
   OFFEN.put(wer,this);
