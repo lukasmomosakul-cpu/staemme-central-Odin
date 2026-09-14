@@ -384,7 +384,7 @@ public class OdinService extends Service {
  // Die eigene Schleife ist auf diesem Geraet also der verlaessliche Weg.
  // Die Alarme bleiben als zweites Standbein bestehen.
  private final java.util.TreeMap<Long,String[]> faellig=new java.util.TreeMap<>();
- private long zuletztGeweckt=0L;
+ private long zuletztGeweckt=0L, letzteAuffrischung=0L;
  private void faelligPruefen(){
   long jetzt=System.currentTimeMillis();
   // Nicht oefter als alle zwei Minuten wecken, sonst haengt das Geraet fest.
@@ -420,9 +420,14 @@ public class OdinService extends Service {
   while(running){
    try{ poll(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","poll",e); }
    try{ faelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","faellig",e); }
-   // Wecker alle 10 Runden (5 Minuten) neu setzen: Plaene aendern sich, und
-   // Android begrenzt die Zahl gleichzeitiger exakter Alarme.
-   if(runde%10==0){ try{ weckerNeuSetzen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","alarm",e); } }
+   // Nach ZEIT auffrischen, nicht nach Rundenzahl. Seit die Schleife vor
+   // Terminen auf fuenf Sekunden taktet, waren zehn Runden nur noch 50
+   // Sekunden - der Dienst holte die Plaene fuenfmal in sechs Minuten.
+   long jetzt=System.currentTimeMillis();
+   if(jetzt-letzteAuffrischung>=300_000L){
+    letzteAuffrischung=jetzt;
+    try{ weckerNeuSetzen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","alarm",e); }
+   }
    runde++;
    // Kurz vor einem Termin feiner takten: 30 s Raster wuerden sonst bis zu
    // 30 s vom 90-Sekunden-Vorlauf fressen.
