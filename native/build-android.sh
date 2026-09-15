@@ -80,6 +80,8 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+        <service android:name=".OdinJob" android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".OdinService" android:exported="false"
             android:foregroundServiceType="dataSync" />
         <provider android:name="androidx.core.content.FileProvider"
@@ -364,7 +366,8 @@ public class OdinService extends Service {
   else startForeground(1,n);
   try{ PowerManager pm=(PowerManager)getSystemService(Context.POWER_SERVICE);
    lock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"odin:bot"); lock.acquire(); }catch(Exception ignored){}
-  OdinAlarm.wachhund(this);   // haelt sich selbst am Leben
+  OdinAlarm.wachhund(this);   // Rueckfall, feuert auf manchen Geraeten nie
+  OdinJob.planen(this);       // eigentlicher Wiederbeleber
   running=true; poller=new Thread(this::loop); poller.start();
  }
  private void channels(){
@@ -771,6 +774,46 @@ public final class OdinVault {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinJob.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.app.job.*; import android.content.ComponentName; import android.content.Context;
+import android.content.Intent;
+// Wiederbeleber auf einem ANDEREN System als der AlarmManager.
+//
+// Befund aus der Nacht: der Dienst meldete sich bis 00:54 alle fuenf Minuten
+// und war dann sechs Stunden weg. Der Wachhund haengt am AlarmManager, und
+// der feuert auf diesem Geraet nachweislich nie - in ueber 24 Stunden kein
+// einziger Treffer, auch nicht beim reinen Testalarm.
+//
+// JobScheduler ist ein eigener Mechanismus mit eigener Drosselung. Kuerzeste
+// zulaessige Wiederholung sind 15 Minuten; das genuegt, um den Dienst
+// zurueckzuholen, der dann seine Termine selbst wieder einliest.
+public class OdinJob extends JobService {
+ private static final int ID=4711;
+ public static void planen(Context c){
+  try{
+   JobScheduler js=(JobScheduler)c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+   if(js==null)return;
+   JobInfo j=new JobInfo.Builder(ID,new ComponentName(c,OdinJob.class))
+     .setPeriodic(15*60*1000L)
+     .setPersisted(true)          // ueberlebt den Neustart des Geraets
+     .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+     .build();
+   js.schedule(j);
+  }catch(Exception e){ android.util.Log.e("ODIN_JOB","planen",e); }
+ }
+ @Override public boolean onStartJob(JobParameters p){
+  try{
+   OdinService.ladeStatisch(this);
+   startForegroundService(new Intent(this,OdinService.class));
+   OdinLog.schreib(this,"-","info","Job: Dienst nachgestartet");
+   OdinService.protokoll(this,"info","job","Dienst nachgestartet");
+  }catch(Exception e){ android.util.Log.w("ODIN_JOB","start",e); }
+  return false;   // keine Hintergrundarbeit im Job selbst
+ }
+ @Override public boolean onStopJob(JobParameters p){ return true; }
+}
+EOF
 cat > "$JAVA_DIR/OdinBootReceiver.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.content.BroadcastReceiver; import android.content.Context; import android.content.Intent;
@@ -781,6 +824,7 @@ public class OdinBootReceiver extends BroadcastReceiver {
  @Override public void onReceive(Context c, Intent in){
   try{ c.startForegroundService(new Intent(c,OdinService.class)); }
   catch(Exception e){ android.util.Log.w("ODIN_BOOT","start",e); }
+  OdinJob.planen(c);
  }
 }
 EOF
