@@ -569,6 +569,10 @@ public class OdinService extends Service {
   }
   android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+gesamt+" ueber "+accs.length()+" Accounts");
   int offen; synchronized(faellig){ offen=faellig.size(); }
+  // Auch oertlich festhalten. Bisher sah ich nur, dass keine Meldungen
+  // ankommen - nicht, ob der Dienst tot ist oder bloss kein Netz hat. Das
+  // Geraeteprotokoll braucht kein Netz und unterscheidet beides.
+  OdinLog.schreib(this,"-","info","Dienst lebt · "+offen+" Termine vorgemerkt");
   protokoll(this,(gesamt>0||offen>0)?"WICHTIG":"FEHLER","wecker",
     "Termine: "+offen+" vorgemerkt, "+gesamt+" Alarme, "
     +uebersprungen+" Accounts ohne Daten übersprungen");
