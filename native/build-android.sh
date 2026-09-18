@@ -1733,6 +1733,35 @@ public class GameWebViewActivity extends Activity {
  // WebView wird weiter GERENDERT - die Abdeckung liegt nur davor. Ein
  // Minimieren wuerde sie unsichtbar machen und Chromium drosselt dann die
  // Zeitgeber; hier laeuft alles im vollen Takt weiter.
+ // Die Skriptliste gehoert dem Team und wird im Dashboard gepflegt. Gelingt
+ // der Abruf, ersetzt sie die oertliche Fassung; die bleibt nur Notvorrat,
+ // damit ein Start ohne Netz nicht ganz ohne Skripte endet.
+ private org.json.JSONArray serverSkripte(){
+  try{
+   if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return null;
+   String r=supaRequest("GET","scripts?select=id,name,type,source_url,code,enabled"
+     +"&team_id=eq."+supaTeam+"&order=created_at.asc",null);
+   org.json.JSONArray sv=new org.json.JSONArray(r);
+   if(sv.length()==0)return null;
+   org.json.JSONArray out=new org.json.JSONArray();
+   for(int i=0;i<sv.length();i++){
+    org.json.JSONObject o=sv.optJSONObject(i); if(o==null)continue;
+    String code=o.isNull("code")?"":o.optString("code","");
+    String url=o.optString("source_url","");
+    org.json.JSONObject z=new org.json.JSONObject();
+    // GodBot am Gist erkennen, nicht am Namen: nur dieser Eintrag wird
+    // zwischengespeichert, sonst kaemen 2,9 MB bei jedem Seitenwechsel.
+    z.put("id",url.contains("GodBot.user.js")?OdinSkripte.GODBOT_ID:o.optString("id",""));
+    z.put("name",o.optString("name","(ohne Namen)"));
+    z.put("an",o.optBoolean("enabled",false));
+    if(!code.trim().isEmpty()){ z.put("quelle","code"); z.put("code",code); }
+    else { z.put("quelle","url"); z.put("url",url); }
+    out.put(z);
+   }
+   OdinSkripte.speichern(this,out);
+   return out;
+  }catch(Exception e){ setStatus("Skriptliste vom Server nicht erreichbar"); return null; }
+ }
  // Ein neues @version melden und im Dashboard sichtbar machen. Ohne das
  // laeuft eine neue Fassung still an und niemand weiss, ob sie ankam.
  private void versionPruefen(String id,String name,String quelltext){
