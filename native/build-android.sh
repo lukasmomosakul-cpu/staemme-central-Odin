@@ -399,6 +399,15 @@ public class OdinService extends Service {
   zuletztGeweckt=jetzt;
   String konto=e.getValue()[0], text=e.getValue()[1], art=e.getValue()[2];
 
+  // Im Dimm-Modus liegt die Ansicht bereits sichtbar vorn und laeuft im
+  // vollen Takt. Jedes Wecken - leise wie laut - wuerde sie dort
+  // herausholen und danach in den Hintergrund schicken.
+  if(GameWebViewActivity.dimmLaeuft(konto)){
+   OdinLog.schreib(this,"-","info","Dimm-Modus läuft ("+art+") - kein Wecken nötig");
+   protokoll(this,"info","wecker","Dimm-Modus läuft ("+art+") - kein Wecken nötig");
+   return;
+  }
+
   // Benutzt du das Geraet gerade, nicht in den Vordergrund draengen. Die
   // Seite muss sichtbar sein, damit die Zeitgeber laufen - das leistet auch
   // das schwebende Symbol, ohne zu stoeren.
@@ -435,11 +444,43 @@ public class OdinService extends Service {
    OdinLog.schreib(this,"-","FEHLER","Wecken fehlgeschlagen: "+ex.getMessage());
   }
  }
+ // Der Dimm-Modus soll die Nacht durchhalten. Faellt die Ansicht aus dem
+ // Vordergrund - Prozesstod, fremde App, ausgeschalteter Bildschirm -, holt
+ // der Dienst sie zurueck. Ueber dem Sperrbildschirm ist das zulaessig, weil
+ // "Über anderen Apps anzeigen" erteilt ist; dieselbe Berechtigung nutzt das
+ // schwebende Fenster. Entsperrt wird dabei nichts.
+ private long letzterDimmStart=0L;
+ private void dimmWaechter(){
+  android.content.SharedPreferences p=getSharedPreferences("odin_svc",Context.MODE_PRIVATE);
+  if(!p.getBoolean("dimm_an",false))return;
+  String konto=p.getString("dimm_konto","");
+  if(GameWebViewActivity.dimmLaeuft(konto))return;
+  long jetzt=System.currentTimeMillis();
+  // Nicht im Kreis starten, falls das Holen scheitert.
+  if(jetzt-letzterDimmStart<120_000L)return;
+  letzterDimmStart=jetzt;
+  try{
+   Intent i=new Intent(this,GameWebViewActivity.class);
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+             |Intent.FLAG_ACTIVITY_SINGLE_TOP);
+   if(!konto.isEmpty()){
+    i.setData(android.net.Uri.parse("odin://account/"+konto));
+    i.putExtra("accountId",konto);
+   }
+   i.putExtra("dimm",true);
+   startActivity(i);
+   OdinLog.schreib(this,"-","WICHTIG","Dimm-Modus wiederhergestellt");
+   protokoll(this,"WICHTIG","wecker","Dimm-Modus wiederhergestellt");
+  }catch(Exception ex){
+   OdinLog.schreib(this,"-","FEHLER","Dimm-Modus holen fehlgeschlagen: "+ex.getMessage());
+  }
+ }
  private void loop(){
   int runde=0;
   while(running){
    try{ poll(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","poll",e); }
    try{ faelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","faellig",e); }
+   try{ dimmWaechter(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","dimm",e); }
    // Nach ZEIT auffrischen, nicht nach Rundenzahl. Seit die Schleife vor
    // Terminen auf fuenf Sekunden taktet, waren zehn Runden nur noch 50
    // Sekunden - der Dienst holte die Plaene fuenfmal in sechs Minuten.
@@ -1252,6 +1293,24 @@ public class GameWebViewActivity extends Activity {
  private static final java.util.Map<String,GameWebViewActivity> OFFEN=new java.util.HashMap<>();
  private FrameLayout dimRahmen;
  private android.view.View dimDecke;
+ // Nur wenn die Ansicht auch WIRKLICH vorn liegt, wird die WebView gerendert.
+ // Ohne das koennte der Dimm-Modus "aktiv" melden, waehrend eine andere App
+ // davor liegt und Chromium laengst drosselt.
+ private volatile boolean imVordergrund=false;
+ // Laeuft fuer diesen Account gerade der Dimm-Modus, sichtbar und gerendert?
+ // Der Dienst fragt das, bevor er weckt - im Dimm-Modus ist nichts zu tun.
+ static boolean dimmLaeuft(String accountId){
+  try{
+   GameWebViewActivity a=OFFEN.get(accountId==null?"":accountId);
+   return a!=null&&!a.isFinishing()&&a.dimDecke!=null&&a.imVordergrund;
+  }catch(Exception e){ return false; }
+ }
+ // Der Wunsch ueberlebt Prozesstod und Neustart - erst ein Tippen auf die
+ // Abdeckung nimmt ihn zurueck.
+ private boolean dimmGewuenscht(){
+  try{ return getSharedPreferences("odin_svc",MODE_PRIVATE).getBoolean("dimm_an",false); }
+  catch(Exception e){ return false; }
+ }
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
  // Vollstaendiges Protokoll: die Statuszeile ist einzeilig und schneidet lange
  // Fehlermeldungen ab, deshalb wird alles mitgeschrieben und ist kopierbar.
@@ -1533,6 +1592,11 @@ public class GameWebViewActivity extends Activity {
  }
  private void leiseSchweben(){
   try{
+   // Im Dimm-Modus ist die WebView bereits sichtbar und ungedrosselt. Das
+   // kleine Fenster wuerde sie aus der gedimmten Ansicht herausreissen und
+   // nach getaner Arbeit in die dann im Hintergrund liegende Activity
+   // zurueckhaengen - genau so brach die Nachtaktivitaet ab.
+   if(dimDecke!=null){ setStatus("Termin - Dimm-Modus läuft, nichts nötig"); return; }
    if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
    if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
    // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
@@ -1581,7 +1645,15 @@ public class GameWebViewActivity extends Activity {
  // Minimieren wuerde sie unsichtbar machen und Chromium drosselt dann die
  // Zeitgeber; hier laeuft alles im vollen Takt weiter.
  private void dimmenAn(){
-  if(dimDecke!=null||dimRahmen==null)return;
+  if(dimRahmen==null)return;
+  // Immer zuerst die Fensterflaggen: auch beim Auffrischen durch den Dienst
+  // muessen sie wieder stehen, sonst faellt die Ansicht hinter den
+  // Sperrbildschirm und wird nicht mehr gerendert.
+  dimmFlaggen();
+  try{ getSharedPreferences("odin_svc",MODE_PRIVATE).edit()
+        .putBoolean("dimm_an",true).putString("dimm_konto",nz(gameAccountId)).apply(); }
+  catch(Exception ignored){}
+  if(dimDecke!=null){ setStatus("Dimm-Modus aufgefrischt"); return; }
   android.widget.LinearLayout decke=new android.widget.LinearLayout(this);
   decke.setOrientation(android.widget.LinearLayout.VERTICAL);
   decke.setGravity(android.view.Gravity.CENTER);
@@ -1603,15 +1675,29 @@ public class GameWebViewActivity extends Activity {
   decke.setOnClickListener(v->dimmenAus());
   dimRahmen.addView(decke,new FrameLayout.LayoutParams(-1,-1));
   dimDecke=decke;
+  setStatus("gedimmt - läuft im vollen Takt weiter");
+ }
+ // Alles, was den Bildschirm an und die Ansicht vorn haelt - auch ueber dem
+ // Sperrbildschirm. setShowWhenLocked ENTSPERRT nichts: das Geraet bleibt
+ // gesperrt, die Ansicht liegt nur davor und wird dadurch weiter gerendert.
+ private void dimmFlaggen(){
   android.view.Window w=getWindow();
   android.view.WindowManager.LayoutParams lp=w.getAttributes();
   // Nicht ganz auf 0: sonst ist der Bildschirm von einem ausgeschalteten
   // nicht zu unterscheiden. 0.04 bleibt nachts dezent.
   lp.screenBrightness=0.04f; w.setAttributes(lp);
   w.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-  setStatus("gedimmt - läuft im vollen Takt weiter");
+  if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(true); setTurnScreenOn(true); }
+  w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+            |android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+  vollbildUnterdruecken=false;
+  Fullscreen.apply(this);
  }
  private void dimmenAus(){
+  // Der Wunsch faellt IMMER weg, auch wenn gerade keine Abdeckung liegt -
+  // sonst holt der Wächter des Dienstes den Dimm-Modus wieder zurueck.
+  try{ getSharedPreferences("odin_svc",MODE_PRIVATE).edit()
+        .putBoolean("dimm_an",false).apply(); }catch(Exception ignored){}
   if(dimDecke==null)return;
   try{ dimRahmen.removeView(dimDecke); }catch(Exception ignored){}
   dimDecke=null;
@@ -1620,10 +1706,30 @@ public class GameWebViewActivity extends Activity {
   lp.screenBrightness=android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
   w.setAttributes(lp);
   w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+              |android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+  if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(false); setTurnScreenOn(false); }
   setStatus("Anzeige normal");
  }
  private void weckerModus(){
   try{
+   // Der Dienst kann den Dimm-Modus anfordern - auch ueber dem
+   // Sperrbildschirm. Die Abdeckung setzt alle Fensterflaggen selbst.
+   if(getIntent().getBooleanExtra("dimm",false)){
+    // Die Sperrbildschirm-Flaggen SOFORT setzen, nicht erst wenn die
+    // Abdeckung steht: sonst zeigt das Geraet fuer einen Moment den
+    // Sperrbildschirm davor und die WebView wird nicht gerendert.
+    if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(true); setTurnScreenOn(true); }
+    getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                        |android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                        |android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    getWindow().getDecorView().post(this::dimmenAn);
+    return;
+   }
+   // Laeuft der Dimm-Modus, ist die Ansicht schon vorn, hell genug und
+   // ungedrosselt. Der Weckermodus wuerde sie am Ende in den Hintergrund
+   // schicken und damit den Dimm-Modus zerstoeren.
+   if(dimDecke!=null){ setStatus("Wecker: Dimm-Modus läuft bereits - unverändert"); return; }
    if(!getIntent().getBooleanExtra("fromAlarm",false))return;
    android.view.Window w=getWindow();
    // Kein Vollbild beim Wecken: sonst ist nicht zu erkennen, ob das Geraet
@@ -1688,6 +1794,14 @@ public class GameWebViewActivity extends Activity {
     weckerAktiv=false;
     if(ruhePruefer!=null)getWindow().getDecorView().removeCallbacks(ruhePruefer);
     anzeigeZuruecksetzen();
+    // Nachts nicht in den Hintergrund: dort wird nicht gerendert und
+    // Chromium drosselt. Stattdessen zurueck unter die dunkle Abdeckung,
+    // die im vollen Takt weiterlaeuft.
+    if(dimmGewuenscht()){
+     dimmenAn();
+     setStatus("Weckfenster beendet – zurück in den Dimm-Modus");
+     return;
+    }
     if(warGeschwebt&&OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat)){
      // Zurueck ins schwebende Fenster statt in den Hintergrund: dort bleibt
      // die WebView sichtbar und damit ungedrosselt.
@@ -1803,11 +1917,13 @@ public class GameWebViewActivity extends Activity {
  }
  @Override protected void onResume(){
   super.onResume();
+  imVordergrund=true;
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
   OdinBubble.hide(); restoreFromFloat();
  }
  @Override protected void onPause(){
   super.onPause();
+  imVordergrund=false;
   // Ohne flush() bleiben die Anmeldecookies nur im Speicher und sind nach
   // einem Neuaufbau des Prozesses weg.
   try{ android.webkit.CookieManager.getInstance().flush(); }catch(Exception ignored){}
