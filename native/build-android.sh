@@ -379,6 +379,77 @@ public class OdinService extends Service {
   wk.enableVibration(false); wk.setVibrationPattern(null); wk.setSound(null,null);
   wk.setShowBadge(false); nm.createNotificationChannel(wk);
  }
+ // Benutzt du das Geraet gerade? Dann nicht ins Vollbild draengen.
+ private static long letztesWecken=0L;
+ private static String letzterWeckSchluessel="";
+ static boolean inBenutzung(Context c){
+  try{
+   android.os.PowerManager pm=(android.os.PowerManager)c.getSystemService(Context.POWER_SERVICE);
+   android.app.KeyguardManager km=c.getSystemService(android.app.KeyguardManager.class);
+   return pm!=null&&pm.isInteractive()&&(km==null||!km.isKeyguardLocked());
+  }catch(Exception e){ return false; }
+ }
+ // DER EINZIGE WEG, eine Ansicht zu wecken. Dienstschleife und
+ // Wecker-Empfaenger gehen beide hier durch.
+ //
+ // Vorher hatte jeder seine eigene Fassung: der Dienst fragte hoeflich nach
+ // dem Geraetezustand, der Empfaenger holte die App ungefragt ins Vollbild -
+ // samt Vollbild-Benachrichtigung. Lief dieselbe Sache ueber beide Wege,
+ // gewann der unhoefliche. Zwei Mechanismen, nie gegeneinander geprueft.
+ static void wecken(Context c,String konto,String text,String art,boolean wartung){
+  String kt=konto==null?"":konto;
+  // Dienstschleife und Wecker koennen denselben Termin sekundenversetzt
+  // ausloesen. Ohne diese Sperre kaeme die Ansicht zweimal nach vorn.
+  synchronized(OdinService.class){
+   String schluessel=kt+"|"+art+"|"+text;
+   long jetzt=System.currentTimeMillis();
+   if(schluessel.equals(letzterWeckSchluessel)&&jetzt-letztesWecken<60_000L)return;
+   letzterWeckSchluessel=schluessel; letztesWecken=jetzt;
+  }
+  // Im Dimm-Modus liegt die Ansicht bereits sichtbar vorn und laeuft im
+  // vollen Takt - jedes Wecken wuerde sie nur herausreissen.
+  if(GameWebViewActivity.dimmLaeuft(kt)){
+   OdinLog.schreib(c,"-","info","Dimm-Modus läuft ("+art+") - kein Wecken nötig");
+   protokoll(c,"info","wecker","Dimm-Modus läuft ("+art+") - kein Wecken nötig");
+   return;
+  }
+  // Die Seite muss sichtbar sein, damit die Zeitgeber laufen - das leistet
+  // auch das kleine schwebende Fenster, ohne dir dazwischenzufunken.
+  if(inBenutzung(c)&&GameWebViewActivity.weckeLeise(kt)){
+   OdinLog.schreib(c,"-","WICHTIG","Weckt leise ("+art+"): "+text);
+   protokoll(c,"WICHTIG","wecker","Weckt leise ("+art+"): "+text);
+   return;
+  }
+  OdinLog.schreib(c,"-","WICHTIG","Weckt ("+art+"): "+text);
+  protokoll(c,"WICHTIG","wecker","Weckt ("+art+"): "+text);
+  try{
+   Intent i=new Intent(c,GameWebViewActivity.class);
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+             |Intent.FLAG_ACTIVITY_SINGLE_TOP);
+   if(!kt.isEmpty()){
+    i.setData(android.net.Uri.parse("odin://account/"+kt));
+    i.putExtra("accountId",kt);
+   }
+   i.putExtra("fromAlarm",true);
+   i.putExtra("wartung",wartung);
+   // Vollbild-Benachrichtigung NUR bei dunklem oder gesperrtem Geraet. Sie
+   // ist es, die den Bildschirm einschaltet - waehrend der Benutzung waere
+   // sie genau das Dazwischenfunken, das hier vermieden werden soll.
+   PendingIntent pi=PendingIntent.getActivity(c,4242,i,
+     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+   Notification n=new Notification.Builder(c,CH_WAKE)
+     .setContentTitle(wartung?"Raubzug fällig":"Termin fällig").setContentText(text)
+     .setSmallIcon(android.R.drawable.ic_dialog_info)
+     .setCategory(Notification.CATEGORY_ALARM)
+     .setFullScreenIntent(pi,true)
+     .setAutoCancel(true).build();
+   c.getSystemService(NotificationManager.class)
+    .notify((int)(System.currentTimeMillis()%90000),n);
+   c.startActivity(i);
+  }catch(Exception ex){
+   OdinLog.schreib(c,"-","FEHLER","Wecken fehlgeschlagen: "+ex.getMessage());
+  }
+ }
  // Faellige Termine, die der Dienst SELBST ausloest.
  //
  // Auswertung ueber 14 Stunden: der Dienst meldete sich durchgehend alle
@@ -398,51 +469,7 @@ public class OdinService extends Service {
   synchronized(faellig){ faellig.remove(e.getKey()); }
   zuletztGeweckt=jetzt;
   String konto=e.getValue()[0], text=e.getValue()[1], art=e.getValue()[2];
-
-  // Im Dimm-Modus liegt die Ansicht bereits sichtbar vorn und laeuft im
-  // vollen Takt. Jedes Wecken - leise wie laut - wuerde sie dort
-  // herausholen und danach in den Hintergrund schicken.
-  if(GameWebViewActivity.dimmLaeuft(konto)){
-   OdinLog.schreib(this,"-","info","Dimm-Modus läuft ("+art+") - kein Wecken nötig");
-   protokoll(this,"info","wecker","Dimm-Modus läuft ("+art+") - kein Wecken nötig");
-   return;
-  }
-
-  // Benutzt du das Geraet gerade, nicht in den Vordergrund draengen. Die
-  // Seite muss sichtbar sein, damit die Zeitgeber laufen - das leistet auch
-  // das schwebende Symbol, ohne zu stoeren.
-  boolean inBenutzung=false;
-  try{
-   android.os.PowerManager pm=(android.os.PowerManager)getSystemService(Context.POWER_SERVICE);
-   android.app.KeyguardManager km=getSystemService(android.app.KeyguardManager.class);
-   inBenutzung = pm!=null && pm.isInteractive() && (km==null || !km.isKeyguardLocked());
-  }catch(Exception ignored){}
-
-  if(inBenutzung && GameWebViewActivity.weckeLeise(konto)){
-   OdinLog.schreib(this,"-","WICHTIG","Dienst weckt leise ("+art+"): "+text);
-   protokoll(this,"WICHTIG","wecker","Dienst weckt leise ("+art+"): "+text);
-   return;
-  }
-
-  OdinLog.schreib(this,"-","WICHTIG","Dienst weckt ("+art+"): "+text);
-  protokoll(this,"WICHTIG","wecker","Dienst weckt ("+art+"): "+text);
-  try{
-   Intent i=new Intent(this,GameWebViewActivity.class);
-   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-             |Intent.FLAG_ACTIVITY_SINGLE_TOP);
-   if(!konto.isEmpty()){
-    i.setData(android.net.Uri.parse("odin://account/"+konto));
-    i.putExtra("accountId",konto);
-   }
-   i.putExtra("fromAlarm",true);
-   i.putExtra("wartung","Raubzug".equals(art));
-   // Das Starten aus dem Hintergrund ist zulaessig, weil die Berechtigung
-   // "Über anderen Apps anzeigen" erteilt ist - dieselbe, die das
-   // schwebende Fenster nutzt.
-   startActivity(i);
-  }catch(Exception ex){
-   OdinLog.schreib(this,"-","FEHLER","Wecken fehlgeschlagen: "+ex.getMessage());
-  }
+  wecken(this,konto,text,art,"Raubzug".equals(art));
  }
  // Der Dimm-Modus soll die Nacht durchhalten. Faellt die Ansicht aus dem
  // Vordergrund - Prozesstod, fremde App, ausgeschalteter Bildschirm -, holt
@@ -507,7 +534,18 @@ public class OdinService extends Service {
  // Bisher protokollierte der Dienst nur nach Logcat - genau der Teil, der im
  // Hintergrund arbeitet, war im Protokoll unsichtbar. Ohne das laesst sich
  // nicht feststellen, ob ueberhaupt Wecker gesetzt werden.
+ // Die Netzanfrage laeuft in einem eigenen Faden. Vorher lief sie auf dem
+ // aufrufenden Thread - im Wecker-Empfaenger ist das der Hauptthread, und
+ // Android wirft dort NetworkOnMainThreadException. Der Empfaenger war
+ // deshalb im Protokoll VOLLSTAENDIG unsichtbar, obwohl er feuerte. Genau
+ // dieselbe Falle wie beim ersten Testalarm: das Messwerkzeug hatte den
+ // Fehler, den es messen sollte.
  static void protokoll(Context c,String stufe,String bereich,String text){
+  final Context ctx=c.getApplicationContext();
+  ladeStatisch(c);
+  new Thread(()->protokollJetzt(ctx,stufe,bereich,text)).start();
+ }
+ private static void protokollJetzt(Context c,String stufe,String bereich,String text){
   try{
    ladeStatisch(c);
    if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
@@ -1061,26 +1099,9 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
   String acc=in.getStringExtra(OdinAlarm.EXTRA_ACCOUNT); if(acc==null)acc="";
   boolean wartung=in.getBooleanExtra(OdinAlarm.EXTRA_WARTUNG,false);
   OdinLog.schreib(c,"-","WICHTIG","Wecker ausgelöst ("+(wartung?"Raubzug":"Termin")+"): "+info);
-  OdinService.protokoll(c,"WICHTIG","wecker",
-    "Wecker ausgelöst ("+(wartung?"Raubzug":"Termin")+"): "+info);
-  Intent open=new Intent(c,GameWebViewActivity.class);
-  open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-  // Dieselbe Daten-URI wie beim Oeffnen aus Odin: dadurch kommt genau die
-  // Ansicht dieses Accounts nach vorne statt irgendeiner.
-  if(!acc.isEmpty()){ open.setData(android.net.Uri.parse("odin://account/"+acc));
-                      open.putExtra("accountId",acc); }
-  open.putExtra("fromAlarm",true);
-  open.putExtra("wartung",in.getBooleanExtra(OdinAlarm.EXTRA_WARTUNG,false));
-  PendingIntent pi=PendingIntent.getActivity(c,4242,open,
-    PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-  Notification n=new Notification.Builder(c,OdinService.CH_WAKE)
-    .setContentTitle("Rausstellen fällig").setContentText(info)
-    .setSmallIcon(android.R.drawable.ic_dialog_info)
-    .setCategory(Notification.CATEGORY_ALARM)
-    .setFullScreenIntent(pi,true)     // oeffnet direkt, auch gesperrt
-    .setAutoCancel(true).build();
-  c.getSystemService(NotificationManager.class).notify((int)(System.currentTimeMillis()%90000),n);
-  try{ c.startActivity(open); }catch(Exception e){ android.util.Log.w("ODIN_ALARM","start",e); }
+  // Kein eigener Weg mehr: derselbe Aufruf wie in der Dienstschleife. Der
+  // entscheidet, ob leise, gar nicht oder im Vordergrund geweckt wird.
+  OdinService.wecken(c,acc,info,wartung?"Raubzug":"Termin",wartung);
  }
 }
 EOF
