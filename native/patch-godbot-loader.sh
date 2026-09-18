@@ -280,9 +280,12 @@ js = r"""
   window.__odinSyncFlush=flush;
  })();
  // --------------------------------------------------------------------------
- var n=__DEPCOUNT__, urls=[];
+ // Reihenfolge: erst GodBots @require-Abhaengigkeiten, dann GodBot selbst,
+ // dann die eigenen Skripte - die duerfen sich auf GodBot stuetzen.
+ var n=__DEPCOUNT__, xn=__EXTRACOUNT__, gb=__GODBOT_AN__, urls=[];
  for(var i=0;i<n;i++)urls.push('/__odin_req_'+i+'.js');
- urls.push('/__odin_godbot.js');
+ if(gb)urls.push('/__odin_godbot.js');
+ for(var j=0;j<xn;j++)urls.push('/__odin_x_'+j+'.js');
  var done=0;
  function add(i){
   if(i>=urls.length){
@@ -295,6 +298,9 @@ js = r"""
      window.__odinSkipped=[];
     }
     if(window.__odinErrMsg){OdinNative.status(window.__odinErrMsg);return;}
+    // Ohne GodBot gibt es den Marker nicht - dann zaehlt nur, dass alle
+    // Teile ohne Fehler durchgelaufen sind.
+    if(!gb){OdinNative.status('aktiv ('+done+' Teile, ohne GodBot)');return;}
     if(typeof window.godbotCommands==='function'){OdinNative.status('aktiv ('+done+' Teile)');return;}
     // Kein Fehler geworfen: das Skript lief durch, nur der Marker fehlt.
     OdinNative.status('ausgefuehrt, kein Fehler (Marker fehlt)');
@@ -346,13 +352,37 @@ new = ''' private void loadEnabledScripts(WebView v){
    try{
     // Frueher wurden bei JEDEM Seitenwechsel 2,88 MB neu geladen - das waren
     // die 2-3 Sekunden Verzoegerung. Einmal je Sitzung reicht.
-    String src=godbotSrc;
-    if(src==null||src.length()<1000){
+    // Welche Eintraege sind eingeschaltet? Die Liste entscheidet, nicht der
+    // Code - GodBot ist darin nur der erste Eintrag und darf aus sein.
+    org.json.JSONArray liste=OdinSkripte.liste(this,GODBOT_URL);
+    boolean gbAn=false;
+    java.util.List<String> extra=new java.util.ArrayList<>();
+    for(int qi=0;qi<liste.length();qi++){
+     org.json.JSONObject o=liste.optJSONObject(qi);
+     if(o==null||!o.optBoolean("an",true))continue;
+     if(OdinSkripte.GODBOT_ID.equals(o.optString("id",""))){ gbAn=true; continue; }
+     if("code".equals(o.optString("quelle","url"))){
+      String q=o.optString("code","");
+      if(!q.trim().isEmpty())extra.add(q);
+     }else{
+      try{
+       String q=new OdinNative().httpGet(o.optString("url",""));
+       if(q!=null&&!q.trim().isEmpty())extra.add(q);
+      }catch(Exception ig){ setStatus("Skript nicht ladbar: "+o.optString("name","")); }
+     }
+    }
+    godbotExtra=extra;
+    if(!gbAn&&extra.isEmpty()){ setStatus("kein Skript eingeschaltet"); v.setTag(0x0D1A0002,null); return; }
+    String src="";
+    java.util.List<String> deps=new java.util.ArrayList<>();
+    if(gbAn){
+    src=godbotSrc==null?"":godbotSrc;
+    if(src.length()<1000){
      setStatus("lade Quelle...");
      src=new OdinNative().httpGet(GODBOT_URL);
      if(src==null||src.length()<1000){setStatus("Quelle zu kurz ("+(src==null?0:src.length())+")");return;}
     }
-    java.util.List<String> deps=godbotDeps;
+    deps=godbotDeps;
     if(godbotSrc==null||deps.isEmpty()){
      deps=new java.util.ArrayList<>();
      java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+(\\\\S+)").matcher(src);
@@ -360,7 +390,11 @@ new = ''' private void loadEnabledScripts(WebView v){
     }
     godbotSrc=src; godbotDeps=deps;
     setStatus("Quelle bereit ("+src.length()+" Z., "+deps.size()+" Abh.)");
-    final String js=''' + json.dumps(js) + '''.replace("__DEPCOUNT__",String.valueOf(deps.size()));
+    }else{ setStatus("GodBot ist ausgeschaltet"); }
+    if(!extra.isEmpty())setStatus("eigene Skripte: "+extra.size());
+    final String js=''' + json.dumps(js) + '''.replace("__DEPCOUNT__",String.valueOf(deps.size()))
+      .replace("__EXTRACOUNT__",String.valueOf(extra.size()))
+      .replace("__GODBOT_AN__",gbAn?"1":"0");
     runOnUiThread(()->v.evaluateJavascript(js,r->android.util.Log.i("ODIN_GODBOT","bootstrap="+r)));
    }catch(Exception e){
     setStatus("Abruf fehlgeschlagen: "+e.getMessage());
@@ -375,6 +409,10 @@ new = ''' private void loadEnabledScripts(WebView v){
    String path=r.getUrl().getPath(); if(path==null)return null;
    String body=null;
    if(path.equals("/__odin_godbot.js"))body=godbotSrc;
+   else if(path.startsWith("/__odin_x_")){
+    int i=Integer.parseInt(path.substring(10,path.length()-3));
+    java.util.List<String> x=godbotExtra; if(i>=0&&i<x.size())body=x.get(i);
+   }
    else if(path.startsWith("/__odin_req_")){
     int i=Integer.parseInt(path.substring(12,path.length()-3));
     java.util.List<String> d=godbotDeps; if(i>=0&&i<d.size())body=d.get(i);

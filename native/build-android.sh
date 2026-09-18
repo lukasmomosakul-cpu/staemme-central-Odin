@@ -1105,6 +1105,51 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinSkripte.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.Context; import android.content.SharedPreferences;
+import org.json.JSONArray; import org.json.JSONObject;
+// Skriptverwaltung wie bei Tampermonkey: eine Liste, jeder Eintrag einzeln
+// an- oder abschaltbar. Zwei Arten von Eintraegen:
+//   quelle="url"  - wird bei Bedarf geladen (so kommt GodBot aus dem Gist)
+//   quelle="code" - der eingefuegte Text selbst, liegt hier auf dem Geraet
+// Der erste Eintrag wird beim ersten Start angelegt, damit ein frisches
+// Geraet sich genauso verhaelt wie bisher.
+public final class OdinSkripte {
+ private OdinSkripte(){}
+ private static final String PREFS="odin_skripte", KEY="liste";
+ public static final String GODBOT_ID="godbot";
+ private static SharedPreferences p(Context c){ return c.getSharedPreferences(PREFS,Context.MODE_PRIVATE); }
+ public static JSONArray liste(Context c,String godbotUrl){
+  try{
+   String roh=p(c).getString(KEY,"");
+   if(roh!=null&&!roh.isEmpty())return new JSONArray(roh);
+  }catch(Exception ignored){}
+  JSONArray a=new JSONArray();
+  try{
+   JSONObject g=new JSONObject();
+   g.put("id",GODBOT_ID); g.put("name","GodBot"); g.put("an",true);
+   g.put("quelle","url"); g.put("url",godbotUrl);
+   a.put(g);
+  }catch(Exception ignored){}
+  speichern(c,a);
+  return a;
+ }
+ public static void speichern(Context c,JSONArray a){
+  try{ p(c).edit().putString(KEY,a.toString()).apply(); }catch(Exception ignored){}
+ }
+ // Name aus dem Kopf des Skripts lesen, damit man nicht selbst tippen muss.
+ public static String nameAus(String code){
+  try{
+   java.util.regex.Matcher m=java.util.regex.Pattern
+     .compile("(?m)^\\s*//\\s*@name\\s+(.+)$").matcher(code==null?"":code);
+   if(m.find())return m.group(1).trim();
+  }catch(Exception ignored){}
+  return "";
+ }
+ public static String neueId(){ return "s"+System.currentTimeMillis(); }
+}
+EOF
 cat > "$JAVA_DIR/OdinFloat.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.content.Context; import android.graphics.PixelFormat; import android.os.Build;
@@ -1308,6 +1353,8 @@ public class GameWebViewActivity extends Activity {
  // Zwischenspeicher fuer die vom Bootstrap angeforderten Skripte.
  private volatile String godbotSrc;
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
+ // Quelltexte der zusaetzlich eingeschalteten Skripte, in Reihenfolge.
+ private volatile java.util.List<String> godbotExtra=new java.util.ArrayList<>();
  private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  private LinearLayout rootLayout;
  // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
@@ -1523,6 +1570,10 @@ public class GameWebViewActivity extends Activity {
      android.widget.Toast.LENGTH_LONG).show();
   });
   bar.addView(probe,new LinearLayout.LayoutParams(-2,-2));
+  Button skr=new Button(this); skr.setText("📜"); skr.setTextSize(12f);
+  skr.setAllCaps(false); skr.setPadding(10,0,10,0);
+  skr.setOnClickListener(x->skripteVerwalten());
+  bar.addView(skr,new LinearLayout.LayoutParams(-2,-2));
   Button dim=new Button(this); dim.setText("🌙"); dim.setTextSize(12f); dim.setAllCaps(false);
   dim.setPadding(10,0,10,0);
   dim.setOnClickListener(x->dimmenAn());
@@ -1665,6 +1716,113 @@ public class GameWebViewActivity extends Activity {
  // WebView wird weiter GERENDERT - die Abdeckung liegt nur davor. Ein
  // Minimieren wuerde sie unsichtbar machen und Chromium drosselt dann die
  // Zeitgeber; hier laeuft alles im vollen Takt weiter.
+ // Skriptverwaltung. Bewusst nativ und nicht im Web-Dashboard: die Liste
+ // gilt fuer DIESES Geraet, und sie muss auch dann erreichbar sein, wenn ein
+ // Skript die Spielseite lahmlegt.
+ private void skripteVerwalten(){
+  org.json.JSONArray liste=OdinSkripte.liste(this,GODBOT_URL);
+  LinearLayout box=new LinearLayout(this);
+  box.setOrientation(LinearLayout.VERTICAL); box.setPadding(24,12,24,12);
+  if(liste.length()==0){
+   TextView leer=new TextView(this); leer.setText("Noch keine Skripte."); leer.setTextSize(13f);
+   box.addView(leer);
+  }
+  for(int i=0;i<liste.length();i++){
+   final org.json.JSONObject o=liste.optJSONObject(i); if(o==null)continue;
+   LinearLayout zeile=new LinearLayout(this); zeile.setOrientation(LinearLayout.HORIZONTAL);
+   zeile.setGravity(android.view.Gravity.CENTER_VERTICAL);
+   android.widget.CheckBox an=new android.widget.CheckBox(this);
+   an.setText(o.optString("name","(ohne Namen)"));
+   an.setChecked(o.optBoolean("an",true)); an.setTextSize(14f);
+   an.setOnCheckedChangeListener((b,v)->{ try{ o.put("an",v); }catch(Exception ignored){} });
+   zeile.addView(an,new LinearLayout.LayoutParams(0,-2,1f));
+   final boolean eigen="code".equals(o.optString("quelle","url"));
+   if(eigen){
+    Button bearb=new Button(this); bearb.setText("✎"); bearb.setTextSize(12f); bearb.setPadding(8,0,8,0);
+    bearb.setOnClickListener(x->skriptBearbeiten(liste,o));
+    zeile.addView(bearb,new LinearLayout.LayoutParams(-2,-2));
+    Button weg=new Button(this); weg.setText("🗑"); weg.setTextSize(12f); weg.setPadding(8,0,8,0);
+    weg.setOnClickListener(x->skriptLoeschen(liste,o));
+    zeile.addView(weg,new LinearLayout.LayoutParams(-2,-2));
+   }
+   box.addView(zeile);
+  }
+  TextView hin=new TextView(this);
+  hin.setText("Änderungen greifen erst, wenn die Seite neu geladen wird.");
+  hin.setTextSize(11f); hin.setTextColor(0xFF777777); hin.setPadding(0,10,0,0);
+  box.addView(hin);
+  android.widget.ScrollView sc=new android.widget.ScrollView(this); sc.addView(box);
+  new android.app.AlertDialog.Builder(this)
+   .setTitle("Skripte")
+   .setView(sc)
+   .setPositiveButton("Übernehmen & neu laden",(d,w)->{
+     OdinSkripte.speichern(this,liste);
+     setStatus("Skriptliste gespeichert – lade neu");
+     if(webView!=null)webView.reload();
+   })
+   .setNeutralButton("＋ Einfügen",(d,w)->skriptBearbeiten(liste,null))
+   .setNegativeButton("Abbrechen",null)
+   .show();
+ }
+ // Einfuegen und Bearbeiten teilen sich denselben Dialog - ein neuer Eintrag
+ // ist nur einer ohne Vorlage.
+ private void skriptBearbeiten(org.json.JSONArray liste,org.json.JSONObject vorlage){
+  LinearLayout box=new LinearLayout(this);
+  box.setOrientation(LinearLayout.VERTICAL); box.setPadding(24,12,24,12);
+  final android.widget.EditText name=new android.widget.EditText(this);
+  name.setHint("Name (leer = aus @name im Skript)"); name.setSingleLine(true); name.setTextSize(13f);
+  if(vorlage!=null)name.setText(vorlage.optString("name",""));
+  box.addView(name);
+  final android.widget.EditText code=new android.widget.EditText(this);
+  code.setHint("Skriptcode hier einfügen"); code.setTextSize(11f);
+  code.setGravity(android.view.Gravity.TOP|android.view.Gravity.START);
+  code.setMinLines(10); code.setMaxLines(18);
+  code.setHorizontallyScrolling(false);
+  if(vorlage!=null)code.setText(vorlage.optString("code",""));
+  box.addView(code);
+  android.widget.ScrollView sc=new android.widget.ScrollView(this); sc.addView(box);
+  new android.app.AlertDialog.Builder(this)
+   .setTitle(vorlage==null?"Skript einfügen":"Skript bearbeiten")
+   .setView(sc)
+   .setPositiveButton("Speichern",(d,w)->{
+     String q=code.getText().toString();
+     if(q.trim().isEmpty()){ setStatus("Skript leer – nichts gespeichert"); return; }
+     String nm=name.getText().toString().trim();
+     if(nm.isEmpty())nm=OdinSkripte.nameAus(q);
+     if(nm.isEmpty())nm="Skript "+(liste.length()+1);
+     try{
+      org.json.JSONObject z=vorlage;
+      if(z==null){
+       z=new org.json.JSONObject();
+       z.put("id",OdinSkripte.neueId()); z.put("an",true); z.put("quelle","code");
+       liste.put(z);
+      }
+      z.put("name",nm); z.put("code",q);
+     }catch(Exception e){ setStatus("Speichern fehlgeschlagen: "+e.getMessage()); return; }
+     OdinSkripte.speichern(this,liste);
+     setStatus("Skript gespeichert: "+nm+" – lade neu");
+     if(webView!=null)webView.reload();
+   })
+   .setNegativeButton("Abbrechen",null)
+   .show();
+ }
+ private void skriptLoeschen(org.json.JSONArray liste,org.json.JSONObject eintrag){
+  new android.app.AlertDialog.Builder(this)
+   .setTitle("Skript löschen?")
+   .setMessage(eintrag.optString("name","")+"\n\nDer Text ist danach weg.")
+   .setPositiveButton("Löschen",(d,w)->{
+     org.json.JSONArray neu=new org.json.JSONArray();
+     for(int i=0;i<liste.length();i++){
+      org.json.JSONObject o=liste.optJSONObject(i);
+      if(o!=null&&o!=eintrag)neu.put(o);
+     }
+     OdinSkripte.speichern(this,neu);
+     setStatus("Skript gelöscht – lade neu");
+     if(webView!=null)webView.reload();
+   })
+   .setNegativeButton("Abbrechen",null)
+   .show();
+ }
  private void dimmenAn(){
   if(dimRahmen==null)return;
   // Immer zuerst die Fensterflaggen: auch beim Auffrischen durch den Dienst
