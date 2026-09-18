@@ -61,6 +61,7 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
@@ -223,7 +224,12 @@ public class MainActivity extends Activity {
   }).start();
  }
  @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
- @Override protected void onResume(){super.onResume();Fullscreen.apply(this);}
+ @Override protected void onResume(){
+  super.onResume(); Fullscreen.apply(this);
+  // Wer das Dashboard oeffnet, hat die Botschutz-Meldung gesehen - Vibration
+  // und Wecker hoeren dann auf. Die Meldung selbst bleibt stehen.
+  OdinService.botschutzGesehen();
+ }
  @Override public void onBackPressed(){if(webView.canGoBack())webView.goBack();else super.onBackPressed();}
  private class OdinAppBridge{
   // Der Webcode ruft window.Android.* auf - diese Namen muessen exakt passen.
@@ -379,6 +385,108 @@ public class OdinService extends Service {
   wk.enableVibration(false); wk.setVibrationPattern(null); wk.setSound(null,null);
   wk.setShowBadge(false); nm.createNotificationChannel(wk);
  }
+ // Feste Nummern, damit eine Meldung die vorige ERSETZT statt sich daneben
+ // zu legen. Genau daran lag die Flut einzelner Angriffsmeldungen.
+ private static final int ID_ANGRIFFE=4801, ID_VORWARNUNG=4802, ID_BOTSCHUTZ=4803;
+ // Vorwarnung: ein Termin steht an, aber nichts laeuft ungedrosselt. Ohne
+ // Hinweis merkt man erst hinterher, dass der Raubzug ausgefallen ist.
+ private long vorgewarntFuer=0L;
+ private void vorwarnPruefen(){
+  if(!nbVorwarnAn)return;
+  java.util.Map.Entry<Long,String[]> e;
+  synchronized(faellig){ e=faellig.firstEntry(); }
+  if(e==null)return;
+  long ziel=e.getKey(), jetzt=System.currentTimeMillis();
+  long rest=ziel-jetzt;
+  if(rest<=0||rest>nbVorwarnMin*60_000L)return;
+  if(ziel==vorgewarntFuer)return;
+  String konto=e.getValue()[0], art=e.getValue()[2];
+  // Laeuft die Seite ungedrosselt, erledigt GodBot den Termin selbst.
+  if(GameWebViewActivity.laeuftUngedrosselt(this,konto))return;
+  vorgewarntFuer=ziel;
+  String text=art+" in "+Math.max(1,Math.round(rest/60000f))+" Min – Odin läuft gerade nicht";
+  OdinLog.schreib(this,"-","WICHTIG","Vorwarnung: "+text);
+  protokoll(this,"WICHTIG","wecker","Vorwarnung: "+text);
+  zeigeFest(ID_VORWARNUNG,CH_ALERT,"Termin steht an",text,false);
+ }
+ // Botschutz: erst in Abstaenden vibrieren, nach einer Weile der Wecker. Er
+ // hoert auf, sobald die App im Vordergrund ist - dann hast du es gesehen.
+ private volatile long botschutzSeit=0L, botschutzLetzteVib=0L;
+ private volatile String botschutzText="";
+ private android.media.Ringtone botschutzKlang=null;
+ void botschutzStarten(String text){
+  if(!nbBotschutzAn)return;
+  if(botschutzSeit>0)return;              // laeuft schon
+  botschutzSeit=System.currentTimeMillis();
+  botschutzLetzteVib=0L; botschutzText=text;
+  OdinLog.schreib(this,"-","WICHTIG","Botschutz-Eskalation gestartet");
+  protokoll(this,"WICHTIG","botschutz","Eskalation gestartet: "+text);
+ }
+ // Von aussen quittierbar, ohne Verweis auf den laufenden Dienst: das
+ // Dashboard ruft es im onResume, der Dienst prueft es im Takt.
+ static volatile long botschutzGesehenAm=0L;
+ public static void botschutzGesehen(){ botschutzGesehenAm=System.currentTimeMillis(); }
+ void botschutzBeenden(String grund){
+  if(botschutzSeit==0)return;
+  botschutzSeit=0L;
+  try{ if(botschutzKlang!=null&&botschutzKlang.isPlaying())botschutzKlang.stop(); }catch(Exception ignored){}
+  botschutzKlang=null;
+  try{ getSystemService(NotificationManager.class).cancel(ID_BOTSCHUTZ); }catch(Exception ignored){}
+  OdinLog.schreib(this,"-","WICHTIG","Botschutz-Eskalation beendet ("+grund+")");
+  protokoll(this,"WICHTIG","botschutz","Eskalation beendet ("+grund+")");
+ }
+ private void botschutzTakt(){
+  if(botschutzSeit==0)return;
+  long jetzt=System.currentTimeMillis();
+  // Vordergrund heisst gesehen - alles andere waere Schikane.
+  if(GameWebViewActivity.imVordergrundIrgendwo()){ botschutzBeenden("Spielansicht im Vordergrund"); return; }
+  if(botschutzGesehenAm>botschutzSeit){ botschutzBeenden("quittiert"); return; }
+  if(jetzt-botschutzLetzteVib>=nbBotVibSek*1000L){
+   botschutzLetzteVib=jetzt;
+   try{
+    android.os.Vibrator v=(android.os.Vibrator)getSystemService(Context.VIBRATOR_SERVICE);
+    if(v!=null&&v.hasVibrator())
+     v.vibrate(android.os.VibrationEffect.createWaveform(new long[]{0,400,200,400},-1));
+   }catch(Exception ignored){}
+   long minuten=(jetzt-botschutzSeit)/60000L;
+   zeigeFest(ID_BOTSCHUTZ,CH_ALERT,"Botschutz aktiv",
+     botschutzText+" · seit "+minuten+" Min",true);
+  }
+  // Nach der eingestellten Zeit der Wecker - im Alarmkanal, damit er auch
+  // bei stummgestelltem Klingelton laut ist.
+  if(jetzt-botschutzSeit>=nbBotWeckerMin*60_000L&&botschutzKlang==null){
+   try{
+    android.net.Uri u=android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM);
+    botschutzKlang=android.media.RingtoneManager.getRingtone(this,u);
+    if(botschutzKlang!=null){
+     botschutzKlang.setAudioAttributes(new android.media.AudioAttributes.Builder()
+       .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+       .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+     if(Build.VERSION.SDK_INT>=28)botschutzKlang.setLooping(true);
+     botschutzKlang.play();
+     OdinLog.schreib(this,"-","WICHTIG","Botschutz-Wecker gestartet");
+     protokoll(this,"WICHTIG","botschutz","Wecker gestartet nach "+nbBotWeckerMin+" Min");
+    }
+   }catch(Exception e){ android.util.Log.w("ODIN_SVC","wecker",e); }
+  }
+ }
+ // Meldung mit fester Nummer: dieselbe Nummer ersetzt die vorige.
+ private void zeigeFest(int id,String kanal,String titel,String text,boolean bleibt){
+  try{
+   Intent open=new Intent(this,MainActivity.class);
+   open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+   PendingIntent pi=PendingIntent.getActivity(this,id,open,
+     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+   Notification.Builder b=new Notification.Builder(this,kanal)
+     .setContentTitle(titel).setContentText(text).setContentIntent(pi)
+     .setStyle(new Notification.BigTextStyle().bigText(text))
+     .setSmallIcon(android.R.drawable.ic_dialog_info)
+     .setOnlyAlertOnce(!bleibt)
+     .setAutoCancel(!bleibt);
+   if(bleibt)b.setOngoing(true);
+   getSystemService(NotificationManager.class).notify(id,b.build());
+  }catch(Exception e){ android.util.Log.w("ODIN_SVC","zeigeFest",e); }
+ }
  // Benutzt du das Geraet gerade? Dann nicht ins Vollbild draengen.
  private static long letztesWecken=0L;
  private static String letzterWeckSchluessel="";
@@ -459,6 +567,24 @@ public class OdinService extends Service {
  // Die Alarme bleiben als zweites Standbein bestehen.
  private final java.util.TreeMap<Long,String[]> faellig=new java.util.TreeMap<>();
  private long zuletztGeweckt=0L, letzteAuffrischung=0L;
+ // Benachrichtigungseinstellungen des Teams. Werden beim Neusetzen der Wecker
+ // mitgeladen; bis dahin gelten diese Vorgaben.
+ private volatile boolean nbVorwarnAn=true, nbAngriffeGebuendelt=true, nbBotschutzAn=true;
+ private volatile int nbVorwarnMin=3, nbBotVibSek=60, nbBotWeckerMin=10;
+ private void einstellungenLaden(){
+  try{
+   JSONArray a=new JSONArray(hole("notification_settings?select=*&team_id=eq."
+     +java.net.URLEncoder.encode(team,"UTF-8")));
+   if(a.length()==0)return;
+   JSONObject o=a.getJSONObject(0);
+   nbVorwarnAn=o.optBoolean("vorwarnung_an",true);
+   nbVorwarnMin=Math.max(1,Math.min(60,o.optInt("vorwarnung_min",3)));
+   nbAngriffeGebuendelt=o.optBoolean("angriffe_gebuendelt",true);
+   nbBotschutzAn=o.optBoolean("botschutz_an",true);
+   nbBotVibSek=Math.max(10,Math.min(3600,o.optInt("botschutz_vibration_sek",60)));
+   nbBotWeckerMin=Math.max(1,Math.min(120,o.optInt("botschutz_wecker_min",10)));
+  }catch(Exception e){ android.util.Log.w("ODIN_SVC","nb-einstellungen",e); }
+ }
  private void faelligPruefen(){
   long jetzt=System.currentTimeMillis();
   // Nicht oefter als alle zwei Minuten wecken, sonst haengt das Geraet fest.
@@ -508,6 +634,8 @@ public class OdinService extends Service {
    try{ poll(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","poll",e); }
    try{ faelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","faellig",e); }
    try{ dimmWaechter(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","dimm",e); }
+   try{ vorwarnPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","vorwarnung",e); }
+   try{ botschutzTakt(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","botschutz",e); }
    // Nach ZEIT auffrischen, nicht nach Rundenzahl. Seit die Schleife vor
    // Terminen auf fuenf Sekunden taktet, waren zehn Runden nur noch 50
    // Sekunden - der Dienst holte die Plaene fuenfmal in sechs Minuten.
@@ -602,6 +730,7 @@ public class OdinService extends Service {
    android.util.Log.w("ODIN_ALARM","keine Sitzung - keine Wecker");
    return;
   }
+  einstellungenLaden();
   JSONArray accs=new JSONArray(hole("game_accounts?select=id,name,world&team_id=eq."
     +java.net.URLEncoder.encode(team,"UTF-8")));
   OdinAlarm.zuruecksetzen(this);
@@ -680,7 +809,33 @@ public class OdinService extends Service {
    show(o.optString("title","Odin"),o.optString("body",""),o.optString("level","info"));
   }
  }
+ // Eingehende Angriffe kommen im Schwung. Einzelne Meldungen dafuer sind
+ // unbrauchbar: dreissig Zeilen, von denen man keine liest. Stattdessen EINE
+ // Meldung, die mitzaehlt und die letzten Zeilen zeigt.
+ private final java.util.ArrayDeque<String> angriffe=new java.util.ArrayDeque<>();
+ private long angriffeSeit=0L;
+ private static final java.util.regex.Pattern IST_ANGRIFF=
+   java.util.regex.Pattern.compile("(?i)angriff|eingehend|incoming");
+ private static final java.util.regex.Pattern IST_BOTSCHUTZ=
+   java.util.regex.Pattern.compile("(?i)botschutz|captcha|bot.?schutz|bot protection");
+ private boolean angriffSammeln(String title,String body){
+  long jetzt=System.currentTimeMillis();
+  synchronized(angriffe){
+   // Nach zwei Stunden Ruhe faengt die Zaehlung neu an, sonst steht dort
+   // morgen noch die Zahl von gestern.
+   if(jetzt-angriffeSeit>2*60*60*1000L){ angriffe.clear(); angriffeSeit=jetzt; }
+   angriffe.addLast(body==null||body.isEmpty()?title:body);
+   while(angriffe.size()>8)angriffe.removeFirst();
+   StringBuilder sb=new StringBuilder();
+   for(String z:angriffe){ if(sb.length()>0)sb.append("\n"); sb.append(z); }
+   zeigeFest(ID_ANGRIFFE,CH_ALERT,angriffe.size()+" eingehende Angriffe",sb.toString(),false);
+  }
+  return true;
+ }
  private void show(String title,String body,String level){
+  String zusammen=(title==null?"":title)+" "+(body==null?"":body);
+  if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(zusammen).find())botschutzStarten(title);
+  if(nbAngriffeGebuendelt&&IST_ANGRIFF.matcher(zusammen).find()){ angriffSammeln(title,body); return; }
   NotificationManager nm=getSystemService(NotificationManager.class);
   Intent open=new Intent(this,MainActivity.class);
   open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
@@ -1393,6 +1548,36 @@ public class GameWebViewActivity extends Activity {
    GameWebViewActivity a=OFFEN.get(accountId==null?"":accountId);
    return a!=null&&!a.isFinishing()&&a.dimDecke!=null&&a.imVordergrund;
   }catch(Exception e){ return false; }
+ }
+ // Laeuft die Seite dieses Accounts gerade OHNE Drosselung? Genau drei Faelle
+ // erfuellen das, und alle drei haben dieselbe Ursache: die WebView wird
+ // tatsaechlich gezeichnet.
+ //   1. Dimm-Modus  - Abdeckung liegt vorn, Bildschirm an
+ //   2. Ansicht vorn - offen und im Vordergrund
+ //   3. schwebendes Fenster UND Bildschirm an - ein Overlay bei dunklem
+ //      Bildschirm wird nicht gezeichnet und zaehlt deshalb NICHT
+ // Liegt IRGENDEINE Spielansicht vorn? Dafuer reicht ein Blick in die Liste
+ // der offenen Ansichten - den Vordergrund einer fremden App kann eine App
+ // ohne Nutzungsdaten-Berechtigung nicht abfragen.
+ static boolean imVordergrundIrgendwo(){
+  try{
+   for(GameWebViewActivity a:OFFEN.values())
+    if(a!=null&&!a.isFinishing()&&a.imVordergrund)return true;
+  }catch(Exception ignored){}
+  return false;
+ }
+ static boolean laeuftUngedrosselt(Context c,String accountId){
+  try{
+   String kt=accountId==null?"":accountId;
+   if(dimmLaeuft(kt))return true;
+   GameWebViewActivity a=OFFEN.get(kt);
+   if(a!=null&&!a.isFinishing()&&a.imVordergrund)return true;
+   if(OdinFloat.active(kt)){
+    android.os.PowerManager pm=(android.os.PowerManager)c.getSystemService(Context.POWER_SERVICE);
+    if(pm!=null&&pm.isInteractive())return true;
+   }
+  }catch(Exception ignored){}
+  return false;
  }
  // Der Wunsch ueberlebt Prozesstod und Neustart - erst ein Tippen auf die
  // Abdeckung nimmt ihn zurueck.
