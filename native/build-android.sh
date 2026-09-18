@@ -1683,7 +1683,7 @@ public class GameWebViewActivity extends Activity {
   int gr=(int)(getResources().getDisplayMetrics().density*150);
   decke.addView(zeichen,new android.widget.LinearLayout.LayoutParams(gr,gr));
   TextView hin=new TextView(this);
-  hin.setText("ODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nTippen zum Aufwecken");
+  hin.setText("ODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nZum Beenden nach rechts wischen");
   // Deutlich sichtbar: bei Helligkeit 0 wirkt selbst helles Grau gedaempft,
   // ein dunkler Hinweis dagegen wie ein ausgeschalteter Bildschirm.
   // Dezenter als das Zeichen: der Valknut traegt, die Schrift erklaert nur.
@@ -1693,7 +1693,12 @@ public class GameWebViewActivity extends Activity {
   hin.setPadding(0,(int)(getResources().getDisplayMetrics().density*20),0,0);
   hin.setGravity(android.view.Gravity.CENTER);
   decke.addView(hin);
-  decke.setOnClickListener(v->dimmenAus());
+  dimHinweis=hin;
+  // Kein Tippen mehr: in der Hosentasche reicht der kleinste Kontakt, und
+  // der Dimm-Modus waere weg - samt laufender Nachtarbeit. Nur eine
+  // bewusste waagerechte Wischbewegung beendet ihn. Dieselbe Geste und
+  // dieselben Schwellen wie GodBots Hosentaschen-Schutz.
+  decke.setOnTouchListener(this::dimBeruehrung);
   dimRahmen.addView(decke,new FrameLayout.LayoutParams(-1,-1));
   dimDecke=decke;
   setStatus("gedimmt - läuft im vollen Takt weiter");
@@ -1714,12 +1719,81 @@ public class GameWebViewActivity extends Activity {
   vollbildUnterdruecken=false;
   Fullscreen.apply(this);
  }
+ // Schwellen wie in GodBot: bei 412 px Breite genau 140 px Wischweg und
+ // hoechstens 70 px senkrechte Abweichung. An der Bildschirmbreite
+ // aufgehaengt, damit sie auf jedem Geraet dasselbe bedeuten.
+ private static final long DIM_WISCH_MIN_MS=120L, DIM_WISCH_MAX_MS=2500L, DIM_ZURUECK_MS=5000L;
+ private android.widget.TextView dimHinweis;
+ private float dimStartX, dimStartY; private long dimStartT;
+ private Runnable dimZurueck=null;
+ private int dimBreite(){
+  int b=getResources().getDisplayMetrics().widthPixels;
+  return (b>=200&&b<=4000)?b:412;
+ }
+ private int dimWischMinX(){ return Math.round(dimBreite()*(140f/412f)); }
+ private int dimWischMaxY(){ return Math.round(dimBreite()*(70f/412f)); }
+ private void dimText(String t){ if(dimHinweis!=null)dimHinweis.setText(t); }
+ // Ohne Bestaetigung dunkelt es nach fuenf Sekunden wieder ganz ab. Eine
+ // liegengebliebene Aufhellung waere sonst die ganze Nacht sichtbar.
+ private void dimNachdunkeln(){
+  android.view.View d=dimDecke; if(d==null)return;
+  if(dimZurueck!=null)d.removeCallbacks(dimZurueck);
+  dimZurueck=()->{
+   if(dimDecke==null)return;
+   android.view.Window w=getWindow();
+   android.view.WindowManager.LayoutParams lp=w.getAttributes();
+   lp.screenBrightness=0.04f; w.setAttributes(lp);
+   dimText("ODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nZum Beenden nach rechts wischen");
+  };
+  d.postDelayed(dimZurueck,DIM_ZURUECK_MS);
+ }
+ private boolean dimBeruehrung(android.view.View v,android.view.MotionEvent e){
+  switch(e.getActionMasked()){
+   case android.view.MotionEvent.ACTION_DOWN: {
+    dimStartX=e.getRawX(); dimStartY=e.getRawY(); dimStartT=System.currentTimeMillis();
+    // Kurz aufhellen, sonst wischt man voellig im Blinden.
+    android.view.Window w=getWindow();
+    android.view.WindowManager.LayoutParams lp=w.getAttributes();
+    lp.screenBrightness=0.15f; w.setAttributes(lp);
+    dimText("→ zum Beenden nach rechts wischen");
+    dimNachdunkeln();
+    return true;
+   }
+   case android.view.MotionEvent.ACTION_MOVE: {
+    float dx=e.getRawX()-dimStartX, dy=Math.abs(e.getRawY()-dimStartY);
+    long dt=System.currentTimeMillis()-dimStartT;
+    if(dy>dimWischMaxY()||dt>DIM_WISCH_MAX_MS) dimText("✗ Wischbewegung verlassen");
+    else if(dx>=dimWischMinX()) dimText("✓ loslassen zum Beenden");
+    else dimText("→ weiter nach rechts ("+Math.round(Math.max(0,dx))+" von "+dimWischMinX()+")");
+    return true;
+   }
+   case android.view.MotionEvent.ACTION_UP: {
+    float dx=e.getRawX()-dimStartX, dy=Math.abs(e.getRawY()-dimStartY);
+    long dt=System.currentTimeMillis()-dimStartT;
+    int minX=dimWischMinX(), maxY=dimWischMaxY();
+    // Wortlos abbrechen waere falsch: wer im Dunkeln wischt und nichts
+    // passiert, kann nicht herausfinden warum.
+    String grund = (dx<minX) ? "zu kurz ("+Math.round(dx)+" von "+minX+" px)"
+                 : (dy>maxY) ? "zu schräg ("+Math.round(dy)+" von höchstens "+maxY+" px)"
+                 : (dt<DIM_WISCH_MIN_MS) ? "zu schnell"
+                 : (dt>DIM_WISCH_MAX_MS) ? "zu langsam" : null;
+    if(grund==null){ dimmenAus(); return true; }
+    dimText("✗ "+grund+"\nzum Beenden nach rechts wischen");
+    dimNachdunkeln();
+    return true;
+   }
+   case android.view.MotionEvent.ACTION_CANCEL: dimNachdunkeln(); return true;
+  }
+  return false;
+ }
  private void dimmenAus(){
   // Der Wunsch faellt IMMER weg, auch wenn gerade keine Abdeckung liegt -
   // sonst holt der Wächter des Dienstes den Dimm-Modus wieder zurueck.
   try{ getSharedPreferences("odin_svc",MODE_PRIVATE).edit()
         .putBoolean("dimm_an",false).apply(); }catch(Exception ignored){}
   if(dimDecke==null)return;
+  if(dimZurueck!=null){ try{ dimDecke.removeCallbacks(dimZurueck); }catch(Exception ignored){} dimZurueck=null; }
+  dimHinweis=null;
   try{ dimRahmen.removeView(dimDecke); }catch(Exception ignored){}
   dimDecke=null;
   android.view.Window w=getWindow();
