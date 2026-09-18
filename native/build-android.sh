@@ -1147,6 +1147,22 @@ public final class OdinSkripte {
   }catch(Exception ignored){}
   return "";
  }
+ // @version aus dem Kopf. Genau daran erkennt auch Tampermonkey ein Update.
+ public static String versionAus(String code){
+  try{
+   java.util.regex.Matcher m=java.util.regex.Pattern
+     .compile("(?m)^\\s*//\\s*@version\\s+(.+)$").matcher(code==null?"":code);
+   if(m.find())return m.group(1).trim();
+  }catch(Exception ignored){}
+  return "";
+ }
+ // Zuletzt gesehene Fassung je Eintrag - daraus ergibt sich, ob etwas neu ist.
+ public static String letzteVersion(Context c,String id){
+  return p(c).getString("ver_"+id,"");
+ }
+ public static void merkeVersion(Context c,String id,String v){
+  try{ p(c).edit().putString("ver_"+id,v).apply(); }catch(Exception ignored){}
+ }
  public static String neueId(){ return "s"+System.currentTimeMillis(); }
 }
 EOF
@@ -1355,6 +1371,11 @@ public class GameWebViewActivity extends Activity {
  private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
  // Quelltexte der zusaetzlich eingeschalteten Skripte, in Reihenfolge.
  private volatile java.util.List<String> godbotExtra=new java.util.ArrayList<>();
+ // Wann wurde GodBots Quelle zuletzt geholt? Danach laeuft der
+ // Zwischenspeicher ab, damit eine neue Fassung nicht bis zum naechsten
+ // Neustart der Ansicht warten muss.
+ private volatile long godbotGeholt=0L;
+ private static final long SKRIPT_MAX_ALTER_MS=6L*60L*60L*1000L;
  private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  private LinearLayout rootLayout;
  // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
@@ -1570,10 +1591,6 @@ public class GameWebViewActivity extends Activity {
      android.widget.Toast.LENGTH_LONG).show();
   });
   bar.addView(probe,new LinearLayout.LayoutParams(-2,-2));
-  Button skr=new Button(this); skr.setText("📜"); skr.setTextSize(12f);
-  skr.setAllCaps(false); skr.setPadding(10,0,10,0);
-  skr.setOnClickListener(x->skripteVerwalten());
-  bar.addView(skr,new LinearLayout.LayoutParams(-2,-2));
   Button dim=new Button(this); dim.setText("🌙"); dim.setTextSize(12f); dim.setAllCaps(false);
   dim.setPadding(10,0,10,0);
   dim.setOnClickListener(x->dimmenAn());
@@ -1716,77 +1733,25 @@ public class GameWebViewActivity extends Activity {
  // WebView wird weiter GERENDERT - die Abdeckung liegt nur davor. Ein
  // Minimieren wuerde sie unsichtbar machen und Chromium drosselt dann die
  // Zeitgeber; hier laeuft alles im vollen Takt weiter.
- // Skriptliste ansehen. Verwaltet wird sie im Dashboard unter "Skripte" -
- // dort steht sie fuer das ganze Team. Zwei Stellen zum Bearbeiten waeren
- // zwei Wahrheiten, und die zweite gewinnt still beim naechsten Laden.
- // Die Skriptliste gehoert dem Team und wird im Dashboard gepflegt. Gelingt
- // der Abruf, ersetzt sie die oertliche Fassung; die bleibt nur Notvorrat,
- // damit ein Start ohne Netz nicht ganz ohne Skripte endet.
- private org.json.JSONArray serverSkripte(){
+ // Ein neues @version melden und im Dashboard sichtbar machen. Ohne das
+ // laeuft eine neue Fassung still an und niemand weiss, ob sie ankam.
+ private void versionPruefen(String id,String name,String quelltext){
   try{
-   if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return null;
-   String r=supaRequest("GET","scripts?select=id,name,type,source_url,code,enabled"
-     +"&team_id=eq."+supaTeam+"&order=created_at.asc",null);
-   org.json.JSONArray sv=new org.json.JSONArray(r);
-   if(sv.length()==0)return null;
-   org.json.JSONArray out=new org.json.JSONArray();
-   for(int i=0;i<sv.length();i++){
-    org.json.JSONObject o=sv.optJSONObject(i); if(o==null)continue;
-    String code=o.isNull("code")?"":o.optString("code","");
-    String url=o.optString("source_url","");
-    org.json.JSONObject z=new org.json.JSONObject();
-    // GodBot am Gist erkennen, nicht am Namen: nur dieser Eintrag wird
-    // zwischengespeichert, sonst kaemen 2,9 MB bei jedem Seitenwechsel.
-    z.put("id",url.contains("GodBot.user.js")?OdinSkripte.GODBOT_ID:o.optString("id",""));
-    z.put("name",o.optString("name","(ohne Namen)"));
-    z.put("an",o.optBoolean("enabled",false));
-    if(!code.trim().isEmpty()){ z.put("quelle","code"); z.put("code",code); }
-    else { z.put("quelle","url"); z.put("url",url); }
-    out.put(z);
-   }
-   OdinSkripte.speichern(this,out);
-   return out;
-  }catch(Exception e){ setStatus("Skriptliste vom Server nicht erreichbar"); return null; }
- }
- private void skripteVerwalten(){
-  org.json.JSONArray liste=OdinSkripte.liste(this,GODBOT_URL);
-  LinearLayout box=new LinearLayout(this);
-  box.setOrientation(LinearLayout.VERTICAL); box.setPadding(24,12,24,12);
-  if(liste.length()==0){
-   TextView leer=new TextView(this); leer.setText("Noch keine Skripte."); leer.setTextSize(13f);
-   box.addView(leer);
-  }
-  for(int i=0;i<liste.length();i++){
-   org.json.JSONObject o=liste.optJSONObject(i); if(o==null)continue;
-   TextView z=new TextView(this);
-   String herkunft="code".equals(o.optString("quelle","url"))
-     ? ("eingefügt · "+o.optString("code","").length()+" Zeichen")
-     : o.optString("url","");
-   z.setText((o.optBoolean("an",true)?"🟢  ":"⚪  ")+o.optString("name","(ohne Namen)")
-     +"\n     "+herkunft);
-   z.setTextSize(13f); z.setPadding(0,8,0,8);
-   box.addView(z);
-  }
-  TextView hin=new TextView(this);
-  hin.setText("Einfügen und An/Aus im Dashboard unter „Skripte“.\n"
-    +"Danach hier neu laden, damit die Änderung greift.");
-  hin.setTextSize(11f); hin.setTextColor(0xFF777777); hin.setPadding(0,12,0,0);
-  box.addView(hin);
-  android.widget.ScrollView sc=new android.widget.ScrollView(this); sc.addView(box);
-  new android.app.AlertDialog.Builder(this)
-   .setTitle("Skripte")
-   .setView(sc)
-   .setPositiveButton("Neu laden",(d,w)->{
-     setStatus("lade Skriptliste neu");
-     if(webView!=null)webView.reload();
-   })
-   .setNeutralButton("Zum Dashboard",(d,w)->{
-     Intent i=new Intent(this,MainActivity.class);
-     i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-     startActivity(i);
-   })
-   .setNegativeButton("Schließen",null)
-   .show();
+   String v=OdinSkripte.versionAus(quelltext);
+   if(v.isEmpty())return;
+   String alt=OdinSkripte.letzteVersion(this,id);
+   if(v.equals(alt))return;
+   OdinSkripte.merkeVersion(this,id,v);
+   String text=alt.isEmpty()? (name+" v"+v+" geladen")
+                            : (name+": v"+alt+" → v"+v);
+   setStatus(text);
+   OdinService.protokoll(this,"WICHTIG","skripte",text);
+   if(!alt.isEmpty()){ try{ new OdinNative().notify("Skript aktualisiert",text,"info"); }catch(Exception ignored){} }
+   // Nur echte Tabelleneintraege haben eine UUID; der oertliche Notvorrat nicht.
+   if(!supaTeam.isEmpty()&&id.length()==36)
+    try{ supaRequest("PATCH","scripts?id=eq."+id,"{\"version\":"+org.json.JSONObject.quote(v)+"}"); }
+    catch(Exception ignored){}
+  }catch(Exception ignored){}
  }
  private void dimmenAn(){
   if(dimRahmen==null)return;

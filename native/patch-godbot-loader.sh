@@ -362,13 +362,16 @@ new = ''' private void loadEnabledScripts(WebView v){
      org.json.JSONObject o=liste.optJSONObject(qi);
      if(o==null||!o.optBoolean("an",true))continue;
      if(OdinSkripte.GODBOT_ID.equals(o.optString("id",""))){ gbAn=true; continue; }
+     String sid=o.optString("id",""), snam=o.optString("name","");
      if("code".equals(o.optString("quelle","url"))){
       String q=o.optString("code","");
-      if(!q.trim().isEmpty())extra.add(q);
+      if(!q.trim().isEmpty()){ extra.add(q); versionPruefen(sid,snam,q); }
      }else{
       try{
+       // URL-Eintraege werden bei jedem Seitenaufbau frisch geholt - damit
+       // ist die Aktualisierung fuer sie schon erledigt.
        String q=new OdinNative().httpGet(o.optString("url",""));
-       if(q!=null&&!q.trim().isEmpty())extra.add(q);
+       if(q!=null&&!q.trim().isEmpty()){ extra.add(q); versionPruefen(sid,snam,q); }
       }catch(Exception ig){ setStatus("Skript nicht ladbar: "+o.optString("name","")); }
      }
     }
@@ -378,6 +381,10 @@ new = ''' private void loadEnabledScripts(WebView v){
     java.util.List<String> deps=new java.util.ArrayList<>();
     if(gbAn){
     src=godbotSrc==null?"":godbotSrc;
+    // GodBot wird zwischengespeichert, sonst kaemen 2,9 MB bei jedem
+    // Seitenwechsel. Dann bekaeme man eine neue Fassung aber erst nach einem
+    // Neustart der Ansicht - deshalb laeuft der Zwischenspeicher ab.
+    if(System.currentTimeMillis()-godbotGeholt>SKRIPT_MAX_ALTER_MS)src="";
     if(src.length()<1000){
      setStatus("lade Quelle...");
      src=new OdinNative().httpGet(GODBOT_URL);
@@ -389,7 +396,9 @@ new = ''' private void loadEnabledScripts(WebView v){
      java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+(\\\\S+)").matcher(src);
      while(m.find()){try{deps.add(new OdinNative().httpGet(m.group(1)));}catch(Exception ig){deps.add("");}}
     }
+    if(godbotSrc==null||!src.equals(godbotSrc))godbotGeholt=System.currentTimeMillis();
     godbotSrc=src; godbotDeps=deps;
+    versionPruefen(OdinSkripte.GODBOT_ID,"GodBot",src);
     setStatus("Quelle bereit ("+src.length()+" Z., "+deps.size()+" Abh.)");
     }else{ setStatus("GodBot ist ausgeschaltet"); }
     if(!extra.isEmpty())setStatus("eigene Skripte: "+extra.size());
