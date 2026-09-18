@@ -354,7 +354,8 @@ new = ''' private void loadEnabledScripts(WebView v){
     // die 2-3 Sekunden Verzoegerung. Einmal je Sitzung reicht.
     // Welche Eintraege sind eingeschaltet? Die Liste entscheidet, nicht der
     // Code - GodBot ist darin nur der erste Eintrag und darf aus sein.
-    org.json.JSONArray liste=OdinSkripte.liste(this,GODBOT_URL);
+    org.json.JSONArray liste=serverSkripte();
+    if(liste==null)liste=OdinSkripte.liste(this,GODBOT_URL);
     boolean gbAn=false;
     java.util.List<String> extra=new java.util.ArrayList<>();
     for(int qi=0;qi<liste.length();qi++){
