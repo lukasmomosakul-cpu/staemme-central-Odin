@@ -246,6 +246,21 @@ public class MainActivity extends Activity {
   // Die Spielansicht hat keine eigene Supabase-Sitzung. Der Webcode reicht
   // Zugangstoken und Team hier durch, damit die Einstellungen abgeglichen
   // werden koennen.
+  // Testknopf aus den Einstellungen. Geht bewusst durch meldungAusSpiel(),
+  // also durch genau dieselbe Auswertung wie eine echte Meldung aus der
+  // Spielansicht - sonst wuerde der Test den Weg pruefen, den es gar nicht
+  // gibt. Der Wortlaut ist GodBots eigener.
+  @JavascriptInterface public void testBotschutz(){
+   try{ startForegroundService(new Intent(MainActivity.this,OdinService.class)); }catch(Exception ignored){}
+   // Der Dienst braucht einen Moment, bis onCreate durch ist und lauf steht.
+   new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{
+    OdinService.meldungAusSpiel("🚨 Botschutz erkannt",
+      "TEST aus den Einstellungen - Captcha-Sperre erkannt, GodBot pausiert. "
+      +"Die Eskalation läuft wie im Ernstfall und endet, sobald du das "
+      +"Dashboard oder die Spielansicht wieder öffnest.","alert");
+    OdinLog.schreib(MainActivity.this,"-","WICHTIG","Botschutz-Test ausgeloest");
+   },1500);
+  }
   @JavascriptInterface public void setSupabaseSession(String url,String anonKey,String accessToken,String teamId){
    setSupabaseSession(url,anonKey,accessToken,teamId,"");
   }

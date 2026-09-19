@@ -52,6 +52,20 @@ export default function EinstellungenSeite() {
       : 'Gespeichert. Die App übernimmt es beim nächsten Abgleich (max. 5 Min).');
   };
 
+  // Der Testknopf ruft denselben Weg auf, den eine echte GodBot-Meldung
+  // nimmt. Er ist nur in der App da - im Browser gibt es keine Bruecke.
+  const [testMeldung, setTestMeldung] = useState('');
+  const botschutzTesten = () => {
+    const br = (window as unknown as { Android?: { testBotschutz?: () => void } }).Android;
+    if (!br?.testBotschutz) {
+      setTestMeldung('Nur in der Odin-App möglich – im Browser fehlt die Brücke.');
+      return;
+    }
+    br.testBotschutz();
+    setTestMeldung('Ausgelöst. Sperr das Gerät: Vibration kommt binnen 30 Sekunden, '
+      + `der Wecker nach ${nb.botschutz_wecker_min} Minuten. Ende, sobald du wieder hier bist.`);
+  };
+
   const abmelden = async () => {
     await supabase?.auth.signOut();
     window.location.href = '/login/';
@@ -115,6 +129,11 @@ export default function EinstellungenSeite() {
         <div className="muted" style={{ marginLeft: 26 }}>
           Endet, sobald du das Dashboard oder die Spielansicht öffnest.
         </div>
+
+        <div style={{ marginTop: 14, marginLeft: 26 }}>
+          <button type="button" onClick={botschutzTesten}>Botschutz-Alarm testen</button>
+        </div>
+        {testMeldung && <div className="muted" style={{ marginTop: 8, marginLeft: 26 }}>{testMeldung}</div>}
 
         {nbMeldung && <div className="muted" style={{ marginTop: 10 }}>{nbMeldung}</div>}
       </section>
