@@ -39,15 +39,19 @@ export default function OdinShell({
   // Zugang sei abgelaufen - obwohl im Vordergrund alles lief.
   useEffect(() => {
     if (!supabase) return;
+    // Festhalten: in der unten gespeicherten Funktion zieht die Null-Pruefung
+    // oben nicht mehr, TypeScript wuerde supabase dort als moeglicherweise
+    // null ansehen.
+    const sb = supabase;
     const weiterreichen = (zugang?: string, erneuerung?: string) => {
       const br = (window as unknown as {
         Android?: { updateSupabaseTokens?: (a: string, r: string) => void };
       }).Android;
       if (br?.updateSupabaseTokens && zugang) br.updateSupabaseTokens(zugang, erneuerung ?? '');
     };
-    supabase.auth.getSession().then(({ data }) =>
+    sb.auth.getSession().then(({ data }) =>
       weiterreichen(data.session?.access_token, data.session?.refresh_token));
-    const { data: abo } = supabase.auth.onAuthStateChange((_e, sitzung) =>
+    const { data: abo } = sb.auth.onAuthStateChange((_e, sitzung) =>
       weiterreichen(sitzung?.access_token, sitzung?.refresh_token));
 
     // Gegenrichtung: die App ruft das beim Zurueckkommen auf und uebergibt
@@ -57,7 +61,7 @@ export default function OdinShell({
       odinSetSession?: (a: string, r: string) => void;
     }).odinSetSession = (zugang: string, erneuerung: string) => {
       if (!zugang || !erneuerung) return;
-      supabase.auth.setSession({ access_token: zugang, refresh_token: erneuerung })
+      sb.auth.setSession({ access_token: zugang, refresh_token: erneuerung })
         .catch(() => {});
     };
 
