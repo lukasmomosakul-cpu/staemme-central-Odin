@@ -1,6 +1,7 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { supabase } from '../lib/supabase';
 import VersionUpdater from './VersionUpdater';
 
 // Gemeinsames Geruest fuer alle Seiten. Vorher hatte jede Seite ihr eigenes
@@ -32,6 +33,25 @@ export default function OdinShell({
   rechts?: ReactNode;
   children: ReactNode;
 }) {
+  // supabase-js frischt die Sitzung selbst auf und dreht dabei das
+  // Erneuerungstoken weiter. Ohne diese Zeile blieb die App auf dem alten
+  // sitzen, jede eigene Erneuerung scheiterte und es kam die Meldung, der
+  // Zugang sei abgelaufen - obwohl im Vordergrund alles lief.
+  useEffect(() => {
+    if (!supabase) return;
+    const weiterreichen = (zugang?: string, erneuerung?: string) => {
+      const br = (window as unknown as {
+        Android?: { updateSupabaseTokens?: (a: string, r: string) => void };
+      }).Android;
+      if (br?.updateSupabaseTokens && zugang) br.updateSupabaseTokens(zugang, erneuerung ?? '');
+    };
+    supabase.auth.getSession().then(({ data }) =>
+      weiterreichen(data.session?.access_token, data.session?.refresh_token));
+    const { data: abo } = supabase.auth.onAuthStateChange((_e, sitzung) =>
+      weiterreichen(sitzung?.access_token, sitzung?.refresh_token));
+    return () => abo.subscription.unsubscribe();
+  }, []);
+
   return (
     <div className="shell">
       <aside className="sidebar">

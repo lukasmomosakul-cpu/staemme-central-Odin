@@ -246,6 +246,20 @@ public class MainActivity extends Activity {
   // Die Spielansicht hat keine eigene Supabase-Sitzung. Der Webcode reicht
   // Zugangstoken und Team hier durch, damit die Einstellungen abgeglichen
   // werden koennen.
+  // supabase-js im Dashboard frischt seine Sitzung selbst auf und dreht
+  // dabei das Erneuerungstoken weiter - das der App war danach verbrannt
+  // und jede Erneuerung scheiterte. Deshalb reicht die Oberflaeche jedes
+  // neue Paar sofort durch.
+  @JavascriptInterface public void updateSupabaseTokens(String accessToken,String refreshToken){
+   if(accessToken==null||accessToken.isEmpty())return;
+   SUPA_TOKEN=accessToken;
+   OdinService.ladeStatisch(MainActivity.this);
+   OdinService.token=accessToken;
+   if(refreshToken!=null&&!refreshToken.isEmpty())OdinService.refresh=refreshToken;
+   OdinService.sichern(MainActivity.this,OdinService.url,OdinService.key,
+     accessToken,OdinService.team,OdinService.refresh);
+   OdinService.erfolg();
+  }
   // Testknopf aus den Einstellungen. Geht bewusst durch meldungAusSpiel(),
   // also durch genau dieselbe Auswertung wie eine echte Meldung aus der
   // Spielansicht - sonst wuerde der Test den Weg pruefen, den es gar nicht
@@ -358,6 +372,11 @@ public class OdinService extends Service {
  // der Dienst selbst einen neuen.
  static volatile long letzteErneuerung=0L;
  static volatile int authFehler=0;
+ // Jede geglueckte Anfrage beweist, dass der Token taugt. Ohne das blieb ein
+ // einzelner Fehlschlag fuer immer stehen und die Warnung kam alle 30 Minuten
+ // wieder, obwohl laengst alles lief.
+ static volatile long letzterErfolg=0L;
+ static void erfolg(){ authFehler=0; letzterErfolg=System.currentTimeMillis(); }
  // Laufende Dienstinstanz, damit die Spielansicht Meldungen oertlich
  // uebergeben kann statt ueber den Umweg Supabase.
  static volatile OdinService lauf=null;
@@ -505,6 +524,9 @@ public class OdinService extends Service {
    }
    return;
   }
+  // Entscheidend ist nicht die Fehlerzahl, sondern ob seit einer Weile
+  // ueberhaupt etwas durchgeht. Sonst nervt die Meldung im laufenden Betrieb.
+  if(letzterErfolg==0L||jetzt-letzterErfolg<20*60*1000L)return;
   if(jetzt-authGemeldet<30*60*1000L)return;
   authGemeldet=jetzt;
   zeigeFest(ID_AUTH,CH_ALERT,"Odin: Anmeldung abgelaufen",
@@ -818,6 +840,7 @@ public class OdinService extends Service {
    // Genau hier verschwand der abgelaufene Token: der Rueckgabewert wurde
    // geholt und weggeworfen. Einmal erneuern und wiederholen; beim zweiten
    // Mal greift die 20-s-Sperre in erneuern(), es gibt also keine Schleife.
+   if(st>=200&&st<400)erfolg();
    if((st==401||st==403)&&erneuern(c))protokollJetzt(c,stufe,bereich,text);
   }catch(Exception e){ android.util.Log.w("ODIN_SVC","protokoll",e); }
  }
@@ -856,6 +879,7 @@ public class OdinService extends Service {
   int st=c.getResponseCode();
   if(st==401||st==403)return null;
   if(st>=400)return "[]";
+  erfolg();
   BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
   StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
   return b.toString();
@@ -938,6 +962,7 @@ public class OdinService extends Service {
   int st=c.getResponseCode();
   if(st==401||st==403){ erneuern(this); return; }
   if(st>=400)return;
+  erfolg();
   BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
   StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
   JSONArray arr=new JSONArray(b.toString());
@@ -2125,6 +2150,7 @@ public class GameWebViewActivity extends Activity {
   OdinMark zeichen=new OdinMark(this);
   int gr=(int)(getResources().getDisplayMetrics().density*150);
   decke.addView(zeichen,new android.widget.LinearLayout.LayoutParams(gr,gr));
+  dimZeichen=zeichen;
   TextView hin=new TextView(this);
   hin.setText("ODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nZum Beenden nach rechts wischen");
   // Deutlich sichtbar: bei Helligkeit 0 wirkt selbst helles Grau gedaempft,
@@ -2144,6 +2170,9 @@ public class GameWebViewActivity extends Activity {
   decke.setOnTouchListener(this::dimBeruehrung);
   dimRahmen.addView(decke,new FrameLayout.LayoutParams(-1,-1));
   dimDecke=decke;
+  // Kurz zeigen, was da liegt, dann in die Ruhe fallen - sonst waere der
+  // Umschaltmoment nicht von einem Absturz zu unterscheiden.
+  dimWach(); dimNachdunkeln();
   setStatus("gedimmt - läuft im vollen Takt weiter");
  }
  // Alles, was den Bildschirm an und die Ansicht vorn haelt - auch ueber dem
@@ -2152,9 +2181,9 @@ public class GameWebViewActivity extends Activity {
  private void dimmFlaggen(){
   android.view.Window w=getWindow();
   android.view.WindowManager.LayoutParams lp=w.getAttributes();
-  // Nicht ganz auf 0: sonst ist der Bildschirm von einem ausgeschalteten
-  // nicht zu unterscheiden. 0.04 bleibt nachts dezent.
-  lp.screenBrightness=0.04f; w.setAttributes(lp);
+  // Ruhe heisst wirklich dunkel: Helligkeit 0 und die Abdeckung unsichtbar.
+  // Zu sehen sein soll nur, wer den Bildschirm beruehrt.
+  lp.screenBrightness=DIM_RUHE; w.setAttributes(lp);
   w.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(true); setTurnScreenOn(true); }
   w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
@@ -2166,7 +2195,26 @@ public class GameWebViewActivity extends Activity {
  // hoechstens 70 px senkrechte Abweichung. An der Bildschirmbreite
  // aufgehaengt, damit sie auf jedem Geraet dasselbe bedeuten.
  private static final long DIM_WISCH_MIN_MS=120L, DIM_WISCH_MAX_MS=2500L, DIM_ZURUECK_MS=5000L;
+ // Ruhe: Helligkeit 0, Inhalt unsichtbar - vom ausgeschalteten Bildschirm
+ // nicht zu unterscheiden. Wach: nur solange jemand hinschaut.
+ private static final float DIM_RUHE=0f, DIM_WACH=0.15f;
  private android.widget.TextView dimHinweis;
+ private android.view.View dimZeichen;
+ private void dimHelligkeit(float f){
+  try{
+   android.view.Window w=getWindow();
+   android.view.WindowManager.LayoutParams lp=w.getAttributes();
+   lp.screenBrightness=f; w.setAttributes(lp);
+  }catch(Exception ignored){}
+ }
+ // Sichtbarkeit ueber die Deckkraft, nicht ueber GONE: das Bild bleibt
+ // gerendert, und nur darauf beruht der volle Takt der WebView.
+ private void dimSicht(float a){
+  if(dimZeichen!=null)dimZeichen.setAlpha(a);
+  if(dimHinweis!=null)dimHinweis.setAlpha(a);
+ }
+ private void dimRuhe(){ dimHelligkeit(DIM_RUHE); dimSicht(0f); }
+ private void dimWach(){ dimHelligkeit(DIM_WACH); dimSicht(1f); }
  private float dimStartX, dimStartY; private long dimStartT;
  private Runnable dimZurueck=null;
  private int dimBreite(){
@@ -2183,10 +2231,8 @@ public class GameWebViewActivity extends Activity {
   if(dimZurueck!=null)d.removeCallbacks(dimZurueck);
   dimZurueck=()->{
    if(dimDecke==null)return;
-   android.view.Window w=getWindow();
-   android.view.WindowManager.LayoutParams lp=w.getAttributes();
-   lp.screenBrightness=0.04f; w.setAttributes(lp);
    dimText("ODIN LÄUFT\n\nBildschirm ist an, nur gedimmt\nZum Beenden nach rechts wischen");
+   dimRuhe();
   };
   d.postDelayed(dimZurueck,DIM_ZURUECK_MS);
  }
@@ -2194,10 +2240,8 @@ public class GameWebViewActivity extends Activity {
   switch(e.getActionMasked()){
    case android.view.MotionEvent.ACTION_DOWN: {
     dimStartX=e.getRawX(); dimStartY=e.getRawY(); dimStartT=System.currentTimeMillis();
-    // Kurz aufhellen, sonst wischt man voellig im Blinden.
-    android.view.Window w=getWindow();
-    android.view.WindowManager.LayoutParams lp=w.getAttributes();
-    lp.screenBrightness=0.15f; w.setAttributes(lp);
+    // Beruehrung ist das einzige, was die Abdeckung sichtbar macht.
+    dimWach();
     dimText("→ zum Beenden nach rechts wischen");
     dimNachdunkeln();
     return true;
@@ -2230,6 +2274,7 @@ public class GameWebViewActivity extends Activity {
   return false;
  }
  private void dimmenAus(){
+  dimZeichen=null;
   // Der Wunsch faellt IMMER weg, auch wenn gerade keine Abdeckung liegt -
   // sonst holt der Wächter des Dienstes den Dimm-Modus wieder zurueck.
   try{ getSharedPreferences("odin_svc",MODE_PRIVATE).edit()
@@ -2429,6 +2474,7 @@ public class GameWebViewActivity extends Activity {
   if(in!=null){ BufferedReader r=new BufferedReader(new InputStreamReader(in,"UTF-8"));
    String l; while((l=r.readLine())!=null)b.append(l); r.close(); }
   if(st<200||st>=400) throw new java.io.IOException("HTTP "+st+" "+b);
+  OdinService.erfolg();
   return b.toString();
  }
  private void anmeldenWennNoetig(WebView v){
