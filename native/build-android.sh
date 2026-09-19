@@ -2618,22 +2618,35 @@ public class GameWebViewActivity extends Activity {
   // blob:-Adresse erreicht den Download-Weg von Android nicht. Der Loader
   // faengt den Klick ab und reicht den Text hierher.
   @JavascriptInterface public void saveText(String name,String text){
-   try{
-    String sicher=(name==null||name.trim().isEmpty()?"odin.txt":name.trim())
-      .replaceAll("[^A-Za-z0-9._-]","_");
-    if(!sicher.toLowerCase().endsWith(".txt"))sicher=sicher+".txt";
-    byte[] roh=(text==null?"":text).getBytes("UTF-8");
-    android.content.ContentValues v=new android.content.ContentValues();
-    v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME,sicher);
-    v.put(android.provider.MediaStore.Downloads.MIME_TYPE,"text/plain");
-    android.net.Uri ziel=getContentResolver().insert(
-      android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,v);
-    if(ziel==null){ setStatus("Download fehlgeschlagen: kein Ziel"); return; }
-    java.io.OutputStream os=getContentResolver().openOutputStream(ziel);
-    os.write(roh); os.close();
-    setStatus("Gespeichert: "+sicher+" ("+roh.length+" B) in Downloads");
-    OdinLog.schreib(GameWebViewActivity.this,gameAccountId,"info","Datei gespeichert: "+sicher+" ("+roh.length+" B)");
-   }catch(Exception e){ setStatus("Download fehlgeschlagen: "+e.getMessage()); }
+   final String sicher0=(name==null||name.trim().isEmpty()?"odin.txt":name.trim())
+     .replaceAll("[^A-Za-z0-9._-]","_");
+   final String sicher=sicher0.toLowerCase().endsWith(".txt")?sicher0:sicher0+".txt";
+   final String inhalt=(text==null?"":text);
+   // Denselben Weg wie beim APK-Download nehmen: Datei in den Zwischenspeicher,
+   // dann ueber den FileProvider weiterreichen. Der Benutzer waehlt selbst, wo
+   // sie landet - Dateien, Mail, Chat.
+   new Thread(()->{
+    try{
+     java.io.File out=new java.io.File(getCacheDir(),sicher);
+     java.io.FileOutputStream fo=new java.io.FileOutputStream(out);
+     byte[] roh=inhalt.getBytes("UTF-8");
+     fo.write(roh); fo.close();
+     android.net.Uri uri=androidx.core.content.FileProvider.getUriForFile(
+       GameWebViewActivity.this,"de.teamzentrale.odin.fileprovider",out);
+     Intent i=new Intent(Intent.ACTION_SEND);
+     i.setType("text/plain");
+     i.putExtra(Intent.EXTRA_STREAM,uri);
+     i.putExtra(Intent.EXTRA_SUBJECT,sicher);
+     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+     Intent w=Intent.createChooser(i,sicher);
+     w.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+     setStatus("Datei bereit: "+sicher+" ("+roh.length+" B)");
+     OdinLog.schreib(GameWebViewActivity.this,gameAccountId,"info",
+       "Datei bereitgestellt: "+sicher+" ("+roh.length+" B)");
+     runOnUiThread(()->{ try{ startActivity(w); }catch(Exception e){
+       setStatus("Teilen fehlgeschlagen: "+e.getMessage()); } });
+    }catch(Exception e){ setStatus("Download fehlgeschlagen: "+e.getMessage()); }
+   }).start();
   }
   @JavascriptInterface public boolean syncReady(){ return !supaUrl.isEmpty()&&!supaToken.isEmpty()&&!gameAccountId.isEmpty(); }
   @JavascriptInterface public String settingsLoad(){
