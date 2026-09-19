@@ -2614,6 +2614,27 @@ public class GameWebViewActivity extends Activity {
   // Lebenszeichen aus der Seite: GodBot schreibt bei jedem Arbeitsschritt in
   // den localStorage. Bleibt das aus, ist der Durchlauf fertig.
   @JavascriptInterface public void puls(){ letzteAktivitaet=System.currentTimeMillis(); }
+  // GodBots Protokoll-Download landete im Nichts: <a download> mit einer
+  // blob:-Adresse erreicht den Download-Weg von Android nicht. Der Loader
+  // faengt den Klick ab und reicht den Text hierher.
+  @JavascriptInterface public void saveText(String name,String text){
+   try{
+    String sicher=(name==null||name.trim().isEmpty()?"odin.txt":name.trim())
+      .replaceAll("[^A-Za-z0-9._-]","_");
+    if(!sicher.toLowerCase().endsWith(".txt"))sicher=sicher+".txt";
+    byte[] roh=(text==null?"":text).getBytes("UTF-8");
+    android.content.ContentValues v=new android.content.ContentValues();
+    v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME,sicher);
+    v.put(android.provider.MediaStore.Downloads.MIME_TYPE,"text/plain");
+    android.net.Uri ziel=getContentResolver().insert(
+      android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,v);
+    if(ziel==null){ setStatus("Download fehlgeschlagen: kein Ziel"); return; }
+    java.io.OutputStream os=getContentResolver().openOutputStream(ziel);
+    os.write(roh); os.close();
+    setStatus("Gespeichert: "+sicher+" ("+roh.length+" B) in Downloads");
+    OdinLog.schreib(this,gameAccountId,"info","Datei gespeichert: "+sicher+" ("+roh.length+" B)");
+   }catch(Exception e){ setStatus("Download fehlgeschlagen: "+e.getMessage()); }
+  }
   @JavascriptInterface public boolean syncReady(){ return !supaUrl.isEmpty()&&!supaToken.isEmpty()&&!gameAccountId.isEmpty(); }
   @JavascriptInterface public String settingsLoad(){
    try{

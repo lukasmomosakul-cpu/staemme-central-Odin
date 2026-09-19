@@ -78,6 +78,27 @@ js = r"""
    }
   };
  }
+ // --- Downloads ------------------------------------------------------------
+ // GodBot speichert Protokolle ueber einen Blob und einen <a download>-Klick.
+ // In Firefox geht das, in einer WebView passiert nichts: blob:-Adressen
+ // erreichen den Download-Weg von Android gar nicht erst. Deshalb den Klick
+ // abfangen, den Inhalt selbst lesen und nativ ablegen.
+ (function(){
+  document.addEventListener('click',function(e){
+   try{
+    var ziel=e.target;
+    var a=ziel&&ziel.closest?ziel.closest('a[download]'):null;
+    if(!a||!a.href)return;
+    e.preventDefault(); e.stopPropagation();
+    var name=a.getAttribute('download')||'odin.txt';
+    fetch(a.href).then(function(r){return r.text();}).then(function(t){
+     OdinNative.saveText(String(name),String(t));
+    }).catch(function(err){
+     try{ OdinNative.status('Download fehlgeschlagen: '+err); }catch(_){}
+    });
+   }catch(err){}
+  },true);
+ })();
  // --- Benachrichtigungen ---------------------------------------------------
  // GodBot verschickt ueber sendDiscordNotification()/postDiscordAlert() an eine
  // Webhook-URL aus tw_settings. Die Funktionen liegen in der IIFE und sind von
