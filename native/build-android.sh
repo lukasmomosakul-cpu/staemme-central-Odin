@@ -2632,7 +2632,7 @@ public class GameWebViewActivity extends Activity {
     java.io.OutputStream os=getContentResolver().openOutputStream(ziel);
     os.write(roh); os.close();
     setStatus("Gespeichert: "+sicher+" ("+roh.length+" B) in Downloads");
-    OdinLog.schreib(this,gameAccountId,"info","Datei gespeichert: "+sicher+" ("+roh.length+" B)");
+    OdinLog.schreib(GameWebViewActivity.this,gameAccountId,"info","Datei gespeichert: "+sicher+" ("+roh.length+" B)");
    }catch(Exception e){ setStatus("Download fehlgeschlagen: "+e.getMessage()); }
   }
   @JavascriptInterface public boolean syncReady(){ return !supaUrl.isEmpty()&&!supaToken.isEmpty()&&!gameAccountId.isEmpty(); }
