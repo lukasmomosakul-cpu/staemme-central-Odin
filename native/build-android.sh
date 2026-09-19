@@ -224,8 +224,23 @@ public class MainActivity extends Activity {
   }).start();
  }
  @Override public void onWindowFocusChanged(boolean f){super.onWindowFocusChanged(f);if(f)Fullscreen.apply(this);}
+ // Gegenrichtung zu updateSupabaseTokens(): hat die App zwischendurch selbst
+ // erneuert, dreht sich das Erneuerungstoken weiter und supabase-js im
+ // Dashboard sitzt auf dem alten. Beim naechsten Auffrischen scheitert es
+ // und meldet den Benutzer ab. Beim Zurueckkommen also das aktuelle Paar
+ // hineinreichen - dann laufen beide Seiten auf derselben Kette.
+ private void sitzungInsDashboard(){
+  try{
+   OdinService.ladeStatisch(this);
+   if(webView==null||OdinService.token.isEmpty()||OdinService.refresh.isEmpty())return;
+   final String js="if(window.odinSetSession)window.odinSetSession("
+     +org.json.JSONObject.quote(OdinService.token)+","
+     +org.json.JSONObject.quote(OdinService.refresh)+");";
+   webView.post(()->{ try{ webView.evaluateJavascript(js,null); }catch(Exception ignored){} });
+  }catch(Exception e){ android.util.Log.w("ODIN","sitzungInsDashboard",e); }
+ }
  @Override protected void onResume(){
-  super.onResume(); Fullscreen.apply(this);
+  super.onResume(); Fullscreen.apply(this); sitzungInsDashboard();
   // Wer das Dashboard oeffnet, hat die Botschutz-Meldung gesehen - Vibration
   // und Wecker hoeren dann auf. Die Meldung selbst bleibt stehen.
   OdinService.botschutzGesehen();
@@ -258,6 +273,7 @@ public class MainActivity extends Activity {
    if(refreshToken!=null&&!refreshToken.isEmpty())OdinService.refresh=refreshToken;
    OdinService.sichern(MainActivity.this,OdinService.url,OdinService.key,
      accessToken,OdinService.team,OdinService.refresh);
+   OdinService.sitzungFrisch();
    OdinService.erfolg();
   }
   // Testknopf aus den Einstellungen. Geht bewusst durch meldungAusSpiel(),
@@ -288,6 +304,7 @@ public class MainActivity extends Activity {
    OdinService.ladeStatisch(MainActivity.this);
    if(refreshToken!=null&&!refreshToken.isEmpty())OdinService.refresh=refreshToken;
    OdinService.sichern(MainActivity.this,url,anonKey,accessToken,teamId,OdinService.refresh);
+   OdinService.sitzungFrisch();
    OdinService.team=teamId; OdinService.device=android.os.Build.MODEL+"-"+
      android.provider.Settings.Secure.getString(getContentResolver(),
        android.provider.Settings.Secure.ANDROID_ID);
@@ -376,6 +393,12 @@ public class OdinService extends Service {
  // einzelner Fehlschlag fuer immer stehen und die Warnung kam alle 30 Minuten
  // wieder, obwohl laengst alles lief.
  static volatile long letzterErfolg=0L;
+ // Ein Erneuerungstoken ist bei Supabase einmal verwendbar. Ist es
+ // verbraucht oder zurueckgezogen, antwortet der Server mit 400 - und daran
+ // aendert kein weiterer Versuch etwas. Dann hilft nur eine frische Sitzung
+ // aus dem Dashboard, und bis dahin wird nicht mehr gefragt.
+ static volatile boolean authTot=false, totGemeldet=false;
+ static void sitzungFrisch(){ authTot=false; totGemeldet=false; authFehler=0; }
  static void erfolg(){ authFehler=0; letzterErfolg=System.currentTimeMillis(); }
  // Laufende Dienstinstanz, damit die Spielansicht Meldungen oertlich
  // uebergeben kann statt ueber den Umweg Supabase.
@@ -399,6 +422,7 @@ public class OdinService extends Service {
  // keine Schleife ausloest - jeder Aufrufer versucht es genau einmal neu.
  static synchronized boolean erneuern(Context c){
   try{
+   if(authTot)return false;
    ladeStatisch(c);
    if(url.isEmpty()||key.isEmpty()||refresh.isEmpty())return false;
    long jetzt=System.currentTimeMillis();
@@ -419,7 +443,17 @@ public class OdinService extends Service {
    if(st<200||st>=400){
     authFehler++;
     android.util.Log.w("ODIN_SVC","erneuern HTTP "+st+" "+b);
-    OdinLog.schreib(c,"-","FEHLER","Token-Erneuerung fehlgeschlagen: HTTP "+st);
+    if(st==400||st==401){
+     // Endgueltig. Das tote Token wegwerfen, sonst versucht es der Dienst
+     // alle 30 Sekunden weiter und schreibt das Protokoll voll - genau das
+     // ist am 19.09. ueber eine Stunde lang passiert.
+     refresh=""; authTot=true;
+     sichern(c,url,key,token,team,"");
+     if(!totGemeldet){
+      totGemeldet=true;
+      OdinLog.schreib(c,"-","FEHLER","Erneuerungstoken verbraucht (HTTP "+st+") - Dashboard öffnen");
+     }
+    }else OdinLog.schreib(c,"-","FEHLER","Token-Erneuerung fehlgeschlagen: HTTP "+st);
     return false;
    }
    JSONObject o=new JSONObject(b.toString());
@@ -429,7 +463,7 @@ public class OdinService extends Service {
    String nrf=o.optString("refresh_token","");
    if(!nrf.isEmpty())refresh=nrf;
    sichern(c,url,key,token,team,refresh);
-   authFehler=0;
+   sitzungFrisch();
    OdinLog.schreib(c,"-","info","Zugangstoken erneuert");
    return true;
   }catch(Exception e){
@@ -517,7 +551,7 @@ public class OdinService extends Service {
  private long authGemeldet=0L;
  private void authPruefen(){
   long jetzt=System.currentTimeMillis();
-  if(authFehler<3){
+  if(!authTot&&authFehler<3){
    if(authGemeldet>0){
     authGemeldet=0;
     try{ getSystemService(NotificationManager.class).cancel(ID_AUTH); }catch(Exception ignored){}
@@ -526,7 +560,7 @@ public class OdinService extends Service {
   }
   // Entscheidend ist nicht die Fehlerzahl, sondern ob seit einer Weile
   // ueberhaupt etwas durchgeht. Sonst nervt die Meldung im laufenden Betrieb.
-  if(letzterErfolg==0L||jetzt-letzterErfolg<20*60*1000L)return;
+  if(!authTot&&(letzterErfolg==0L||jetzt-letzterErfolg<20*60*1000L))return;
   if(jetzt-authGemeldet<30*60*1000L)return;
   authGemeldet=jetzt;
   zeigeFest(ID_AUTH,CH_ALERT,"Odin: Anmeldung abgelaufen",

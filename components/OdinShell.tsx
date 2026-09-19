@@ -49,6 +49,18 @@ export default function OdinShell({
       weiterreichen(data.session?.access_token, data.session?.refresh_token));
     const { data: abo } = supabase.auth.onAuthStateChange((_e, sitzung) =>
       weiterreichen(sitzung?.access_token, sitzung?.refresh_token));
+
+    // Gegenrichtung: die App ruft das beim Zurueckkommen auf und uebergibt
+    // ihr aktuelles Paar. Ohne das sitzt supabase-js noch auf dem Token von
+    // vorhin, scheitert beim naechsten Auffrischen und meldet ab.
+    (window as unknown as {
+      odinSetSession?: (a: string, r: string) => void;
+    }).odinSetSession = (zugang: string, erneuerung: string) => {
+      if (!zugang || !erneuerung) return;
+      supabase.auth.setSession({ access_token: zugang, refresh_token: erneuerung })
+        .catch(() => {});
+    };
+
     return () => abo.subscription.unsubscribe();
   }, []);
 
