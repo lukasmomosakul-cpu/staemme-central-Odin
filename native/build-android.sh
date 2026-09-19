@@ -1001,6 +1001,12 @@ public class OdinService extends Service {
   String zusammen=(title==null?"":title)+" "+(body==null?"":body);
   if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(zusammen).find())botschutzStarten(title);
   if(nbAngriffeGebuendelt&&IST_ANGRIFF.matcher(zusammen).find()){ angriffSammeln(title,body); return; }
+  // Routine bleibt stumm. Der Loader stuft Farmen, Raubzug, Statistiken und
+  // Rohstoffe als "info" ein - dafuer eine Benachrichtigung zu bauen, ist
+  // schon auf dem eigenen Geraet laestig und ueber das Team erst recht:
+  // jede Meldung von Ares20 landete hier genauso. Nur warn und alert melden
+  // sich, und die gehen ohnehin vorher in Botschutz oder Angriffsbuendelung.
+  if(!"alert".equalsIgnoreCase(level)&&!"warn".equalsIgnoreCase(level))return;
   NotificationManager nm=getSystemService(NotificationManager.class);
   Intent open=new Intent(this,MainActivity.class);
   open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
@@ -2602,6 +2608,9 @@ public class GameWebViewActivity extends Activity {
    OdinService.meldungAusSpiel(title,body,level);
    try{
     if(!syncReady())return false;
+    // Ohne das kann source leer sein - dann erkennt poll() die eigene Zeile
+    // nicht wieder und zeigt sie als fremde Meldung an.
+    OdinService.ladeStatisch(GameWebViewActivity.this);
     org.json.JSONObject row=new org.json.JSONObject();
     row.put("team_id",supaTeam); row.put("account_id",gameAccountId);
     row.put("title",title==null?"Odin":title); row.put("body",body==null?"":body);
