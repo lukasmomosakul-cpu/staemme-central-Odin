@@ -453,8 +453,17 @@ public class OdinService extends Service {
  // Auswertung; der Weg ueber Supabase bleibt fuer die anderen Geraete.
  public static void meldungAusSpiel(String titel,String text,String stufe){
   OdinService s=lauf; if(s==null)return;
-  try{ s.show(titel==null?"Odin":titel,text==null?"":text,stufe==null?"info":stufe); }
+  try{ s.ausSpiel(titel==null?"":titel,text==null?"":text); }
   catch(Exception e){ android.util.Log.w("ODIN_SVC","meldungAusSpiel",e); }
+ }
+ // NICHT show(): das wuerde fuer jede Meldung eine Benachrichtigung bauen.
+ // Meldungen vom eigenen Geraet hat poll() immer verworfen, GodBot zeigt
+ // seinen Farmwert und die Statistiken ja selbst an. Oertlich zugestellt
+ // wird nur, was einen Wecker oder eine Buendelung ausloest.
+ private void ausSpiel(String titel,String text){
+  String zusammen=titel+" "+text;
+  if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(zusammen).find()){ botschutzStarten(titel); return; }
+  if(nbAngriffeGebuendelt&&IST_ANGRIFF.matcher(zusammen).find())angriffSammeln(titel,text);
  }
  private void channels(){
   NotificationManager nm=getSystemService(NotificationManager.class);
