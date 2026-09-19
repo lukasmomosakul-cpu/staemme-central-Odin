@@ -11,7 +11,7 @@ declare global {
       openGameOnWorld?: (accountId: string, username?: string, accountsJson?: string, world?: string) => void;
       setGameCredentials?: (accountId: string, username: string, password: string) => void;
       hasGameCredentials?: (accountId: string) => boolean;
-      setSupabaseSession?: (url: string, anonKey: string, accessToken: string, teamId: string) => void;
+      setSupabaseSession?: (url: string, anonKey: string, accessToken: string, teamId: string, refreshToken?: string) => void;
     };
   }
 }
@@ -48,12 +48,17 @@ export default function GameNativeButton({ accountId, username = '', world = '',
       if (window.Android?.setSupabaseSession && supabase && teamId) {
         const { data } = await supabase.auth.getSession();
         const token = data.session?.access_token ?? '';
+        // Das Erneuerungstoken muss mit: der Zugangstoken gilt nur eine
+        // Stunde. Ohne ihn lief die App danach in HTTP 401 - Einstellungen
+        // und Meldungen wurden stundenlang nicht mehr geschrieben.
+        const refresh = data.session?.refresh_token ?? '';
         if (token) {
           window.Android.setSupabaseSession(
             process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '',
             token,
             teamId,
+            refresh,
           );
         }
       }

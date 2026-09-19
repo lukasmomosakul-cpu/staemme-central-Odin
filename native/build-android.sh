@@ -247,9 +247,18 @@ public class MainActivity extends Activity {
   // Zugangstoken und Team hier durch, damit die Einstellungen abgeglichen
   // werden koennen.
   @JavascriptInterface public void setSupabaseSession(String url,String anonKey,String accessToken,String teamId){
+   setSupabaseSession(url,anonKey,accessToken,teamId,"");
+  }
+  // Fuenftes Feld: das Erneuerungstoken. Ohne es endete die Sitzung nach
+  // einer Stunde und die App konnte nichts mehr schreiben. Leer heisst
+  // "behalte das gespeicherte" - eine aeltere Dashboard-Fassung soll das
+  // vorhandene nicht loeschen.
+  @JavascriptInterface public void setSupabaseSession(String url,String anonKey,String accessToken,String teamId,String refreshToken){
    SUPA_URL=url; SUPA_KEY=anonKey; SUPA_TOKEN=accessToken; SUPA_TEAM=teamId;
    OdinService.url=url; OdinService.key=anonKey; OdinService.token=accessToken;
-   OdinService.sichern(MainActivity.this,url,anonKey,accessToken,teamId);
+   OdinService.ladeStatisch(MainActivity.this);
+   if(refreshToken!=null&&!refreshToken.isEmpty())OdinService.refresh=refreshToken;
+   OdinService.sichern(MainActivity.this,url,anonKey,accessToken,teamId,OdinService.refresh);
    OdinService.team=teamId; OdinService.device=android.os.Build.MODEL+"-"+
      android.provider.Settings.Secure.getString(getContentResolver(),
        android.provider.Settings.Secure.ANDROID_ID);
@@ -326,7 +335,17 @@ public class OdinService extends Service {
  // greift, aber ohne Ton und Vibration - die App oeffnet sich ja selbst.
  // Eigene Kennung, weil Android bestehende Kanaele nicht nachtraeglich aendert.
  public static final String CH_WAKE="odin_wake_v2";
- static String url="",key="",token="",team="",device="",account="";
+ static String url="",key="",token="",team="",device="",account="",refresh="";
+ // Der Zugangstoken von Supabase gilt eine Stunde. Bisher kam er genau einmal
+ // aus der Dashboard-Ansicht und wurde nie erneuert: nach einer Stunde lief
+ // JEDER Schreibzugriff in HTTP 401 "JWT expired" - stundenlang, unbemerkt,
+ // und damit auch die Botschutz-Meldung. Mit dem Erneuerungstoken holt sich
+ // der Dienst selbst einen neuen.
+ static volatile long letzteErneuerung=0L;
+ static volatile int authFehler=0;
+ // Laufende Dienstinstanz, damit die Spielansicht Meldungen oertlich
+ // uebergeben kann statt ueber den Umweg Supabase.
+ static volatile OdinService lauf=null;
  private PowerManager.WakeLock lock;
  private Thread poller; private volatile boolean running;
  private String lastSeen="";
@@ -334,9 +353,56 @@ public class OdinService extends Service {
  // Ohne dauerhafte Ablage stehen die Zugangsdaten nur in statischen Feldern:
  // nach einem Neustart oder wenn Android die App abraeumt, waeren sie weg und
  // es wuerden keine Wecker mehr gesetzt.
- public static void sichern(Context c,String u,String k,String t,String tm){
+ public static void sichern(Context c,String u,String k,String t,String tm){ sichern(c,u,k,t,tm,refresh); }
+ public static void sichern(Context c,String u,String k,String t,String tm,String rf){
+  refresh=rf==null?"":rf;
   c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).edit()
-   .putString("url",u).putString("key",k).putString("token",t).putString("team",tm).apply();
+   .putString("url",u).putString("key",k).putString("token",t).putString("team",tm)
+   .putString("refresh",refresh).apply();
+ }
+ // Neuen Zugangstoken holen. true, wenn danach ein frischer Token vorliegt.
+ // Hoechstens alle 20 s, damit ein dauerhaft ungueltiges Erneuerungstoken
+ // keine Schleife ausloest - jeder Aufrufer versucht es genau einmal neu.
+ static synchronized boolean erneuern(Context c){
+  try{
+   ladeStatisch(c);
+   if(url.isEmpty()||key.isEmpty()||refresh.isEmpty())return false;
+   long jetzt=System.currentTimeMillis();
+   if(jetzt-letzteErneuerung<20_000L)return false;
+   letzteErneuerung=jetzt;
+   HttpURLConnection x=(HttpURLConnection)new URL(url+"/auth/v1/token?grant_type=refresh_token").openConnection();
+   x.setRequestMethod("POST"); x.setRequestProperty("apikey",key);
+   x.setRequestProperty("Content-Type","application/json");
+   x.setConnectTimeout(15000); x.setReadTimeout(20000); x.setDoOutput(true);
+   JSONObject rumpf=new JSONObject(); rumpf.put("refresh_token",refresh);
+   java.io.OutputStream os=x.getOutputStream();
+   os.write(rumpf.toString().getBytes("UTF-8")); os.close();
+   int st=x.getResponseCode();
+   java.io.InputStream in=(st>=200&&st<400)?x.getInputStream():x.getErrorStream();
+   StringBuilder b=new StringBuilder();
+   if(in!=null){ BufferedReader r=new BufferedReader(new InputStreamReader(in,"UTF-8"));
+    String l; while((l=r.readLine())!=null)b.append(l); r.close(); }
+   if(st<200||st>=400){
+    authFehler++;
+    android.util.Log.w("ODIN_SVC","erneuern HTTP "+st+" "+b);
+    OdinLog.schreib(c,"-","FEHLER","Token-Erneuerung fehlgeschlagen: HTTP "+st);
+    return false;
+   }
+   JSONObject o=new JSONObject(b.toString());
+   String neu=o.optString("access_token","");
+   if(neu.isEmpty()){ authFehler++; return false; }
+   token=neu;
+   String nrf=o.optString("refresh_token","");
+   if(!nrf.isEmpty())refresh=nrf;
+   sichern(c,url,key,token,team,refresh);
+   authFehler=0;
+   OdinLog.schreib(c,"-","info","Zugangstoken erneuert");
+   return true;
+  }catch(Exception e){
+   authFehler++;
+   android.util.Log.w("ODIN_SVC","erneuern",e);
+   return false;
+  }
  }
  // Nach dem Abraeumen der App ist der Prozess weg und die statischen Felder
  // sind leer. Der Wecker-Empfaenger laeuft dann in einem frischen Prozess -
@@ -347,6 +413,7 @@ public class OdinService extends Service {
   if(key.isEmpty())key=p.getString("key","");
   if(token.isEmpty())token=p.getString("token","");
   if(team.isEmpty())team=p.getString("team","");
+  if(refresh.isEmpty())refresh=p.getString("refresh","");
   if(device.isEmpty())device=Build.MODEL;
  }
  private void laden(){
@@ -356,6 +423,7 @@ public class OdinService extends Service {
   if(key.isEmpty())key=p.getString("key","");
   if(token.isEmpty())token=p.getString("token","");
   if(team.isEmpty())team=p.getString("team","");
+  if(refresh.isEmpty())refresh=p.getString("refresh","");
   if(device.isEmpty())device=Build.MODEL+"-"+android.provider.Settings.Secure.getString(
     getContentResolver(),android.provider.Settings.Secure.ANDROID_ID);
  }
@@ -374,7 +442,19 @@ public class OdinService extends Service {
    lock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"odin:bot"); lock.acquire(); }catch(Exception ignored){}
   OdinAlarm.wachhund(this);   // Rueckfall, feuert auf manchen Geraeten nie
   OdinJob.planen(this);       // eigentlicher Wiederbeleber
+  lauf=this;
   running=true; poller=new Thread(this::loop); poller.start();
+ }
+ // Meldungen aus der Spielansicht liefen bisher AUSSCHLIESSLICH ueber
+ // Supabase: GodBot schreibt eine Zeile, der Dienst holt sie zurueck. Zwei
+ // Haken - ohne Netz oder mit abgelaufenem Token kommt nichts an, und poll()
+ // ueberspringt Zeilen vom eigenen Geraet ohnehin. Der Botschutz-Wecker
+ // konnte so nie anspringen. Jetzt geht die Meldung direkt in dieselbe
+ // Auswertung; der Weg ueber Supabase bleibt fuer die anderen Geraete.
+ public static void meldungAusSpiel(String titel,String text,String stufe){
+  OdinService s=lauf; if(s==null)return;
+  try{ s.show(titel==null?"Odin":titel,text==null?"":text,stufe==null?"info":stufe); }
+  catch(Exception e){ android.util.Log.w("ODIN_SVC","meldungAusSpiel",e); }
  }
  private void channels(){
   NotificationManager nm=getSystemService(NotificationManager.class);
@@ -387,7 +467,27 @@ public class OdinService extends Service {
  }
  // Feste Nummern, damit eine Meldung die vorige ERSETZT statt sich daneben
  // zu legen. Genau daran lag die Flut einzelner Angriffsmeldungen.
- private static final int ID_ANGRIFFE=4801, ID_VORWARNUNG=4802, ID_BOTSCHUTZ=4803;
+ private static final int ID_ANGRIFFE=4801, ID_VORWARNUNG=4802, ID_BOTSCHUTZ=4803, ID_AUTH=4804;
+ // Fuenf Stunden lief der Dienst mit abgelaufenem Token, ohne dass es
+ // irgendwo sichtbar wurde - nur Logzeilen, die niemand nachts liest.
+ // Bleibt die Erneuerung haengen, gehoert das ins Meldungsfeld.
+ private long authGemeldet=0L;
+ private void authPruefen(){
+  long jetzt=System.currentTimeMillis();
+  if(authFehler<3){
+   if(authGemeldet>0){
+    authGemeldet=0;
+    try{ getSystemService(NotificationManager.class).cancel(ID_AUTH); }catch(Exception ignored){}
+   }
+   return;
+  }
+  if(jetzt-authGemeldet<30*60*1000L)return;
+  authGemeldet=jetzt;
+  zeigeFest(ID_AUTH,CH_ALERT,"Odin: Anmeldung abgelaufen",
+    "Der Zugang zu Supabase lässt sich nicht erneuern - Einstellungen und Meldungen "
+    +"werden nicht mehr geschrieben. Bitte das Dashboard einmal öffnen.",true);
+  OdinLog.schreib(this,"-","FEHLER","Zugangstoken kann nicht erneuert werden");
+ }
  // Vorwarnung: ein Termin steht an, aber nichts laeuft ungedrosselt. Ohne
  // Hinweis merkt man erst hinterher, dass der Raubzug ausgefallen ist.
  private long vorgewarntFuer=0L;
@@ -636,6 +736,7 @@ public class OdinService extends Service {
    try{ dimmWaechter(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","dimm",e); }
    try{ vorwarnPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","vorwarnung",e); }
    try{ botschutzTakt(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","botschutz",e); }
+   try{ authPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","auth",e); }
    // Nach ZEIT auffrischen, nicht nach Rundenzahl. Seit die Schleife vor
    // Terminen auf fuenf Sekunden taktet, waren zehn Runden nur noch 50
    // Sekunden - der Dienst holte die Plaene fuenfmal in sechs Minuten.
@@ -689,7 +790,11 @@ public class OdinService extends Service {
    x.setConnectTimeout(15000); x.setReadTimeout(20000); x.setDoOutput(true);
    java.io.OutputStream os=x.getOutputStream();
    os.write(new JSONArray().put(r).toString().getBytes("UTF-8")); os.close();
-   x.getResponseCode();
+   int st=x.getResponseCode();
+   // Genau hier verschwand der abgelaufene Token: der Rueckgabewert wurde
+   // geholt und weggeworfen. Einmal erneuern und wiederholen; beim zweiten
+   // Mal greift die 20-s-Sperre in erneuern(), es gibt also keine Schleife.
+   if((st==401||st==403)&&erneuern(c))protokollJetzt(c,stufe,bereich,text);
   }catch(Exception e){ android.util.Log.w("ODIN_SVC","protokoll",e); }
  }
  // Termine aus dem Rausstell-Plan in die eigene Liste uebernehmen.
@@ -714,10 +819,19 @@ public class OdinService extends Service {
   }catch(Exception e){ android.util.Log.w("ODIN_SVC","merkeTermine",e); }
  }
  private String hole(String pfad) throws Exception {
+  String s=holeEinmal(pfad);
+  if(s==null){ if(!erneuern(this))return "[]"; s=holeEinmal(pfad); }
+  return s==null?"[]":s;
+ }
+ // null heisst abgelehnt (401/403) - dann Token erneuern und genau einmal
+ // wiederholen. "[]" heisst: Anfrage lief, lieferte aber nichts Brauchbares.
+ private String holeEinmal(String pfad) throws Exception {
   HttpURLConnection c=(HttpURLConnection)new URL(url+"/rest/v1/"+pfad).openConnection();
   c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
   c.setConnectTimeout(15000); c.setReadTimeout(20000);
-  if(c.getResponseCode()>=400)return "[]";
+  int st=c.getResponseCode();
+  if(st==401||st==403)return null;
+  if(st>=400)return "[]";
   BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
   StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
   return b.toString();
@@ -797,7 +911,9 @@ public class OdinService extends Service {
   HttpURLConnection c=(HttpURLConnection)new URL(q).openConnection();
   c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
   c.setConnectTimeout(15000); c.setReadTimeout(20000);
-  if(c.getResponseCode()>=400)return;
+  int st=c.getResponseCode();
+  if(st==401||st==403){ erneuern(this); return; }
+  if(st>=400)return;
   BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
   StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
   JSONArray arr=new JSONArray(b.toString());
@@ -848,6 +964,7 @@ public class OdinService extends Service {
   nm.notify((int)(System.currentTimeMillis()%100000),n);
  }
  @Override public void onDestroy(){
+  lauf=null;
   running=false; if(poller!=null)poller.interrupt();
   try{ if(lock!=null&&lock.isHeld())lock.release(); }catch(Exception ignored){}
   super.onDestroy();
@@ -2261,6 +2378,16 @@ public class GameWebViewActivity extends Activity {
  // Einstellungsabgleich ueber Supabase REST. Laeuft nativ, damit weder CORS
  // noch die CSP der Spielseite dazwischenfunken.
  private String supaRequest(String method,String path,String body) throws Exception {
+  try{ return supaEinmal(method,path,body); }
+  catch(java.io.IOException e){
+   String m=e.getMessage()==null?"":e.getMessage();
+   if(!(m.startsWith("HTTP 401")||m.startsWith("HTTP 403")))throw e;
+   if(!OdinService.erneuern(this))throw e;
+   supaToken=OdinService.token;
+   return supaEinmal(method,path,body);
+  }
+ }
+ private String supaEinmal(String method,String path,String body) throws Exception {
   java.net.HttpURLConnection c=(java.net.HttpURLConnection)new java.net.URL(supaUrl+"/rest/v1/"+path).openConnection();
   c.setRequestMethod(method); c.setConnectTimeout(15000); c.setReadTimeout(30000);
   c.setRequestProperty("apikey",supaKey);
@@ -2399,6 +2526,10 @@ public class GameWebViewActivity extends Activity {
   }
   // GodBot kann Meldungen an alle Geraete des Teams schicken - ohne Discord.
   @JavascriptInterface public boolean notify(String title,String body,String level){
+   // Erst oertlich zustellen: Benachrichtigung, Angriffsbuendelung und der
+   // Botschutz-Wecker haengen damit nicht mehr am Netz. Danach wie bisher
+   // in die Tabelle, damit die anderen Geraete des Teams sie bekommen.
+   OdinService.meldungAusSpiel(title,body,level);
    try{
     if(!syncReady())return false;
     org.json.JSONObject row=new org.json.JSONObject();
