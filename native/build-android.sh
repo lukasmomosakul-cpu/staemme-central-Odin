@@ -69,7 +69,14 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-sdk android:minSdkVersion="26" />
     <application android:theme="@style/AppTheme" android:label="Odin" android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
+        <!-- singleTask statt singleTop: singleTop verhindert nur eine zweite
+             Instanz OBEN AUF DEMSELBEN Stapel. Startet das Symbol, eine
+             Benachrichtigung oder die Spielansicht (documentLaunchMode legt
+             eigene Aufgaben an) einen neuen Stapel, entsteht trotzdem eine
+             zweite MainActivity - und damit eine zweite WebView mit derselben
+             Supabase-Sitzung im selben localStorage. Die beiden ueberschreiben
+             sich gegenseitig den Anmeldestatus. -->
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
         <activity android:name=".GameWebViewActivity" android:exported="false"
             android:documentLaunchMode="intoExisting" android:launchMode="singleTop"
@@ -144,8 +151,27 @@ public class MainActivity extends Activity {
  private static final String ODIN_URL="https://staemme-central-odin.vercel.app/";
  private static final String PREFS="odin", LAST_URL="lastOdinUrl";
  static String SUPA_URL="",SUPA_KEY="",SUPA_TOKEN="",SUPA_TEAM="";
+ // Guertel und Hosentraeger: singleTask sollte reichen, aber wenn Android
+ // doch eine zweite Instanz anlegt, darf sie nicht mit derselben Sitzung
+ // weiterarbeiten. Dieselbe Bauart wie der Riegel in GameWebViewActivity.
+ private static MainActivity offen=null;
+ private final String instanz=Integer.toHexString(System.identityHashCode(this));
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){
   super.onCreate(b); Fullscreen.apply(this);
+  MainActivity vorhanden=offen;
+  if(vorhanden!=null&&vorhanden!=this&&!vorhanden.isFinishing()){
+   OdinLog.schreib(this,"-","WICHTIG",
+     "zweites Dashboard verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
+   // Das bestehende nach vorn holen, damit der Benutzer nicht vor einem
+   // leeren Bildschirm steht.
+   try{
+    Intent i=new Intent(this,MainActivity.class);
+    i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+    startActivity(i);
+   }catch(Exception ignored){}
+   finish(); return;
+  }
+  offen=this;
   FrameLayout root=new FrameLayout(this); webView=new WebView(this);
   root.addView(webView,new FrameLayout.LayoutParams(-1,-1)); setContentView(root);
   WebSettings s=webView.getSettings();
@@ -238,6 +264,10 @@ public class MainActivity extends Activity {
      +org.json.JSONObject.quote(OdinService.refresh)+");";
    webView.post(()->{ try{ webView.evaluateJavascript(js,null); }catch(Exception ignored){} });
   }catch(Exception e){ android.util.Log.w("ODIN","sitzungInsDashboard",e); }
+ }
+ @Override protected void onDestroy(){
+  if(offen==this)offen=null;
+  super.onDestroy();
  }
  @Override protected void onResume(){
   super.onResume(); Fullscreen.apply(this); sitzungInsDashboard();
