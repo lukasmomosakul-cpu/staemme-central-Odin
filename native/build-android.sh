@@ -435,7 +435,11 @@ public class OdinService extends Service {
  // Neuen Zugangstoken holen. true, wenn danach ein frischer Token vorliegt.
  // Hoechstens alle 20 s, damit ein dauerhaft ungueltiges Erneuerungstoken
  // keine Schleife ausloest - jeder Aufrufer versucht es genau einmal neu.
- static synchronized boolean erneuern(Context c){
+ static boolean erneuern(Context c){ return erneuern(c,"?"); }
+ // Der Anlass steht jetzt mit im Protokoll. "Zugangstoken erneuert" allein
+ // sagte nicht, welcher Weg gefragt hat - und damit auch nicht, wer die
+ // zusaetzlichen Erneuerungen ausloest.
+ static synchronized boolean erneuern(Context c,String anlass){
   try{
    if(authTot)return false;
    ladeStatisch(c);
@@ -479,7 +483,7 @@ public class OdinService extends Service {
    if(!nrf.isEmpty())refresh=nrf;
    sichern(c,url,key,token,team,refresh);
    sitzungFrisch();
-   OdinLog.schreib(c,"-","info","Zugangstoken erneuert");
+   OdinLog.schreib(c,"-","info","Zugangstoken erneuert (Anlass: "+anlass+")");
    return true;
   }catch(Exception e){
    authFehler++;
@@ -899,7 +903,7 @@ public class OdinService extends Service {
    // geholt und weggeworfen. Einmal erneuern und wiederholen; beim zweiten
    // Mal greift die 20-s-Sperre in erneuern(), es gibt also keine Schleife.
    if(st>=200&&st<400)erfolg();
-   if((st==401||st==403)&&erneuern(c))protokollJetzt(c,stufe,bereich,text);
+   if((st==401||st==403)&&erneuern(c,"protokoll"))protokollJetzt(c,stufe,bereich,text);
   }catch(Exception e){ android.util.Log.w("ODIN_SVC","protokoll",e); }
  }
  // Termine aus dem Rausstell-Plan in die eigene Liste uebernehmen.
@@ -925,7 +929,7 @@ public class OdinService extends Service {
  }
  private String hole(String pfad) throws Exception {
   String s=holeEinmal(pfad);
-  if(s==null){ if(!erneuern(this))return "[]"; s=holeEinmal(pfad); }
+  if(s==null){ if(!erneuern(this,"hole "+pfad))return "[]"; s=holeEinmal(pfad); }
   return s==null?"[]":s;
  }
  // null heisst abgelehnt (401/403) - dann Token erneuern und genau einmal
@@ -1018,7 +1022,7 @@ public class OdinService extends Service {
   c.setRequestProperty("apikey",key); c.setRequestProperty("Authorization","Bearer "+token);
   c.setConnectTimeout(15000); c.setReadTimeout(20000);
   int st=c.getResponseCode();
-  if(st==401||st==403){ erneuern(this); return; }
+  if(st==401||st==403){ erneuern(this,"poll"); return; }
   if(st>=400)return;
   erfolg();
   BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"));
@@ -2525,7 +2529,7 @@ public class GameWebViewActivity extends Activity {
   catch(java.io.IOException e){
    String m=e.getMessage()==null?"":e.getMessage();
    if(!(m.startsWith("HTTP 401")||m.startsWith("HTTP 403")))throw e;
-   if(!OdinService.erneuern(this))throw e;
+   if(!OdinService.erneuern(this,"supaRequest "+method+" "+path))throw e;
    supaToken=OdinService.token;
    return supaEinmal(method,path,body);
   }

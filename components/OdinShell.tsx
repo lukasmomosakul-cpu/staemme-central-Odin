@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import VersionUpdater from './VersionUpdater';
 
@@ -37,6 +37,9 @@ export default function OdinShell({
   // Erneuerungstoken weiter. Ohne diese Zeile blieb die App auf dem alten
   // sitzen, jede eigene Erneuerung scheiterte und es kam die Meldung, der
   // Zugang sei abgelaufen - obwohl im Vordergrund alles lief.
+  // Letztes an supabase-js uebergebenes Paar - gegen unnoetige setSession-Aufrufe.
+  const zuletzt = useRef('');
+
   useEffect(() => {
     if (!supabase) return;
     // Festhalten: in der unten gespeicherten Funktion zieht die Null-Pruefung
@@ -59,10 +62,16 @@ export default function OdinShell({
         const roh = br.aktuelleSitzung();
         if (!roh) return;
         const p = JSON.parse(roh) as { access_token?: string; refresh_token?: string };
-        if (p.access_token && p.refresh_token) {
-          sb.auth.setSession({ access_token: p.access_token, refresh_token: p.refresh_token })
-            .catch(() => {});
-        }
+        if (!p.access_token || !p.refresh_token) return;
+        // Nur setzen, wenn es wirklich ein anderes Paar ist. setSession()
+        // erneuert naemlich selbst, sobald der uebergebene Zugangstoken
+        // abgelaufen ist - alle fuenf Minuten aufgerufen waere das ein
+        // zweiter Erneuerer durch die Hintertuer, genau das, was hier
+        // abgestellt werden soll.
+        if (p.access_token === zuletzt.current) return;
+        zuletzt.current = p.access_token;
+        sb.auth.setSession({ access_token: p.access_token, refresh_token: p.refresh_token })
+          .catch(() => {});
       } catch {
         /* Bruecke nicht da oder Antwort unbrauchbar - dann bleibt es beim Bisherigen. */
       }
