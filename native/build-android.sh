@@ -1909,11 +1909,7 @@ public class GameWebViewActivity extends Activity {
   supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
   // Vom Wecker gestartet traegt das Intent keine Sitzung - dann aus der
   // dauerhaften Ablage holen, sonst laeuft die Ansicht ohne Abgleich.
-  if(supaUrl.isEmpty()||supaToken.isEmpty()){
-   OdinService.ladeStatisch(this);
-   supaUrl=OdinService.url; supaKey=OdinService.key;
-   supaToken=OdinService.token; supaTeam=OdinService.team;
-  }
+  if(supaUrl.isEmpty()||supaToken.isEmpty())sitzungNachladen();
   gameAccountId=nz(getIntent().getStringExtra("accountId"));
   LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(0xFFFFFFFF);
   root.addView(buildHeader(activeName),new LinearLayout.LayoutParams(-1,-2));
@@ -2538,12 +2534,29 @@ public class GameWebViewActivity extends Activity {
   super.onWindowFocusChanged(f);
   if(f){ if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this); }
  }
+ // Einzige Stelle, an der die Sitzung aus der dauerhaften Ablage kommt.
+ // Leere Werte ueberschreiben nie vorhandene - der Dienst haelt den Token
+ // aktuell, die Ansicht soll ihn uebernehmen, nicht wegwerfen.
+ private void sitzungNachladen(){
+  OdinService.ladeStatisch(this);
+  if(!OdinService.url.isEmpty())supaUrl=OdinService.url;
+  if(!OdinService.key.isEmpty())supaKey=OdinService.key;
+  if(!OdinService.token.isEmpty())supaToken=OdinService.token;
+  if(!OdinService.team.isEmpty())supaTeam=OdinService.team;
+ }
  @Override protected void onNewIntent(Intent in){
   super.onNewIntent(in); setIntent(in);
   // Nur die Sitzungsdaten auffrischen - die WebView bleibt unberuehrt,
   // sonst ginge die Anmeldung bei jedem Wechsel verloren.
-  supaUrl=nz(in.getStringExtra("supaUrl")); supaKey=nz(in.getStringExtra("supaKey"));
-  supaToken=nz(in.getStringExtra("supaToken")); supaTeam=nz(in.getStringExtra("supaTeam"));
+  String u=nz(in.getStringExtra("supaUrl")), k=nz(in.getStringExtra("supaKey"));
+  String t=nz(in.getStringExtra("supaToken")), tm=nz(in.getStringExtra("supaTeam"));
+  // Wecker und Dimm-Waechter starten die Ansicht ohne Sitzung im Intent.
+  // Bisher wurden die Felder trotzdem mit leeren Werten ueberschrieben -
+  // ab da lief die Ansicht bis zum Neustart ohne Abgleich. Im Protokoll
+  // vom 19.09. ab 20:24 durchgehend "Abgleich inaktiv (keine Sitzung)",
+  // ueber sechs Stunden, waehrend der Dienst munter weiter erneuerte.
+  if(!u.isEmpty()&&!t.isEmpty()){ supaUrl=u; supaKey=k; supaToken=t; supaTeam=tm; }
+  else sitzungNachladen();
   String a=nz(in.getStringExtra("accountId")); if(!a.isEmpty())gameAccountId=a;
   // Frueher lief der Weckermodus nur in onCreate. Existierte die Ansicht
   // bereits, kam onNewIntent dran und der Bildschirm blieb aus.
@@ -2552,6 +2565,9 @@ public class GameWebViewActivity extends Activity {
  @Override protected void onResume(){
   super.onResume();
   imVordergrund=true;
+  // Der Dienst erneuert den Token stuendlich. Ohne diese Zeile arbeitet die
+  // Ansicht mit dem Exemplar von ihrem Start weiter.
+  sitzungNachladen();
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
   OdinBubble.hide(); restoreFromFloat();
  }
