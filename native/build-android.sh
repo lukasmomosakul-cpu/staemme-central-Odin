@@ -689,9 +689,18 @@ public class OdinService extends Service {
   // Dienstschleife und Wecker koennen denselben Termin sekundenversetzt
   // ausloesen. Ohne diese Sperre kaeme die Ansicht zweimal nach vorn.
   synchronized(OdinService.class){
-   String schluessel=kt+"|"+art+"|"+text;
+   // Der Text gehoerte NICHT in den Schluessel: die beiden Wege bauen ihn
+   // verschieden. Der Wecker meldet "FetterOrk · de256 · Raubzug", die
+   // Dienstschleife "FetterOrk · de256" - verschiedene Schluessel, Sperre
+   // wirkungslos. Am 20.09. um 02:57:35 und 02:57:36 zweimal geweckt.
+   // Konto und Art reichen: zwei verschiedene Termine derselben Art
+   // innerhalb einer Minute sollen die Ansicht ohnehin nur einmal holen.
+   String schluessel=kt+"|"+art;
    long jetzt=System.currentTimeMillis();
-   if(schluessel.equals(letzterWeckSchluessel)&&jetzt-letztesWecken<60_000L)return;
+   if(schluessel.equals(letzterWeckSchluessel)&&jetzt-letztesWecken<60_000L){
+    OdinLog.schreib(c,"-","info","Wecken uebersprungen ("+art+") - vor <60 s schon geweckt");
+    return;
+   }
    letzterWeckSchluessel=schluessel; letztesWecken=jetzt;
   }
   // Im Dimm-Modus liegt die Ansicht bereits sichtbar vorn und laeuft im
@@ -1900,9 +1909,23 @@ public class GameWebViewActivity extends Activity {
   GameWebViewActivity vorhanden=OFFEN.get(wer);
   if(vorhanden!=null&&vorhanden!=this&&!vorhanden.isFinishing()){
    android.util.Log.i("ODIN_GODBOT","zweite Ansicht fuer "+wer+" verworfen");
+   // Auch ins oertliche Protokoll: bisher ging diese Zeile nur nach Supabase
+   // und war beim Auswerten der Geraeteprotokolle unsichtbar. Ob die Sperre
+   // greift oder daneben, liess sich so gar nicht erkennen.
+   OdinLog.schreib(this,wer,"WICHTIG",
+     "zweite Ansicht verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
    OdinService.protokoll(this,"WICHTIG","doppelstart",
      "zweite Ansicht verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
    finish(); return;
+  }
+  // Wer hier eine bestehende Instanz ersetzt, ohne dass die Sperre oben
+  // gegriffen hat, ist der Fall, den das Protokoll vom 20.09. zeigt:
+  // #af2b -> #d35a -> #cf8a, jedes Mal ein frisches onCreate. Festhalten,
+  // welche Instanz verdraengt wurde und in welchem Zustand sie war.
+  GameWebViewActivity vorher=OFFEN.get(wer);
+  if(vorher!=null&&vorher!=this){
+   OdinLog.schreib(this,wer,"WICHTIG","Ansicht ersetzt: #"+vorher.instanz
+     +" -> #"+instanz+" (alte beendet sich: "+vorher.isFinishing()+")");
   }
   OFFEN.put(wer,this);
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
