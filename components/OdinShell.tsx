@@ -49,6 +49,27 @@ export default function OdinShell({
       }).Android;
       if (br?.updateSupabaseTokens && zugang) br.updateSupabaseTokens(zugang, erneuerung ?? '');
     };
+    // In der App ist der Dienst der einzige Erneuerer. Beim Laden und danach
+    // regelmaessig das aktuelle Paar holen - sonst liefe die Oberflaeche nach
+    // einer Stunde mit abgelaufenem Token und meldete ab.
+    const ausApp = () => {
+      const br = (window as unknown as { Android?: { aktuelleSitzung?: () => string } }).Android;
+      if (!br?.aktuelleSitzung) return;
+      try {
+        const roh = br.aktuelleSitzung();
+        if (!roh) return;
+        const p = JSON.parse(roh) as { access_token?: string; refresh_token?: string };
+        if (p.access_token && p.refresh_token) {
+          sb.auth.setSession({ access_token: p.access_token, refresh_token: p.refresh_token })
+            .catch(() => {});
+        }
+      } catch {
+        /* Bruecke nicht da oder Antwort unbrauchbar - dann bleibt es beim Bisherigen. */
+      }
+    };
+    ausApp();
+    const takt = window.setInterval(ausApp, 5 * 60 * 1000);
+
     sb.auth.getSession().then(({ data }) =>
       weiterreichen(data.session?.access_token, data.session?.refresh_token));
     const { data: abo } = sb.auth.onAuthStateChange((_e, sitzung) =>
@@ -65,7 +86,7 @@ export default function OdinShell({
         .catch(() => {});
     };
 
-    return () => abo.subscription.unsubscribe();
+    return () => { window.clearInterval(takt); abo.subscription.unsubscribe(); };
   }, []);
 
   return (

@@ -265,6 +265,21 @@ public class MainActivity extends Activity {
   // dabei das Erneuerungstoken weiter - das der App war danach verbrannt
   // und jede Erneuerung scheiterte. Deshalb reicht die Oberflaeche jedes
   // neue Paar sofort durch.
+  // Gegenstueck zu updateSupabaseTokens: die Oberflaeche fragt das aktuelle
+  // Paar ab, statt auf ein Nachreichen zu warten. Erkennt supabase-js an
+  // dieser Methode, dass es in der App laeuft, schaltet es sein eigenes
+  // Auffrischen ab - sonst erneuern beide und verbrennen sich gegenseitig
+  // das Erneuerungstoken.
+  @JavascriptInterface public String aktuelleSitzung(){
+   try{
+    OdinService.ladeStatisch(MainActivity.this);
+    if(OdinService.token.isEmpty()||OdinService.refresh.isEmpty())return "";
+    org.json.JSONObject o=new org.json.JSONObject();
+    o.put("access_token",OdinService.token);
+    o.put("refresh_token",OdinService.refresh);
+    return o.toString();
+   }catch(Exception e){ return ""; }
+  }
   @JavascriptInterface public void updateSupabaseTokens(String accessToken,String refreshToken){
    if(accessToken==null||accessToken.isEmpty())return;
    SUPA_TOKEN=accessToken;
