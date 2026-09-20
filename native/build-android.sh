@@ -2145,6 +2145,12 @@ public class GameWebViewActivity extends Activity {
    // nach getaner Arbeit in die dann im Hintergrund liegende Activity
    // zurueckhaengen - genau so brach die Nachtaktivitaet ab.
    if(dimDecke!=null){ setStatus("Termin - Dimm-Modus läuft, nichts nötig"); return; }
+   // Und genauso, wenn die Ansicht einfach offen vor einem liegt: dann ist
+   // die WebView schon gerendert und ungedrosselt. Das kleine Fenster riss
+   // sie aus der offenen Ansicht heraus und haengte sie danach zurueck -
+   // fuer den Benutzer ein Mini-Fenster, das ueber der laufenden App
+   // aufpoppt, obwohl er direkt davor sitzt.
+   if(imVordergrund){ setStatus("Termin - Ansicht ist offen, nichts nötig"); return; }
    if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
    if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
    // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
