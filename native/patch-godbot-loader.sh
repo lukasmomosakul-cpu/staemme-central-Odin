@@ -123,13 +123,15 @@ js = r"""
     // Ein Schwellwert auf die Zahl trifft daneben - deshalb den Rotanteil pruefen.
     // Nur echte Warnungen vibrieren (Rotanteil der Embed-Farbe). Routine -
     // Farmen, Raubzug, Statusmeldungen - laeuft still auf dem leisen Kanal.
-    var lvl='info';
-    if(e&&typeof e.color==='number'){
-     var cr=(e.color>>16)&255, cg=(e.color>>8)&255;
-     if(cr>150&&cg<170)lvl='warn';
-    }
-    var titelWarn=/sperre|botschutz|captcha|angriff|fehler|abbruch/i.test(title||'');
-    if(!titelWarn&&lvl==='warn'&&!/sperre|botschutz|captcha|angriff/i.test(desc||''))lvl='info';
+    // Ausdrueckliche Liste statt Embed-Farbe plus Stichwort. Das alte Muster
+    // verfehlte ausgerechnet die Meldungen mit echtem Schaden: "gesperrt"
+    // enthaelt nicht "sperre", und "Rausstellen: manueller Rueckruf noetig"
+    // sowie "Entscheidung noetig" trafen gar nichts - seit 1.54 liefen alle
+    // drei stumm durch. Gegen alle 27 GodBot-Titel geprueft.
+    var z=String(title||'')+' '+String(desc||''), lvl='info';
+    if(/entwarnung|gelöst|geloest|eingestellt/i.test(String(title||''))) lvl='info';
+    else if(/botschutz|captcha|gesperrt|sperre|ag-alarm|rückruf|rueckruf|entscheidung nötig|abgebrochen|übernommen|fehler|abbruch/i.test(z)) lvl='warn';
+    else if(/gestoppt/i.test(String(title||''))&&!/manuell/i.test(String(desc||''))) lvl='warn';
     window.odinNotify(title,desc,lvl);
    }catch(err){}
   }
