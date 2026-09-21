@@ -579,6 +579,9 @@ public class OdinService extends Service {
  // wird nur, was einen Wecker oder eine Buendelung ausloest.
  private void ausSpiel(String titel,String text){
   String zusammen=titel+" "+text;
+  if(IST_BOTSCHUTZ.matcher(zusammen).find()&&IST_ENTWARNUNG.matcher(zusammen).find()){
+   botschutzBeenden("Entwarnung von GodBot"); return;
+  }
   if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(zusammen).find()){ botschutzStarten(titel); return; }
   if(nbAngriffeGebuendelt&&IST_ANGRIFF.matcher(zusammen).find())angriffSammeln(titel,text);
  }
@@ -1071,8 +1074,17 @@ public class OdinService extends Service {
  // Meldung, die mitzaehlt und die letzten Zeilen zeigt.
  private final java.util.ArrayDeque<String> angriffe=new java.util.ArrayDeque<>();
  private long angriffeSeit=0L;
+ // Nur EINGEHENDE Angriffe. Das alte Muster "angriff" traf jede Farmrunde -
+ // GodBots Meldung lautet "FarmGod schickt ... Angriffe ab" - und damit
+ // kam bei jedem automatischen Farmen eine Benachrichtigung. GodBot selbst
+ // meldet eingehende Angriffe nur als "AG-Alarm"; der Rest deckt Meldungen
+ // aus anderen Quellen ab. "Angriffe ab" (ausgehend) trifft nichts davon.
  private static final java.util.regex.Pattern IST_ANGRIFF=
-   java.util.regex.Pattern.compile("(?i)angriff|eingehend|incoming");
+   java.util.regex.Pattern.compile("(?i)eingehend|incoming|ag-alarm|angegriffen|angriffe? auf ");
+ // Entwarnung und Abschaltung erwaehnen den Botschutz ebenfalls - "Entwarnung
+ // - Botschutz geloest" haette die Eskalation GESTARTET statt beendet.
+ private static final java.util.regex.Pattern IST_ENTWARNUNG=
+   java.util.regex.Pattern.compile("(?i)entwarnung|gelöst|geloest|eingestellt");
  private static final java.util.regex.Pattern IST_BOTSCHUTZ=
    java.util.regex.Pattern.compile("(?i)botschutz|captcha|bot.?schutz|bot protection");
  private boolean angriffSammeln(String title,String body){
@@ -1091,7 +1103,9 @@ public class OdinService extends Service {
  }
  private void show(String title,String body,String level){
   String zusammen=(title==null?"":title)+" "+(body==null?"":body);
-  if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(zusammen).find())botschutzStarten(title);
+  if(IST_BOTSCHUTZ.matcher(zusammen).find()&&IST_ENTWARNUNG.matcher(zusammen).find()){
+   botschutzBeenden("Entwarnung von GodBot");
+  }else if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(zusammen).find())botschutzStarten(title);
   if(nbAngriffeGebuendelt&&IST_ANGRIFF.matcher(zusammen).find()){ angriffSammeln(title,body); return; }
   // Routine bleibt stumm. Der Loader stuft Farmen, Raubzug, Statistiken und
   // Rohstoffe als "info" ein - dafuer eine Benachrichtigung zu bauen, ist
