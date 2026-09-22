@@ -2,6 +2,10 @@
 set -euo pipefail
 # Odin GodBot loader.
 #
+# GodBot ist fester Bestandteil der App: die Quelle liegt im Repo unter
+# godbot/GodBot.user.js und wird beim Bauen als Asset in die APK gelegt.
+# Zur Laufzeit wird nichts mehr aus dem Gist geholt.
+#
 # Zwei Grenzen bestimmen dieses Design:
 #  1. GodBot ist ~730 KB. So ein String durch WebView.evaluateJavascript zu
 #     schicken schlaegt still fehl (Binder-Limit).
@@ -12,10 +16,9 @@ set -euo pipefail
 TARGET=$(find app/src/main -type f -name 'GameWebViewActivity.java' | head -n1)
 test -n "$TARGET" || { echo 'GodBot loader: GameWebViewActivity.java not found'; exit 1; }
 mkdir -p app/src/main/assets
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
-  'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js' \
-  -o app/src/main/assets/godbot.user.js
+cp ../godbot/GodBot.user.js app/src/main/assets/godbot.user.js
 test -s app/src/main/assets/godbot.user.js
+grep -q '==UserScript==' app/src/main/assets/godbot.user.js
 rm -f app/src/main/assets/odin-test.user.js
 VERSION=$(tr -d '[:space:]' < ../VERSION)
 python3 - "$TARGET" "$VERSION" <<'PY'
@@ -23,7 +26,6 @@ from pathlib import Path
 import sys, json
 
 p = Path(sys.argv[1]); version = sys.argv[2]; s = p.read_text()
-GIST = 'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js'
 
 js = r"""
 (function(){try{
@@ -303,12 +305,10 @@ js = r"""
   window.__odinSyncFlush=flush;
  })();
  // --------------------------------------------------------------------------
- // Reihenfolge: erst GodBots @require-Abhaengigkeiten, dann GodBot selbst,
- // dann die eigenen Skripte - die duerfen sich auf GodBot stuetzen.
- var n=__DEPCOUNT__, xn=__EXTRACOUNT__, gb=__GODBOT_AN__, urls=[];
- for(var i=0;i<n;i++)urls.push('/__odin_req_'+i+'.js');
- if(gb)urls.push('/__odin_godbot.js');
- for(var j=0;j<xn;j++)urls.push('/__odin_x_'+j+'.js');
+ // Reihenfolge: erst GodBot (eingebaut), dann je Zusatzskript dessen
+ // @require und das Skript selbst - die duerfen sich auf GodBot stuetzen.
+ var tn=__TEILE__, gb=__GODBOT_AN__, urls=[];
+ for(var i=0;i<tn;i++)urls.push('/__odin_t_'+i+'.js');
  var done=0;
  function add(i){
   if(i>=urls.length){
@@ -371,98 +371,69 @@ new = ''' private void loadEnabledScripts(WebView v){
  }
  private void injectGodBot(WebView v){
   if(v.getTag(0x0D1A0002)!=null)return; v.setTag(0x0D1A0002,Boolean.TRUE);
+  final String seite=v.getUrl()==null?"":v.getUrl();
   new Thread(()->{
    try{
-    // Frueher wurden bei JEDEM Seitenwechsel 2,88 MB neu geladen - das waren
-    // die 2-3 Sekunden Verzoegerung. Einmal je Sitzung reicht.
-    // Welche Eintraege sind eingeschaltet? Die Liste entscheidet, nicht der
-    // Code - GodBot ist darin nur der erste Eintrag und darf aus sein.
+    java.util.List<byte[]> teile=new java.util.ArrayList<>();
+    // GodBot kommt aus der APK - kein Netz, kein Gist, keine Ablaufzeit.
+    String gb=OdinSkripte.godbot(this);
+    boolean gbAn=gb.length()>1000;
+    if(gbAn){
+     teile.add(OdinSkripte.godbotBytes(this));
+     if(!godbotGemeldet){ godbotGemeldet=true; versionPruefen(OdinSkripte.GODBOT_ID,"GodBot",gb); }
+    }else setStatus("GodBot fehlt in dieser App-Fassung");
+    // Zusatzskripte (Tampermonkey) aus der Teamliste.
     org.json.JSONArray liste=serverSkripte();
-    if(liste==null)liste=OdinSkripte.liste(this,GODBOT_URL);
-    boolean gbAn=false;
-    java.util.List<String> extra=new java.util.ArrayList<>();
+    if(liste==null)liste=OdinSkripte.liste(this);
+    int extra=0, uebergangen=0;
     for(int qi=0;qi<liste.length();qi++){
      org.json.JSONObject o=liste.optJSONObject(qi);
      if(o==null||!o.optBoolean("an",true))continue;
-     if(OdinSkripte.GODBOT_ID.equals(o.optString("id",""))){ gbAn=true; continue; }
      String sid=o.optString("id",""), snam=o.optString("name","");
-     if("code".equals(o.optString("quelle","url"))){
-      String q=o.optString("code","");
-      if(!q.trim().isEmpty()){ extra.add(q); versionPruefen(sid,snam,q); }
-     }else{
-      try{
-       // URL-Eintraege werden bei jedem Seitenaufbau frisch geholt - damit
-       // ist die Aktualisierung fuer sie schon erledigt.
-       String q=new OdinNative().httpGet(o.optString("url",""));
-       if(q!=null&&!q.trim().isEmpty()){ extra.add(q); versionPruefen(sid,snam,q); }
-      }catch(Exception ig){ setStatus("Skript nicht ladbar: "+o.optString("name","")); }
+     if(OdinSkripte.istGodBotEintrag(sid,o.optString("url","")))continue;
+     String q="code".equals(o.optString("quelle","url"))?o.optString("code",""):OdinSkripte.holeGecacht(o.optString("url",""));
+     if(q==null||q.trim().isEmpty()){ setStatus("Skript nicht ladbar: "+snam); continue; }
+     // @match/@include/@exclude wie bei Tampermonkey
+     if(!OdinSkripte.passt(q,seite)){ uebergangen++; continue; }
+     boolean ok=true;
+     for(String req:OdinSkripte.meta(q,"require")){
+      String rq=OdinSkripte.holeGecacht(req);
+      if(rq==null||rq.isEmpty()){ setStatus(snam+": @require nicht ladbar"); ok=false; break; }
+      teile.add(rq.getBytes("UTF-8"));
      }
+     if(!ok)continue;
+     teile.add(OdinSkripte.einpacken(q,snam).getBytes("UTF-8"));
+     extra++; versionPruefen(sid,snam,q);
     }
-    godbotExtra=extra;
-    if(!gbAn&&extra.isEmpty()){ setStatus("kein Skript eingeschaltet"); v.setTag(0x0D1A0002,null); return; }
-    String src="";
-    java.util.List<String> deps=new java.util.ArrayList<>();
-    if(gbAn){
-    src=godbotSrc==null?"":godbotSrc;
-    // GodBot wird zwischengespeichert, sonst kaemen 2,9 MB bei jedem
-    // Seitenwechsel. Dann bekaeme man eine neue Fassung aber erst nach einem
-    // Neustart der Ansicht - deshalb laeuft der Zwischenspeicher ab.
-    if(System.currentTimeMillis()-godbotGeholt>SKRIPT_MAX_ALTER_MS)src="";
-    if(src.length()<1000){
-     setStatus("lade Quelle...");
-     src=new OdinNative().httpGet(GODBOT_URL);
-     if(src==null||src.length()<1000){setStatus("Quelle zu kurz ("+(src==null?0:src.length())+")");return;}
-    }
-    deps=godbotDeps;
-    if(godbotSrc==null||deps.isEmpty()){
-     deps=new java.util.ArrayList<>();
-     java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\\\s*//\\\\s*@require\\\\s+(\\\\S+)").matcher(src);
-     while(m.find()){try{deps.add(new OdinNative().httpGet(m.group(1)));}catch(Exception ig){deps.add("");}}
-    }
-    if(godbotSrc==null||!src.equals(godbotSrc))godbotGeholt=System.currentTimeMillis();
-    godbotSrc=src; godbotDeps=deps;
-    versionPruefen(OdinSkripte.GODBOT_ID,"GodBot",src);
-    setStatus("Quelle bereit ("+src.length()+" Z., "+deps.size()+" Abh.)");
-    }else{ setStatus("GodBot ist ausgeschaltet"); }
-    if(!extra.isEmpty())setStatus("eigene Skripte: "+extra.size());
-    final String js=''' + json.dumps(js) + '''.replace("__DEPCOUNT__",String.valueOf(deps.size()))
-      .replace("__EXTRACOUNT__",String.valueOf(extra.size()))
+    if(teile.isEmpty()){ setStatus("kein Skript aktiv"); v.setTag(0x0D1A0002,null); return; }
+    godbotTeile=teile;
+    if(extra>0||uebergangen>0)setStatus("Zusatzskripte: "+extra+" aktiv, "+uebergangen+" nicht fuer diese Seite");
+    final String js=''' + json.dumps(js) + '''.replace("__TEILE__",String.valueOf(teile.size()))
       .replace("__GODBOT_AN__",gbAn?"1":"0");
     runOnUiThread(()->v.evaluateJavascript(js,r->android.util.Log.i("ODIN_GODBOT","bootstrap="+r)));
    }catch(Exception e){
-    setStatus("Abruf fehlgeschlagen: "+e.getMessage());
+    setStatus("Skripte laden fehlgeschlagen: "+e.getMessage());
     v.setTag(0x0D1A0002,null);
    }
   }).start();
  }
- // Liefert die Skripte unter der Origin der Spielseite aus: umgeht CSP
+ // Liefert die Teile unter der Origin der Spielseite aus: umgeht CSP
  // (connect-src) und das Groessenlimit von evaluateJavascript.
  private WebResourceResponse odinIntercept(WebResourceRequest r){
   try{
-   String path=r.getUrl().getPath(); if(path==null)return null;
-   String body=null;
-   if(path.equals("/__odin_godbot.js"))body=godbotSrc;
-   else if(path.startsWith("/__odin_x_")){
-    int i=Integer.parseInt(path.substring(10,path.length()-3));
-    java.util.List<String> x=godbotExtra; if(i>=0&&i<x.size())body=x.get(i);
-   }
-   else if(path.startsWith("/__odin_req_")){
-    int i=Integer.parseInt(path.substring(12,path.length()-3));
-    java.util.List<String> d=godbotDeps; if(i>=0&&i<d.size())body=d.get(i);
-   }
-   if(body==null)return null;
+   String path=r.getUrl().getPath(); if(path==null||!path.startsWith("/__odin_t_"))return null;
+   int i=Integer.parseInt(path.substring(10,path.length()-3));
+   java.util.List<byte[]> t=godbotTeile; if(i<0||i>=t.size())return null;
    java.util.Map<String,String> h=new java.util.HashMap<>();
    h.put("Access-Control-Allow-Origin","*"); h.put("Cache-Control","no-store");
    WebResourceResponse res=new WebResourceResponse("application/javascript","utf-8",
-     new java.io.ByteArrayInputStream(body.getBytes("UTF-8")));
+     new java.io.ByteArrayInputStream(t.get(i)));
    res.setStatusCodeAndReasonPhrase(200,"OK"); res.setResponseHeaders(h);
    return res;
   }catch(Exception e){android.util.Log.e("ODIN_GODBOT","intercept",e);return null;}
  }
 '''
 
-s = s.replace(' private WebView webView;\n private TextView statusView;',
-              ' private static final String GODBOT_URL="%s";\n private WebView webView;\n private TextView statusView;' % GIST, 1)
 a = s.index(' private void loadEnabledScripts(WebView v){')
 b = s.index('\n @Override public void onWindowFocusChanged', a)
 s = s[:a] + new + s[b:]

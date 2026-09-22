@@ -270,7 +270,9 @@ public class MainActivity extends Activity {
   super.onDestroy();
  }
  @Override protected void onResume(){
-  super.onResume(); Fullscreen.apply(this); sitzungInsDashboard();
+  // Kein sitzungInsDashboard() mehr: das Dashboard liest das Tokenpaar bei
+  // jedem Zugriff selbst aus der App (lib/supabase.ts, Speicheradapter).
+  super.onResume(); Fullscreen.apply(this);
   // Wer das Dashboard oeffnet, hat die Botschutz-Meldung gesehen - Vibration
   // und Wecker hoeren dann auf. Die Meldung selbst bleibt stehen.
   OdinService.botschutzGesehen();
@@ -325,6 +327,10 @@ public class MainActivity extends Activity {
   // also durch genau dieselbe Auswertung wie eine echte Meldung aus der
   // Spielansicht - sonst wuerde der Test den Weg pruefen, den es gar nicht
   // gibt. Der Wortlaut ist GodBots eigener.
+  // Fassung des eingebauten GodBot, fuer die Skriptseite im Dashboard.
+  @JavascriptInterface public String godbotVersion(){
+   try{ return OdinSkripte.versionAus(OdinSkripte.godbot(MainActivity.this)); }catch(Exception e){ return ""; }
+  }
   @JavascriptInterface public void testBotschutz(){
    try{ startForegroundService(new Intent(MainActivity.this,OdinService.class)); }catch(Exception ignored){}
    // Der Dienst braucht einen Moment, bis onCreate durch ist und lauf steht.
@@ -1544,29 +1550,151 @@ import android.content.Context; import android.content.SharedPreferences;
 import org.json.JSONArray; import org.json.JSONObject;
 // Skriptverwaltung wie bei Tampermonkey: eine Liste, jeder Eintrag einzeln
 // an- oder abschaltbar. Zwei Arten von Eintraegen:
-//   quelle="url"  - wird bei Bedarf geladen (so kommt GodBot aus dem Gist)
-//   quelle="code" - der eingefuegte Text selbst, liegt hier auf dem Geraet
-// Der erste Eintrag wird beim ersten Start angelegt, damit ein frisches
-// Geraet sich genauso verhaelt wie bisher.
+//   quelle="url"  - wird geholt und eine Stunde zwischengespeichert
+//   quelle="code" - der eingefuegte Text selbst
+// GodBot steht NICHT in dieser Liste: er ist fester Bestandteil der App und
+// liegt als Asset in der APK (godbot/GodBot.user.js im Repo). Kein Gist,
+// kein Nachladen, keine Ablaufzeit - eine neue GodBot-Fassung kommt mit
+// der naechsten App-Version.
 public final class OdinSkripte {
  private OdinSkripte(){}
  private static final String PREFS="odin_skripte", KEY="liste";
  public static final String GODBOT_ID="godbot";
  private static SharedPreferences p(Context c){ return c.getSharedPreferences(PREFS,Context.MODE_PRIVATE); }
- public static JSONArray liste(Context c,String godbotUrl){
+ // Oertlicher Notvorrat der Teamliste. Alte Fassungen hatten GodBot als
+ // ersten Eintrag mit Gist-Adresse - der wird hier ausgefiltert.
+ public static JSONArray liste(Context c){
+  JSONArray out=new JSONArray();
   try{
    String roh=p(c).getString(KEY,"");
-   if(roh!=null&&!roh.isEmpty())return new JSONArray(roh);
+   if(roh!=null&&!roh.isEmpty()){
+    JSONArray a=new JSONArray(roh);
+    for(int i=0;i<a.length();i++){
+     JSONObject o=a.optJSONObject(i); if(o==null)continue;
+     if(istGodBotEintrag(o.optString("id",""),o.optString("url","")))continue;
+     out.put(o);
+    }
+   }
   }catch(Exception ignored){}
-  JSONArray a=new JSONArray();
+  return out;
+ }
+ // Frueher eingetragener GodBot (Gist) - wird uebergangen, damit er nicht
+ // doppelt laeuft.
+ public static boolean istGodBotEintrag(String id,String url){
+  return GODBOT_ID.equals(id)||(url!=null&&url.contains("GodBot.user.js"));
+ }
+ // --- eingebauter GodBot -------------------------------------------------
+ // Einmal je Prozess aus der APK gelesen und als Bytes gehalten: die
+ // Spielansicht liefert ihn bei jedem Seitenaufbau aus, 2,9 MB jedes Mal neu
+ // zu kodieren waere Verschwendung.
+ private static volatile String godbotText=null;
+ private static volatile byte[] godbotBytes=null;
+ public static String godbot(Context c){
+  if(godbotText==null){
+   synchronized(OdinSkripte.class){
+    if(godbotText==null){
+     try{
+      java.io.InputStream in=c.getApplicationContext().getAssets().open("godbot.user.js");
+      byte[] b=alles(in);
+      godbotBytes=b;
+      godbotText=new String(b,"UTF-8");
+     }catch(Exception e){ android.util.Log.e("ODIN","godbot asset",e); godbotText=""; godbotBytes=new byte[0]; }
+    }
+   }
+  }
+  return godbotText;
+ }
+ public static byte[] godbotBytes(Context c){ godbot(c); return godbotBytes; }
+ static byte[] alles(java.io.InputStream in) throws java.io.IOException{
+  java.io.ByteArrayOutputStream o=new java.io.ByteArrayOutputStream(1<<20);
+  byte[] buf=new byte[65536]; int n;
+  while((n=in.read(buf))>0)o.write(buf,0,n);
+  in.close();
+  return o.toByteArray();
+ }
+ // --- Tampermonkey-Kopf --------------------------------------------------
+ // Alle Werte eines Schluessels (@match, @include, @exclude, @require ...).
+ public static java.util.List<String> meta(String code,String schluessel){
+  java.util.List<String> out=new java.util.ArrayList<>();
+  if(code==null)return out;
+  int a=code.indexOf("==UserScript=="), b=code.indexOf("==/UserScript==");
+  if(a<0||b<a)return out;
+  String kopf=code.substring(a,b);
+  java.util.regex.Matcher m=java.util.regex.Pattern
+    .compile("(?m)^\\s*//\\s*@"+java.util.regex.Pattern.quote(schluessel)+"\\s+(.+?)\\s*$").matcher(kopf);
+  while(m.find())out.add(m.group(1).trim());
+  return out;
+ }
+ // Wie Tampermonkey: @exclude schlaegt alles, ohne @match/@include laeuft
+ // das Skript ueberall (so verhielt sich Odin bisher fuer ALLE Skripte -
+ // dadurch lief z. B. ein Karten-Skript auf jeder Seite und warf dort
+ // "MapSdk is not defined").
+ public static boolean passt(String code,String adresse){
+  java.util.List<String> ein=meta(code,"match"); ein.addAll(meta(code,"include"));
+  java.util.List<String> aus=meta(code,"exclude"); aus.addAll(meta(code,"exclude-match"));
+  for(String e:aus)if(treffer(e,adresse))return false;
+  if(ein.isEmpty())return true;
+  for(String i:ein)if(treffer(i,adresse))return true;
+  return false;
+ }
+ static boolean treffer(String muster,String adresse){
   try{
-   JSONObject g=new JSONObject();
-   g.put("id",GODBOT_ID); g.put("name","GodBot"); g.put("an",true);
-   g.put("quelle","url"); g.put("url",godbotUrl);
-   a.put(g);
-  }catch(Exception ignored){}
-  speichern(c,a);
-  return a;
+   String m=muster.trim();
+   if(m.isEmpty())return false;
+   if(m.equals("*")||m.equals("<all_urls>"))return true;
+   // /regulaerer Ausdruck/ wie bei @include
+   if(m.length()>2&&m.startsWith("/")&&m.endsWith("/"))
+    return java.util.regex.Pattern.compile(m.substring(1,m.length()-1),java.util.regex.Pattern.CASE_INSENSITIVE)
+      .matcher(adresse).find();
+   if(glob(m,adresse))return true;
+   // "*.die-staemme.de" soll auch "die-staemme.de" selbst treffen
+   if(m.contains("://*."))return glob(m.replace("://*.","://"),adresse);
+   return false;
+  }catch(Exception e){ return false; }
+ }
+ static boolean glob(String m,String adresse){
+  StringBuilder r=new StringBuilder("^");
+  for(int i=0;i<m.length();i++){
+   char ch=m.charAt(i);
+   if(ch=='*')r.append(".*");
+   else r.append(java.util.regex.Pattern.quote(String.valueOf(ch)));
+  }
+  r.append("$");
+  return java.util.regex.Pattern.compile(r.toString(),java.util.regex.Pattern.CASE_INSENSITIVE).matcher(adresse).matches();
+ }
+ // Wie Tampermonkey jedes Skript in eine eigene Funktion. Ohne das teilen
+ // sich alle Skripte den globalen Gueltigkeitsbereich: zwei Skripte mit
+ // "let win" auf oberster Ebene werfen dann "already been declared".
+ public static String einpacken(String code,String name){
+  String n=(name==null?"skript":name).replaceAll("[^A-Za-z0-9_-]+","_");
+  return "(function(){\n"+code+"\n})();\n//# sourceURL=odin-skript/"+n+".js\n";
+ }
+ // --- URL-Quellen und @require -------------------------------------------
+ // Eine Stunde zwischengespeichert. Frueher wurde jede URL bei jedem
+ // Seitenaufbau neu geholt.
+ private static final long URL_MAX_ALTER_MS=60L*60L*1000L;
+ private static final java.util.Map<String,String> URL_TEXT=new java.util.HashMap<>();
+ private static final java.util.Map<String,Long> URL_ZEIT=new java.util.HashMap<>();
+ public static String holeGecacht(String adresse){
+  if(adresse==null||!adresse.startsWith("https://"))return null;
+  long jetzt=System.currentTimeMillis();
+  synchronized(URL_TEXT){
+   Long z=URL_ZEIT.get(adresse);
+   if(z!=null&&jetzt-z<URL_MAX_ALTER_MS)return URL_TEXT.get(adresse);
+  }
+  String t=null;
+  try{
+   java.net.HttpURLConnection c=(java.net.HttpURLConnection)new java.net.URL(adresse).openConnection();
+   c.setInstanceFollowRedirects(true); c.setConnectTimeout(15000); c.setReadTimeout(30000);
+   c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");
+   int st=c.getResponseCode();
+   if(st>=200&&st<300)t=new String(alles(c.getInputStream()),"UTF-8");
+  }catch(Exception e){ android.util.Log.w("ODIN","holeGecacht "+adresse,e); }
+  synchronized(URL_TEXT){
+   if(t!=null&&!t.isEmpty()){ URL_TEXT.put(adresse,t); URL_ZEIT.put(adresse,jetzt); return t; }
+   // Fehlschlag: alten Stand weiterverwenden, falls vorhanden
+   return URL_TEXT.get(adresse);
+  }
  }
  public static void speichern(Context c,JSONArray a){
   try{ p(c).edit().putString(KEY,a.toString()).apply(); }catch(Exception ignored){}
@@ -1799,16 +1927,15 @@ import android.annotation.SuppressLint; import android.app.Activity; import andr
 public class GameWebViewActivity extends Activity {
  private WebView webView;
  private TextView statusView;
- // Zwischenspeicher fuer die vom Bootstrap angeforderten Skripte.
- private volatile String godbotSrc;
- private volatile java.util.List<String> godbotDeps=new java.util.ArrayList<>();
- // Quelltexte der zusaetzlich eingeschalteten Skripte, in Reihenfolge.
- private volatile java.util.List<String> godbotExtra=new java.util.ArrayList<>();
- // Wann wurde GodBots Quelle zuletzt geholt? Danach laeuft der
- // Zwischenspeicher ab, damit eine neue Fassung nicht bis zum naechsten
- // Neustart der Ansicht warten muss.
- private volatile long godbotGeholt=0L;
- private static final long SKRIPT_MAX_ALTER_MS=6L*60L*60L*1000L;
+ // Teile fuer den Bootstrap in Ladereihenfolge: GodBot (aus der APK), dann
+ // je eingeschaltetem Zusatzskript dessen @require und das Skript selbst.
+ // Ausgeliefert unter /__odin_t_<i>.js.
+ private volatile java.util.List<byte[]> godbotTeile=new java.util.ArrayList<>();
+ private boolean godbotGemeldet=false;
+ // Teamliste der Zusatzskripte: fuenf Minuten gueltig. Vorher kostete jeder
+ // Seitenaufbau eine Supabase-Anfrage.
+ private static org.json.JSONArray skriptListe=null;
+ private static long skriptListeZeit=0L;
  private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  private LinearLayout rootLayout;
  // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
@@ -2217,20 +2344,21 @@ public class GameWebViewActivity extends Activity {
  // damit ein Start ohne Netz nicht ganz ohne Skripte endet.
  private org.json.JSONArray serverSkripte(){
   try{
+   if(skriptListe!=null&&System.currentTimeMillis()-skriptListeZeit<5L*60L*1000L)return skriptListe;
    if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return null;
    String r=supaRequest("GET","scripts?select=id,name,type,source_url,code,enabled"
      +"&team_id=eq."+supaTeam+"&order=created_at.asc",null);
    org.json.JSONArray sv=new org.json.JSONArray(r);
-   if(sv.length()==0)return null;
    org.json.JSONArray out=new org.json.JSONArray();
    for(int i=0;i<sv.length();i++){
     org.json.JSONObject o=sv.optJSONObject(i); if(o==null)continue;
     String code=o.isNull("code")?"":o.optString("code","");
     String url=o.optString("source_url","");
+    // Der alte Gist-Eintrag fuer GodBot bleibt aussen vor: GodBot ist
+    // eingebaut und darf nicht ein zweites Mal laufen.
+    if(OdinSkripte.istGodBotEintrag("",url))continue;
     org.json.JSONObject z=new org.json.JSONObject();
-    // GodBot am Gist erkennen, nicht am Namen: nur dieser Eintrag wird
-    // zwischengespeichert, sonst kaemen 2,9 MB bei jedem Seitenwechsel.
-    z.put("id",url.contains("GodBot.user.js")?OdinSkripte.GODBOT_ID:o.optString("id",""));
+    z.put("id",o.optString("id",""));
     z.put("name",o.optString("name","(ohne Namen)"));
     z.put("an",o.optBoolean("enabled",false));
     if(!code.trim().isEmpty()){ z.put("quelle","code"); z.put("code",code); }
@@ -2238,6 +2366,7 @@ public class GameWebViewActivity extends Activity {
     out.put(z);
    }
    OdinSkripte.speichern(this,out);
+   skriptListe=out; skriptListeZeit=System.currentTimeMillis();
    return out;
   }catch(Exception e){ setStatus("Skriptliste vom Server nicht erreichbar"); return null; }
  }

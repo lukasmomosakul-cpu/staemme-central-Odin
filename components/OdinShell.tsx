@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useRef, type ReactNode } from 'react';
-import { supabase } from '../lib/supabase';
+import { type ReactNode } from 'react';
 import VersionUpdater from './VersionUpdater';
 
 // Gemeinsames Geruest fuer alle Seiten. Vorher hatte jede Seite ihr eigenes
@@ -33,70 +32,10 @@ export default function OdinShell({
   rechts?: ReactNode;
   children: ReactNode;
 }) {
-  // supabase-js frischt die Sitzung selbst auf und dreht dabei das
-  // Erneuerungstoken weiter. Ohne diese Zeile blieb die App auf dem alten
-  // sitzen, jede eigene Erneuerung scheiterte und es kam die Meldung, der
-  // Zugang sei abgelaufen - obwohl im Vordergrund alles lief.
-  // Letztes an supabase-js uebergebenes Paar - gegen unnoetige setSession-Aufrufe.
-  const zuletzt = useRef('');
-
-  useEffect(() => {
-    if (!supabase) return;
-    // Festhalten: in der unten gespeicherten Funktion zieht die Null-Pruefung
-    // oben nicht mehr, TypeScript wuerde supabase dort als moeglicherweise
-    // null ansehen.
-    const sb = supabase;
-    const weiterreichen = (zugang?: string, erneuerung?: string) => {
-      const br = (window as unknown as {
-        Android?: { updateSupabaseTokens?: (a: string, r: string) => void };
-      }).Android;
-      if (br?.updateSupabaseTokens && zugang) br.updateSupabaseTokens(zugang, erneuerung ?? '');
-    };
-    // In der App ist der Dienst der einzige Erneuerer. Beim Laden und danach
-    // regelmaessig das aktuelle Paar holen - sonst liefe die Oberflaeche nach
-    // einer Stunde mit abgelaufenem Token und meldete ab.
-    const ausApp = () => {
-      const br = (window as unknown as { Android?: { aktuelleSitzung?: () => string } }).Android;
-      if (!br?.aktuelleSitzung) return;
-      try {
-        const roh = br.aktuelleSitzung();
-        if (!roh) return;
-        const p = JSON.parse(roh) as { access_token?: string; refresh_token?: string };
-        if (!p.access_token || !p.refresh_token) return;
-        // Nur setzen, wenn es wirklich ein anderes Paar ist. setSession()
-        // erneuert naemlich selbst, sobald der uebergebene Zugangstoken
-        // abgelaufen ist - alle fuenf Minuten aufgerufen waere das ein
-        // zweiter Erneuerer durch die Hintertuer, genau das, was hier
-        // abgestellt werden soll.
-        if (p.access_token === zuletzt.current) return;
-        zuletzt.current = p.access_token;
-        sb.auth.setSession({ access_token: p.access_token, refresh_token: p.refresh_token })
-          .catch(() => {});
-      } catch {
-        /* Bruecke nicht da oder Antwort unbrauchbar - dann bleibt es beim Bisherigen. */
-      }
-    };
-    ausApp();
-    const takt = window.setInterval(ausApp, 5 * 60 * 1000);
-
-    sb.auth.getSession().then(({ data }) =>
-      weiterreichen(data.session?.access_token, data.session?.refresh_token));
-    const { data: abo } = sb.auth.onAuthStateChange((_e, sitzung) =>
-      weiterreichen(sitzung?.access_token, sitzung?.refresh_token));
-
-    // Gegenrichtung: die App ruft das beim Zurueckkommen auf und uebergibt
-    // ihr aktuelles Paar. Ohne das sitzt supabase-js noch auf dem Token von
-    // vorhin, scheitert beim naechsten Auffrischen und meldet ab.
-    (window as unknown as {
-      odinSetSession?: (a: string, r: string) => void;
-    }).odinSetSession = (zugang: string, erneuerung: string) => {
-      if (!zugang || !erneuerung) return;
-      sb.auth.setSession({ access_token: zugang, refresh_token: erneuerung })
-        .catch(() => {});
-    };
-
-    return () => { window.clearInterval(takt); abo.subscription.unsubscribe(); };
-  }, []);
+  // Die Sitzung wird nicht mehr hier abgeglichen: lib/supabase.ts liest das
+  // Tokenpaar in der App bei jedem Zugriff direkt aus der Bruecke. Die
+  // fruehere Hin-und-Her-Uebergabe (5-Minuten-Takt, setSession) konnte selbst
+  // erneuern und war Teil des Problems.
 
   return (
     <div className="shell">
