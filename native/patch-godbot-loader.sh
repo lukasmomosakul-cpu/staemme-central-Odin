@@ -155,6 +155,9 @@ js = r"""
  // Der Fehler wurde verschluckt - daher "Abgleich: 0 uebernommen" und die
  // 341 identischen Meldungen fuer denselben Schluessel.
  var ROH_SETZEN=Storage.prototype.setItem;
+ // FNV-1a ueber den Text, dazu die Laenge - genuegt, um "unveraendert" zu
+ // erkennen.
+ function odinHash(t){ t=String(t); var h=2166136261; for(var i=0;i<t.length;i++){ h^=t.charCodeAt(i); h=Math.imul(h,16777619); } return (h>>>0).toString(36)+':'+t.length; }
  function rohSetzen(k,v){ ROH_SETZEN.call(localStorage,k,String(v)); }
  var schonGemeldet={};
  var VOLATIL_SCHWELLE=5, VOLATIL_FENSTER=180000;   // 5 Schreibzugriffe in 3 min
@@ -193,6 +196,11 @@ js = r"""
  // Volatilitaetsregel greift erst nach fuenf Schreibzugriffen - bis dahin
  // waeren sie laengst hochgeladen.
  var NIE=/^(tw_console_log|tw_debug_log|tw_request_log)$/;
+ // Geraetegebundene Laufzeitwerte: die Uhrabweichung gilt nur fuer DIESES
+ // Geraet, die Zwischenspeicher sind nach Minuten veraltet. Sie wurden bei
+ // jedem Seitenaufbau hochgeladen ("gesichert: tw_server_offset_samples,
+ // tw_server_offset_ms, ..."), rund 25 Mal in 6 Minuten.
+ var NIE_GERAET=/^(tw_server_offset_samples|tw_server_offset_ms|tw_commands_cache|tw_moving_troops_cache|tw_dbinfo_cache)$/;
  // Botschutz-Zustand darf NIE uebernommen werden. Diese Schluessel aendern
  // sich selten, entgehen also der Volatilitaetserkennung - ein alter
  // Serverstand von tw_bot_gesperrt_seit wuerde GodBot beim naechsten Oeffnen
@@ -200,7 +208,7 @@ js = r"""
  // geloest ist. Hochladen bleibt erlaubt, damit man den Verlauf sieht.
  var NIE_RUNTER=/^(tw_bot_|tw_botschutz_|tw_captcha)/;
  function sollHoch(k){
-  if(!SYNC_PREFIX.test(k)||NIE.test(k))return false;
+  if(!SYNC_PREFIX.test(k)||NIE.test(k)||NIE_GERAET.test(k))return false;
   if(NUR_HOCH.indexOf(k)>=0)return true;
   return !istVolatil(k);
  }
@@ -260,11 +268,22 @@ js = r"""
   function flush(){
    timer=null;
    var batch=pending; pending={};
+   // Unveraenderte Werte nicht erneut schicken. GodBot schreibt viele
+   // Schluessel bei jedem Seitenaufbau neu, oft mit demselben Inhalt.
+   var hashes={};
+   for(var bk in batch){ try{
+    var hz=odinHash(batch[bk]);
+    if(localStorage.getItem('odin_lh_'+bk)===hz){ delete batch[bk]; continue; }
+    hashes[bk]=hz;
+   }catch(eh){} }
    if(!Object.keys(batch).length)return;
    try{ if(OdinNative.syncReady()){
      // Namen statt blosser Anzahl melden - sonst sieht man im Protokoll nicht,
      // WAS gesichert wurde, und kann Rauschen nicht von Nutzlast trennen.
-     OdinNative.settingsSave(JSON.stringify(batch));
+     // Erst nach erfolgreichem Schreiben merken - sonst ginge ein Wert, der
+     // bei einem Fehler verworfen wurde, nie mehr hoch.
+     if(OdinNative.settingsSave(JSON.stringify(batch))===true)
+      for(var hk in hashes){ try{ rohSetzen('odin_lh_'+hk,hashes[hk]); }catch(eh2){} }
      OdinNative.status('gesichert: '+Object.keys(batch).join(', ').slice(0,120));
    } }catch(e){}
   }
@@ -332,6 +351,11 @@ b = s.index('\n @Override public void onWindowFocusChanged', a)
 
 new = ''' private void loadEnabledScripts(WebView v){
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
+  // Ohne #Anker vergleichen: die Karte schreibt beim Verschieben die
+  // Koordinaten in den Anker. Das ist KEIN neuer Seitenaufbau, loeste aber
+  // jedes Mal "Seite bereit" und sechs Injektionsversuche aus (23.09. 01:13:
+  // rund 50 Mal in 30 Sekunden).
+  int anker=u.indexOf('#'); if(anker>=0)u=u.substring(0,anker);
   if(u.equals(v.getTag(0x0D1A0001)))return; v.setTag(0x0D1A0001,u); v.setTag(0x0D1A0002,null);
   setStatus("Seite bereit");
   // Dichter Takt am Anfang: die Bereitschaftspruefung sorgt dafuer, dass zu
@@ -345,6 +369,7 @@ new = ''' private void loadEnabledScripts(WebView v){
   // Seite unveraendert bleibt. Marker aus dem echten Seitenquelltext.
   v.evaluateJavascript("(function(){try{return !!document.getElementById('botprotection_quest')}catch(e){return false}})()",bp->{
    if("true".equals(bp)){
+    OdinService.sperre(gameAccountId,true);
     setStatus("Zugangssperre aktiv - pausiert");
     v.postDelayed(()->{if(!isFinishing()&&webView==v)executeGodBotWhenReady(v);},15000L);
     return;
@@ -354,6 +379,7 @@ new = ''' private void loadEnabledScripts(WebView v){
  }
  private void injectGodBot(WebView v){
   if(v.getTag(0x0D1A0002)!=null)return; v.setTag(0x0D1A0002,Boolean.TRUE);
+  OdinService.sperre(gameAccountId,false);
   final String seite=v.getUrl()==null?"":v.getUrl();
   new Thread(()->{
    try{

@@ -466,6 +466,14 @@ public class OdinService extends Service {
  static final java.util.concurrent.ConcurrentHashMap<String,Long> LEBT=new java.util.concurrent.ConcurrentHashMap<>();
  static void lebt(String konto){ LEBT.put(konto==null?"":konto,System.currentTimeMillis()); }
  static long zuletztLebend(String konto){ Long l=LEBT.get(konto==null?"":konto); return l==null?0L:l; }
+ // Zugangssperre (Captcha) je Konto: gesetzt, wenn die Spielansicht die
+ // Sperrseite erkennt, geloescht, sobald GodBot wieder injiziert wird. Solange
+ // sie steht, schweigt GodBot ABSICHTLICH - dann weder nachwecken noch die
+ // Seite neu laden. Beides waere genau das Verhalten, das der Botschutz
+ // bestraft.
+ static final java.util.concurrent.ConcurrentHashMap<String,Long> SPERRE=new java.util.concurrent.ConcurrentHashMap<>();
+ static void sperre(String konto,boolean an){ String k=konto==null?"":konto; if(an)SPERRE.putIfAbsent(k,System.currentTimeMillis()); else SPERRE.remove(k); }
+ static boolean gesperrt(String konto){ return SPERRE.containsKey(konto==null?"":konto); }
  static void appTermin(Context c,String konto,String bez,String skey,String art,long ms){
   String kt=konto==null?"":konto;
   String k=kt+"|"+skey;
@@ -526,6 +534,7 @@ public class OdinService extends Service {
    long ueber=jetzt-ms;
    if(ueber<180_000L||ueber>3_600_000L)continue;
    if(zuletztLebend(konto)>ms)continue;
+   if(gesperrt(konto))continue;
    Long z=nachgeweckt.get(e.getKey());
    if(z!=null&&jetzt-z<300_000L)continue;
    nachgeweckt.put(e.getKey(),jetzt);
@@ -2226,7 +2235,7 @@ public class GameWebViewActivity extends Activity {
  @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
  @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
- @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
+ @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
  @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);}});String welt=normWelt(nz(getIntent().getStringExtra("world")));
   String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
   // Direkt in die Welt: /page/play/<welt> fuehrt nach der Anmeldung dorthin.
@@ -2265,19 +2274,7 @@ public class GameWebViewActivity extends Activity {
    startActivity(i);
   });
   bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
-  Button probe=new Button(this); probe.setText("⏱"); probe.setTextSize(12f);
-  probe.setAllCaps(false); probe.setPadding(10,0,10,0);
-  probe.setOnClickListener(x->{
-   long at=OdinAlarm.probe(this,120);
-   if(at==0){ setStatus("Testalarm konnte nicht gesetzt werden"); return; }
-   String uhr=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY)
-     .format(new java.util.Date(at));
-   setStatus("Testalarm für "+uhr+(OdinAlarm.exactAllowed(this)?" (exakt)":" (ungenau)"));
-   android.widget.Toast.makeText(this,
-     "Testalarm "+uhr+" — jetzt sperren und liegen lassen",
-     android.widget.Toast.LENGTH_LONG).show();
-  });
-  bar.addView(probe,new LinearLayout.LayoutParams(-2,-2));
+  // Testalarm-Knopf (⏱) entfernt - der Wecker ist erprobt.
   Button dim=new Button(this); dim.setText("🌙"); dim.setTextSize(12f); dim.setAllCaps(false);
   dim.setPadding(10,0,10,0);
   dim.setOnClickListener(x->dimmenAn());
@@ -2608,13 +2605,50 @@ public class GameWebViewActivity extends Activity {
  }
  // Alle 10 Minuten still nachsehen, solange gedimmt ist.
  private long dimmNeuGeladen=0L;
+ // --- Anfragen an den Spielserver zaehlen ---------------------------------
+ // Nur beobachten, nie veraendern. Erfasst ALLES, was die Spielansicht an
+ // game.php schickt - Seitenaufrufe, Hintergrundrahmen, fetch/XHR -, egal
+ // ob von GodBot, einem Zusatzskript oder dem Spiel selbst. Alle 10 Minuten
+ // eine Zeile ins Protokoll (landet auch in app_events, bereich "app"):
+ //   Spielserver 10 Min: 42 Anfragen, 9 Seitenaufrufe - am_farm 12, ...
+ // Grundlage, um unnoetige Anfragen mit Zahlen statt Vermutungen zu finden.
+ private final java.util.HashMap<String,Integer> anfragen=new java.util.HashMap<>();
+ private long anfragenSeit=0L; private int anfragenGesamt=0, anfragenSeiten=0;
+ private void anfrageZaehlen(WebResourceRequest r){
+  try{
+   android.net.Uri u=r.getUrl(); String h=u.getHost();
+   if(h==null||!h.endsWith("die-staemme.de"))return;
+   String pfad=u.getPath(); if(pfad==null||!pfad.endsWith("/game.php"))return;
+   String sc=u.getQueryParameter("screen"), mo=u.getQueryParameter("mode");
+   String aj=u.getQueryParameter("ajaxaction"); if(aj==null)aj=u.getQueryParameter("ajax");
+   if(aj==null)aj=u.getQueryParameter("action");
+   boolean seite=r.isForMainFrame();
+   String k=(sc==null?"?":sc)+(mo!=null?"/"+mo:"")+(aj!=null?":"+aj:"")+(seite?"*":"");
+   long jetzt=System.currentTimeMillis(); String bericht=null;
+   synchronized(anfragen){
+    if(anfragenSeit==0L)anfragenSeit=jetzt;
+    Integer n=anfragen.get(k); anfragen.put(k,n==null?1:n+1);
+    anfragenGesamt++; if(seite)anfragenSeiten++;
+    if(jetzt-anfragenSeit>=600_000L){
+     java.util.List<java.util.Map.Entry<String,Integer>> l=new java.util.ArrayList<>(anfragen.entrySet());
+     java.util.Collections.sort(l,(x,y)->y.getValue()-x.getValue());
+     StringBuilder b=new StringBuilder("Spielserver ").append((jetzt-anfragenSeit)/60000).append(" Min: ")
+       .append(anfragenGesamt).append(" Anfragen, ").append(anfragenSeiten).append(" Seitenaufrufe - ");
+     for(int i=0;i<l.size()&&i<10;i++){ if(i>0)b.append(", "); b.append(l.get(i).getKey()).append(' ').append(l.get(i).getValue()); }
+     bericht=b.toString();
+     anfragen.clear(); anfragenSeit=jetzt; anfragenGesamt=0; anfragenSeiten=0;
+    }
+   }
+   if(bericht!=null)setStatus(bericht);
+  }catch(Exception ignored){}
+ }
  private final Runnable dimmPuls=new Runnable(){ @Override public void run(){
   if(dimDecke==null||webView==null)return;
   dimmKontrolle(null);
   // Vorn, gedimmt - aber GodBot schweigt? Am 23.09. von 03:00 bis 07:30 kein
   // einziges Lebenszeichen. Dann die Seite neu laden (hoechstens alle 15 Min).
   long jetzt=System.currentTimeMillis(), l=OdinService.zuletztLebend(gameAccountId);
-  if(imVordergrund&&l>0&&jetzt-l>300_000L&&jetzt-dimmNeuGeladen>900_000L){
+  if(imVordergrund&&!OdinService.gesperrt(gameAccountId)&&l>0&&jetzt-l>300_000L&&jetzt-dimmNeuGeladen>900_000L){
    dimmNeuGeladen=jetzt;
    setStatus("Dimm-Kontrolle: GodBot seit "+((jetzt-l)/60000)+" Min ohne Lebenszeichen - lade Seite neu");
    try{ webView.reload(); }catch(Exception ignored){}

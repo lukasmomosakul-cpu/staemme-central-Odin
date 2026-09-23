@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      529
+// @version      530
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -3844,6 +3844,11 @@ function isBotProtectionActive() {
     }
 
     function maybeSyncPlansWithMemo() {
+        // In der Odin-App gleicht die App Einstellungen und Plaene ueber
+        // Supabase ab. Der Notizblock-Abgleich waere dort nur zusaetzliche
+        // Anfragen an den Spielserver (Notizblock lesen und per POST
+        // schreiben) - also aus.
+        if (odin.istApp) return;
         if (isBotProtectionActive()) return;
 
         // Ohne Premium kann der Notizblock den Stand nicht tragen -
@@ -3958,6 +3963,8 @@ function isBotProtectionActive() {
     }
 
     function syncAttackPlansWithMemo(onDone) {
+        // Odin-App: Abgleich laeuft ueber die App, kein Notizblock-Verkehr.
+        if (odin.istApp) { if (onDone) onDone(0); return; }
         const geschrieben = {};
         const fertig = (n) => {
             memoSyncLaeuft = false;
