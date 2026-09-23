@@ -200,7 +200,7 @@ js = r"""
  // Geraet, die Zwischenspeicher sind nach Minuten veraltet. Sie wurden bei
  // jedem Seitenaufbau hochgeladen ("gesichert: tw_server_offset_samples,
  // tw_server_offset_ms, ..."), rund 25 Mal in 6 Minuten.
- var NIE_GERAET=/^(tw_server_offset_samples|tw_server_offset_ms|tw_commands_cache|tw_moving_troops_cache|tw_dbinfo_cache)$/;
+ var NIE_GERAET=/^(tw_server_offset_samples|tw_server_offset_ms|tw_world_speed|tw_commands_cache|tw_moving_troops_cache|tw_dbinfo_cache|tw_stats_cache|tw_am_troops_cache)$/;
  // Botschutz-Zustand darf NIE uebernommen werden. Diese Schluessel aendern
  // sich selten, entgehen also der Volatilitaetserkennung - ein alter
  // Serverstand von tw_bot_gesperrt_seit wuerde GodBot beim naechsten Oeffnen
@@ -320,14 +320,17 @@ js = r"""
    try{var V='__VERSION__';var A=document.querySelectorAll('*');for(var k=0;k<A.length;k++){var e=A[k],t=(e.textContent||'').trim();if(/USERSCRIPT OK/i.test(t)&&e.children.length===0){e.remove();continue}if(/loader aktiv/i.test(t)){e.style.width='fit-content';e.style.maxWidth='calc(100% - 24px)';e.style.display='inline-flex';e.style.padding='6px 10px';e.style.margin='8px';e.style.borderRadius='8px'}}}catch(e){}
    // window.godbotCommands wird von GodBot gesetzt - damit laesst sich
    // 'Datei geladen' von 'Skript wirklich durchgelaufen' unterscheiden.
+   var letztesUrteil='';
+   function melde(t){ if(t===letztesUrteil)return; letztesUrteil=t; OdinNative.status(t); }
    function verdict(){try{
     if(window.__odinErrMsg){OdinNative.status(window.__odinErrMsg);return;}
     // Ohne GodBot gibt es den Marker nicht - dann zaehlt nur, dass alle
     // Teile ohne Fehler durchgelaufen sind.
-    if(!gb){OdinNative.status('aktiv ('+done+' Teile, ohne GodBot)');return;}
-    if(typeof window.godbotCommands==='function'){OdinNative.status('aktiv ('+done+' Teile'+(gbMs>=0?', GodBot '+gbMs+' ms':'')+')');return;}
+    // Zweite Pruefung nach 12 s meldet nur, wenn sich etwas geaendert hat.
+    if(!gb){melde('aktiv ('+done+' Teile, ohne GodBot)');return;}
+    if(typeof window.godbotCommands==='function'){melde('aktiv ('+done+' Teile'+(gbMs>=0?', GodBot '+gbMs+' ms':'')+')');return;}
     // Kein Fehler geworfen: das Skript lief durch, nur der Marker fehlt.
-    OdinNative.status('ausgefuehrt, kein Fehler (Marker fehlt)');
+    melde('ausgefuehrt, kein Fehler (Marker fehlt)');
    }catch(e){}}
    setTimeout(verdict,3000); setTimeout(verdict,12000);
    OdinNative.status('geladen ('+done+' Teile), pruefe...');
@@ -375,6 +378,12 @@ new = ''' private void loadEnabledScripts(WebView v){
     return;
    }
    v.evaluateJavascript("(function(){try{return !!(document.body&&(window.game_data||window.TribalWars||document.querySelector('#content_value')))}catch(e){return false}})()",r->{if("true".equals(r))injectGodBot(v);});
+   // Ansichten, die ein Wecker neu aufbaut, kennen nur die Konto-ID - dann
+   // stand im Protokoll und in Weckmeldungen "50ddc1ae-..." statt des Namens.
+   if(kopfName.isEmpty()||kopfName.equals(gameAccountId))
+    v.evaluateJavascript("(function(){try{return (window.game_data&&game_data.player&&game_data.player.name)||''}catch(e){return ''}})()",n->{
+     try{ String nm=n==null?"":n.replace(String.valueOf((char)34),""); if(!nm.isEmpty()&&!"null".equals(nm))kopfName=nm; }catch(Exception ignored){}
+    });
   });
  }
  private void injectGodBot(WebView v){

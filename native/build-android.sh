@@ -526,6 +526,10 @@ public class OdinService extends Service {
  // Minuten erneut wecken, hoechstens eine Stunde lang. Laeuft GodBot, meldet
  // er von selbst einen neuen Zeitpunkt und der alte faellt weg.
  private final java.util.HashMap<String,Long> nachgeweckt=new java.util.HashMap<>();
+ // Wie oft wurde fuer genau DIESEN Zeitpunkt schon nachgeweckt? Hoechstens
+ // dreimal - hat GodBot den Termin dann nicht erneuert, hat das einen Grund
+ // (Funktion aus, Truppen weg), und weiteres Wecken stoert nur.
+ private final java.util.HashMap<String,long[]> nachweckZahl=new java.util.HashMap<>();
  private void ueberfaelligPruefen(){
   long jetzt=System.currentTimeMillis();
   for(java.util.Map.Entry<String,Object[]> e:APP_TERMINE.entrySet()){
@@ -533,12 +537,19 @@ public class OdinService extends Service {
    long ms=(Long)t[0]; String konto=(String)t[1], bez=(String)t[2], art=(String)t[3];
    long ueber=jetzt-ms;
    if(ueber<180_000L||ueber>3_600_000L)continue;
-   if(zuletztLebend(konto)>ms)continue;
+   // Das Lebenszeichen taugt hier NICHT: GodBot tickt auch gedrosselt oder
+   // schwebend weiter, erledigt den Termin dann aber nicht (23.09. 20:00 und
+   // 21:05). Massgeblich ist, ob die Ansicht gerade ungedrosselt laeuft.
+   if(GameWebViewActivity.laeuftUngedrosselt(this,konto))continue;
    if(gesperrt(konto))continue;
    Long z=nachgeweckt.get(e.getKey());
    if(z!=null&&jetzt-z<300_000L)continue;
+   long[] zahl=nachweckZahl.get(e.getKey());
+   if(zahl==null||zahl[0]!=ms){ zahl=new long[]{ms,0}; nachweckZahl.put(e.getKey(),zahl); }
+   if(zahl[1]>=3)continue;
+   zahl[1]++;
    nachgeweckt.put(e.getKey(),jetzt);
-   String text=art+" seit "+(ueber/60000)+" Min überfällig, GodBot ohne Lebenszeichen - wecke erneut";
+   String text=art+" seit "+(ueber/60000)+" Min überfällig und nicht erneuert - wecke erneut ("+zahl[1]+"/3)";
    OdinLog.schreib(this,"-","WICHTIG",text);
    protokoll(this,"WICHTIG","wecker",text);
    wecken(this,konto,bez,art,"Raubzug".equals(art));
@@ -833,6 +844,28 @@ public class OdinService extends Service {
  // dem Geraetezustand, der Empfaenger holte die App ungefragt ins Vollbild -
  // samt Vollbild-Benachrichtigung. Lief dieselbe Sache ueber beide Wege,
  // gewann der unhoefliche. Zwei Mechanismen, nie gegeneinander geprueft.
+ // Die Ansicht ueber den Sperrbildschirm holen. Nachweislich funktioniert
+ // das NUR ueber die Vollbild-Benachrichtigung ("Wecker: über Sperrbildschirm,
+ // dunkel"). Die Dimm-Rueckholung startete die Ansicht bis 1.68 direkt - am
+ // 23.09. 18:26-18:43 zehnmal "vorn=false": Android liess sie hinter dem
+ // Sperrbildschirm. Jetzt nehmen beide denselben Weg.
+ // NO_USER_ACTION: sonst meldet Android der bereits offenen Ansicht einen
+ // "Benutzer verlaesst"-Vorgang samt onUserInteraction() - das brach bis 1.68
+ // jedes Weckfenster in derselben Sekunde ab.
+ static void vollbildStarten(Context c,Intent i,String titel,String text){
+  i.addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+  PendingIntent pi=PendingIntent.getActivity(c,4242,i,
+    PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+  Notification n=new Notification.Builder(c,CH_WAKE)
+    .setContentTitle(titel).setContentText(text)
+    .setSmallIcon(android.R.drawable.ic_dialog_info)
+    .setCategory(Notification.CATEGORY_ALARM)
+    .setFullScreenIntent(pi,true)
+    .setAutoCancel(true).build();
+  c.getSystemService(NotificationManager.class)
+   .notify((int)(System.currentTimeMillis()%90000),n);
+  c.startActivity(i);
+ }
  static void wecken(Context c,String konto,String text,String art,boolean wartung){
   String kt=konto==null?"":konto;
   // Dienstschleife und Wecker koennen denselben Termin sekundenversetzt
@@ -878,20 +911,7 @@ public class OdinService extends Service {
    }
    i.putExtra("fromAlarm",true);
    i.putExtra("wartung",wartung);
-   // Vollbild-Benachrichtigung NUR bei dunklem oder gesperrtem Geraet. Sie
-   // ist es, die den Bildschirm einschaltet - waehrend der Benutzung waere
-   // sie genau das Dazwischenfunken, das hier vermieden werden soll.
-   PendingIntent pi=PendingIntent.getActivity(c,4242,i,
-     PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-   Notification n=new Notification.Builder(c,CH_WAKE)
-     .setContentTitle(wartung?"Raubzug fällig":"Termin fällig").setContentText(text)
-     .setSmallIcon(android.R.drawable.ic_dialog_info)
-     .setCategory(Notification.CATEGORY_ALARM)
-     .setFullScreenIntent(pi,true)
-     .setAutoCancel(true).build();
-   c.getSystemService(NotificationManager.class)
-    .notify((int)(System.currentTimeMillis()%90000),n);
-   c.startActivity(i);
+   vollbildStarten(c,i,wartung?"Raubzug fällig":"Termin fällig",text);
   }catch(Exception ex){
    OdinLog.schreib(c,"-","FEHLER","Wecken fehlgeschlagen: "+ex.getMessage());
   }
@@ -959,7 +979,7 @@ public class OdinService extends Service {
     i.putExtra("accountId",konto);
    }
    i.putExtra("dimm",true);
-   startActivity(i);
+   vollbildStarten(this,i,"Odin","Dimm-Modus wird fortgesetzt");
    // Nur der Startversuch - ob er ankommt, meldet die Ansicht selbst
    // ("Dimm-Kontrolle (Rückholung)").
    OdinLog.schreib(this,"-","WICHTIG","Dimm-Modus nicht vorn - Rückholung angestoßen");
@@ -1610,6 +1630,9 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
   // Zuerst die Sitzung: ohne sie ist der Wecker stumm und die Ansicht kann
   // nichts abgleichen.
   OdinService.ladeStatisch(c);
+  // Lief der Dienst schon? Nur dann ist "nachgestartet" wahr. Bisher stand
+  // die Zeile alle 15 Minuten im Protokoll, ob der Dienst tot war oder nicht.
+  final boolean warTot=OdinService.lauf==null;
   try{ c.startForegroundService(new Intent(c,OdinService.class)); }
   catch(Exception e){ android.util.Log.w("ODIN_ALARM","dienst",e); }
   long probeZiel=in.getLongExtra(OdinAlarm.EXTRA_PROBE,0L);
@@ -1626,8 +1649,10 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
    // Nur den Dienst zurueckholen und sich selbst neu setzen - kein Spiel
    // oeffnen, kein Bildschirm an.
    OdinAlarm.wachhund(c);
-   OdinLog.schreib(c,"-","info","Wachhund: Dienst nachgestartet");
-   OdinService.protokoll(c,"info","wachhund","Dienst nachgestartet");
+   if(warTot){
+    OdinLog.schreib(c,"-","WICHTIG","Wachhund: Dienst war beendet - nachgestartet");
+    OdinService.protokoll(c,"WICHTIG","wachhund","Dienst war beendet - nachgestartet");
+   }
    return;
   }
   String info=in.getStringExtra(OdinAlarm.EXTRA_INFO); if(info==null)info="";
@@ -2744,8 +2769,11 @@ public class GameWebViewActivity extends Activity {
     getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                         |android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                         |android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-    getWindow().getDecorView().post(this::dimmenAn);
-    if(!imVordergrund)bildschirmEin();
+    // Direkt, nicht nachgereicht: die Flaggen muessen stehen, bevor Android
+    // entscheidet, ob die Ansicht vor den Sperrbildschirm darf. Den
+    // Bildschirm schaltet die Vollbild-Benachrichtigung ein - ein eigener
+    // Wecklock vorher liess sie als blosse Kopfzeile erscheinen.
+    dimmenAn();
     dimmKontrolle("Rückholung");
     return;
    }
@@ -2759,8 +2787,8 @@ public class GameWebViewActivity extends Activity {
     // wurde hier trotzdem abgebrochen - so fielen am 23.09. Rohstoffe
     // (02:47) und Raubzug (03:00) aus.
     setStatus("Wecker: gedimmt, aber nicht vorn - hole zurück");
-    bildschirmEin();
-    getWindow().getDecorView().post(this::dimmenAn);
+    if(Build.VERSION.SDK_INT>=27){ setShowWhenLocked(true); setTurnScreenOn(true); }
+    dimmenAn();
     dimmKontrolle("Wecker");
     return;
    }
@@ -2800,6 +2828,7 @@ public class GameWebViewActivity extends Activity {
    // War der Account minimiert, liegt seine WebView im Overlay und NICHT in
    // dieser Activity. Ohne Rueckholen waere die Ansicht leer und der Termin
    // liefe ins Leere.
+   weckBeginn=System.currentTimeMillis();
    warGeschwebt=OdinFloat.active(gameAccountId);
    if(warGeschwebt){ restoreFromFloat(); setStatus("Wecker: aus dem Symbol zurückgeholt"); }
    if(weckFensterEnde!=null)w.getDecorView().removeCallbacks(weckFensterEnde);
@@ -2886,9 +2915,20 @@ public class GameWebViewActivity extends Activity {
   vollbildUnterdruecken=false;
  }
  // Sobald du das Geraet anfasst, wieder normale Helligkeit.
- @Override public void onUserInteraction(){
-  super.onUserInteraction();
-  if(!dunkelWegenWecker&&!weckerAktiv)return;
+ // Nur echte Beruehrungen zaehlen. onUserInteraction() feuert auch, wenn ein
+ // neuer Intent die Ansicht unterbricht - bis 1.68 brach das JEDES
+ // Weckfenster in derselben Sekunde ab (23.09. 19:22 bis 21:05, achtmal).
+ // Dazu 2 s Karenz nach dem Wecken.
+ private long weckBeginn=0L;
+ @Override public boolean dispatchTouchEvent(android.view.MotionEvent ev){
+  try{
+   if(ev.getActionMasked()==android.view.MotionEvent.ACTION_DOWN
+      &&(dunkelWegenWecker||weckerAktiv)
+      &&System.currentTimeMillis()-weckBeginn>2000L)beruehrtImWecker();
+  }catch(Exception ignored){}
+  return super.dispatchTouchEvent(ev);
+ }
+ private void beruehrtImWecker(){
   // Du hast uebernommen - dann nicht automatisch wieder wegschalten.
   weckerAktiv=false;
   if(weckFensterEnde!=null)getWindow().getDecorView().removeCallbacks(weckFensterEnde);
@@ -2989,6 +3029,14 @@ public class GameWebViewActivity extends Activity {
  @Override protected void onPause(){
   super.onPause();
   imVordergrund=false;
+  if(dimDecke!=null){
+   try{
+    android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
+    android.app.KeyguardManager km=getSystemService(android.app.KeyguardManager.class);
+    setStatus("Dimm-Modus verlässt den Vordergrund - Bildschirm="
+      +(pm!=null&&pm.isInteractive()?"an":"aus")+", gesperrt="+(km!=null&&km.isKeyguardLocked()));
+   }catch(Exception ignored){}
+  }
   // Ohne flush() bleiben die Anmeldecookies nur im Speicher und sind nach
   // einem Neuaufbau des Prozesses weg.
   try{ android.webkit.CookieManager.getInstance().flush(); }catch(Exception ignored){}
