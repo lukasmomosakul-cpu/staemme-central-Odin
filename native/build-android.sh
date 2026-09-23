@@ -869,8 +869,10 @@ public class OdinService extends Service {
    }
    i.putExtra("dimm",true);
    startActivity(i);
-   OdinLog.schreib(this,"-","WICHTIG","Dimm-Modus wiederhergestellt");
-   protokoll(this,"WICHTIG","wecker","Dimm-Modus wiederhergestellt");
+   // Nur der Startversuch - ob er ankommt, meldet die Ansicht selbst
+   // ("Dimm-Kontrolle (Rückholung)").
+   OdinLog.schreib(this,"-","WICHTIG","Dimm-Modus nicht vorn - Rückholung angestoßen");
+   protokoll(this,"WICHTIG","wecker","Dimm-Modus nicht vorn - Rückholung angestoßen");
   }catch(Exception ex){
    OdinLog.schreib(this,"-","FEHLER","Dimm-Modus holen fehlgeschlagen: "+ex.getMessage());
   }
@@ -2400,6 +2402,7 @@ public class GameWebViewActivity extends Activity {
         .putBoolean("dimm_an",true).putString("dimm_konto",nz(gameAccountId)).apply(); }
   catch(Exception ignored){}
   if(dimDecke!=null){ setStatus("Dimm-Modus aufgefrischt"); return; }
+  if(webView!=null){ webView.removeCallbacks(dimmPuls); webView.postDelayed(dimmPuls,600_000L); }
   android.widget.LinearLayout decke=new android.widget.LinearLayout(this);
   decke.setOrientation(android.widget.LinearLayout.VERTICAL);
   decke.setGravity(android.view.Gravity.CENTER);
@@ -2474,6 +2477,56 @@ public class GameWebViewActivity extends Activity {
  private void dimWach(){ dimHelligkeit(DIM_WACH); dimSicht(1f); }
  private float dimStartX, dimStartY; private long dimStartT;
  private Runnable dimZurueck=null;
+ // setTurnScreenOn/FLAG_TURN_SCREEN_ON wirken nur, wenn die Activity
+ // fortgesetzt wird. Ist der Bildschirm aus, kommt es dazu aber nicht - die
+ // Rueckholung des Dienstes lief am 23.09. 02:45-03:00 alle 2 Minuten ins
+ // Leere. Ein kurzer Wecklock schaltet den Bildschirm ein; danach halten die
+ // Dimm-Flaggen ihn an (Helligkeit 0).
+ @SuppressWarnings("deprecation")
+ private void bildschirmEin(){
+  try{
+   android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
+   if(pm==null||pm.isInteractive())return;
+   android.os.PowerManager.WakeLock wl=pm.newWakeLock(
+     android.os.PowerManager.SCREEN_DIM_WAKE_LOCK|android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,"odin:dimm");
+   wl.acquire(5000L);
+   setStatus("Dimm-Modus: Bildschirm eingeschaltet");
+  }catch(Exception e){ setStatus("Dimm-Modus: Bildschirm einschalten fehlgeschlagen: "+e.getMessage()); }
+ }
+ // Nachschau 5 s spaeter: ist die Ansicht wirklich vorn, ist der Bildschirm
+ // an und haelt Chromium die Seite fuer sichtbar? Bisher meldete der Dienst
+ // nur den Startversuch ("wiederhergestellt"), nie ob er ankam.
+ // anlass==null: stiller Puls, meldet nur Abweichungen.
+ private void dimmKontrolle(final String anlass){
+  if(webView==null)return;
+  webView.postDelayed(()->{
+   try{
+    if(dimDecke==null||webView==null)return;
+    android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
+    final boolean an=pm!=null&&pm.isInteractive();
+    final boolean vorn=imVordergrund;
+    final String wer=anlass==null?"Puls":anlass;
+    final boolean[] antwort={false};
+    webView.evaluateJavascript("document.visibilityState",r->{
+     antwort[0]=true;
+     boolean sichtbar=r!=null&&r.contains("visible");
+     if(anlass!=null||!vorn||!an||!sichtbar)
+      setStatus("Dimm-Kontrolle ("+wer+"): "+(vorn&&an&&sichtbar?"OK":"GESTOERT")
+        +" - vorn="+vorn+", Bildschirm="+(an?"an":"aus")+", Seite="+r);
+    });
+    webView.postDelayed(()->{
+     if(!antwort[0])setStatus("Dimm-Kontrolle ("+wer+"): GESTOERT - vorn="+vorn
+       +", Bildschirm="+(an?"an":"aus")+", Seite antwortet nicht");
+    },3000);
+   }catch(Exception ignored){}
+  },5000);
+ }
+ // Alle 10 Minuten still nachsehen, solange gedimmt ist.
+ private final Runnable dimmPuls=new Runnable(){ @Override public void run(){
+  if(dimDecke==null||webView==null)return;
+  dimmKontrolle(null);
+  webView.postDelayed(this,600_000L);
+ }};
  private int dimBreite(){
   int b=getResources().getDisplayMetrics().widthPixels;
   return (b>=200&&b<=4000)?b:412;
@@ -2564,12 +2617,25 @@ public class GameWebViewActivity extends Activity {
                         |android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                         |android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     getWindow().getDecorView().post(this::dimmenAn);
+    if(!imVordergrund)bildschirmEin();
+    dimmKontrolle("Rückholung");
     return;
    }
    // Laeuft der Dimm-Modus, ist die Ansicht schon vorn, hell genug und
    // ungedrosselt. Der Weckermodus wuerde sie am Ende in den Hintergrund
    // schicken und damit den Dimm-Modus zerstoeren.
-   if(dimDecke!=null){ setStatus("Wecker: Dimm-Modus läuft bereits - unverändert"); return; }
+   if(dimDecke!=null){
+    if(imVordergrund){ setStatus("Wecker: Dimm-Modus läuft vorn - unverändert"); return; }
+    // Gedimmt, aber NICHT vorn (Bildschirm aus, Sperrbildschirm davor): die
+    // Seite laeuft dann gedrosselt und erledigt den Termin nicht. Frueher
+    // wurde hier trotzdem abgebrochen - so fielen am 23.09. Rohstoffe
+    // (02:47) und Raubzug (03:00) aus.
+    setStatus("Wecker: gedimmt, aber nicht vorn - hole zurück");
+    bildschirmEin();
+    getWindow().getDecorView().post(this::dimmenAn);
+    dimmKontrolle("Wecker");
+    return;
+   }
    if(!getIntent().getBooleanExtra("fromAlarm",false))return;
    android.view.Window w=getWindow();
    // Kein Vollbild beim Wecken: sonst ist nicht zu erkennen, ob das Geraet
