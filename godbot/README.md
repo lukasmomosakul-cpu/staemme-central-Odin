@@ -18,3 +18,21 @@ gepflegt (Tampermonkey im Browser). Die App liest ihn nur nicht mehr zur Laufzei
 Tampermonkey-Skripte aus der Skriptverwaltung laufen nach GodBot, jedes in einer
 eigenen Funktion. Beachtet werden `@match`, `@include`, `@exclude`,
 `@exclude-match` und `@require` (eine Stunde zwischengespeichert).
+
+## Odin-Anbindung (seit GodBot v529 / Odin 1.67.0)
+GodBot spricht die App ausdrücklich an (`window.Odin`, bereitgestellt vom Bootstrap
+in `native/patch-godbot-loader.sh`):
+
+| Aufruf | Wirkung in der App |
+|---|---|
+| `Odin.lebt()` | Lebenszeichen, alle 5 s aus `runJobScheduler` – auch bei Botschutz |
+| `Odin.termin(schluessel, art, ms)` | Planungszeitpunkt sofort an den Dienst (ms ≤ 0 löscht) |
+| `Odin.protokoll(text)` | Zeile ins App-Protokoll |
+
+Der Dienst weckt erneut, wenn ein Termin > 3 Min überfällig ist und GodBot seitdem
+kein Lebenszeichen gab (alle 5 Min, höchstens 1 h). Im Dimm-Modus lädt die Ansicht
+die Seite neu, wenn GodBot > 5 Min schweigt.
+
+Im Browser fehlt `window.Odin`; GodBot nutzt dann einen Platzhalter, der nichts tut.
+Seit v529 gilt `@grant none`: GodBot läuft im Seitenkontext, die früheren
+Sandbox-Brücken (`unsafeWindow`, Getter für `game_data` usw.) sind entfernt.

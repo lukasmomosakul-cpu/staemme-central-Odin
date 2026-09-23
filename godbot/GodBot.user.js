@@ -1,41 +1,66 @@
 // ==UserScript==
 // @name         GodBot
-// @namespace    http://tampermonkey.net/
-// @version      528
-// @description  Stable overlay across overview + scavenge pages
+// @version      529
+// @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
-// @grant        GM_xmlhttpRequest
-// @grant        unsafeWindow
-// @connect      twforge.net
-// @updateURL    https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js
-// @downloadURL  https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/GodBot.user.js
+// @grant        none
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    // Dynamischer Live-Zugriff auf das Seitenglobal über unsafeWindow
-const globalWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-
-// Live-Getter für die Spielobjekte (verhindert das Einfrieren alter Zustände)
-Object.defineProperty(window, 'game_data', { get: () => globalWin.game_data || null, configurable: true });
-Object.defineProperty(window, 'TWMap', { get: () => globalWin.TWMap || null, configurable: true });
-Object.defineProperty(window, 'Timing', { get: () => globalWin.Timing || null, configurable: true });
-
-// Rettung der ungeschützten Bezeichner in die Sandbox
-Object.defineProperty(window, 'Accountmanager', { get: () => globalWin.Accountmanager || null, configurable: true });
-Object.defineProperty(window, 'image_base', { get: () => globalWin.image_base || null, configurable: true });
-// 01.09.2026: TribalWars fehlte hier - und ohne den Partner von
-// Accountmanager konnte der Farm-Direktversand nie zustande kommen.
-// Siehe die ausfuehrliche Begruendung in sendFarmRowDirect().
-Object.defineProperty(window, 'TribalWars', { get: () => globalWin.TribalWars || null, configurable: true });
+    // GodBot laeuft im Seitenkontext (Odin-App; im Browser mit @grant none).
+    // Die frueheren Sandbox-Bruecken (unsafeWindow + Getter fuer game_data,
+    // TWMap, Timing, Accountmanager, image_base, TribalWars) sind damit
+    // ueberfluessig - die Spielobjekte liegen direkt auf window. Die App
+    // musste sie bisher bei jedem Seitenaufbau abfangen.
+    const globalWin = window;
 
 
 
 
     if (window.top !== window.self) {
         return;
+    }
+
+    // === Odin-Anbindung ===================================================
+    // GodBot ist Teil der Odin-App und sagt ihr ausdruecklich, was er tut,
+    // statt von aussen beobachtet zu werden. window.Odin stellt die App vor
+    // GodBot bereit. Im Browser (Spiegel im Gist) fehlt es - dann tun alle
+    // Aufrufe nichts.
+    const odin = (window.Odin && window.Odin.istApp) ? window.Odin : {
+        istApp: false, version: "",
+        termin() {}, lebt() {}, protokoll() {}
+    };
+    // Planungszeitpunkte, zu denen die App das Geraet wecken muss. Bisher
+    // las der Dienst sie auf dem Umweg ueber Supabase alle 5 Minuten aus -
+    // und verwarf verpasste Termine ersatzlos (23.09., Raubzug 03:00).
+    const ODIN_TERMINE = {
+        tw_next_recheck_at: "Raubzug",
+        tw_next_farm_burst_at: "Farmen",
+        tw_next_resource_scan_at: "Rohstoffe",
+        tw_mass_support_next_at: "Massenunterstützung",
+        tw_incoming_rename_due_at: "Eingehende",
+        tw_am_check_at: "Manager",
+        tw_am_check_soon_at: "Manager",
+        tw_plan_aufraeumen_at: "Aufräumen"
+    };
+    const odinGemeldet = {};
+    function odinTermineMelden() {
+        if (!odin.istApp) return;
+        for (const k in ODIN_TERMINE) {
+            let ms = 0;
+            try {
+                const roh = localStorage.getItem(k);
+                ms = roh === null ? 0 : Number(JSON.parse(roh)) || 0;
+            } catch (e) {
+                ms = Number(localStorage.getItem(k)) || 0;
+            }
+            if (ms === odinGemeldet[k]) continue;
+            odinGemeldet[k] = ms;
+            odin.termin(k, ODIN_TERMINE[k], ms);
+        }
     }
 
     // === Konsolen-Protokoll (09.08.2026) ===
@@ -1904,8 +1929,7 @@ function isBotProtectionActive() {
 
     if (docHasBotProtection(document, location.href, true)) return true;
 
-    // Zugriff über globalWin (unsafeWindow) statt window - richtig so,
-    // die Sandbox kennt hcaptcha nicht.
+    // globalWin ist seit v529 schlicht window (Seitenkontext).
     if (typeof globalWin !== 'undefined' && globalWin.hcaptcha !== undefined) return true;
 
     const frame = getWorkFrame();
@@ -19152,6 +19176,9 @@ function isBotProtectionActive() {
     }
 
         function runJobScheduler() {
+        // Lebenszeichen und Termine an die App - VOR jeder Abbruchbedingung,
+        // damit die App auch einen blockierten GodBot als lebendig erkennt.
+        try { odin.lebt(); odinTermineMelden(); } catch (e) { }
         // ABFEDERUNG: Wenn Botschutz aktiv oder Spielobjekte fehlen, reguläre Logik stoppen
         if (!game_data || !game_data.village || isBotProtectionActive()) {
             if (isBotProtectionActive() && typeof captchaFensterOeffnen === "function") {

@@ -53,33 +53,15 @@ js = r"""
  window.addEventListener('unhandledrejection',function(ev){try{if(window.__odinErrMsg)return;
   window.__odinErrMsg='Promise-Fehler: '+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason);
   OdinNative.status(window.__odinErrMsg);}catch(e){}});
- // GodBot richtet Bruecken wie Object.defineProperty(window,'Timing',{get:...})
- // ein. Unter Tampermonkey laufen die in einer Sandbox, hier im Seitenkontext
- // hat das Spiel 'Timing' bereits nicht-konfigurierbar definiert -> TypeError,
- // und das Skript bricht in Zeile 24 ab. Deshalb fuer window tolerant machen.
- if(!window.__odinDefineFix){
-  window.__odinDefineFix=1;
-  var _odp=Object.defineProperty;
-  Object.defineProperty=function(o,prop,desc){
-   // Reine Getter-Bruecken auf window uebergehen. GodBot baut sie so:
-   //   const globalWin = typeof unsafeWindow!=='undefined' ? unsafeWindow : window;
-   //   Object.defineProperty(window,'game_data',{get:()=>globalWin.game_data||null});
-   // Unter Tampermonkey ist window die Sandbox und unsafeWindow die Seite.
-   // Hier sind beide dasselbe Objekt, der Getter ruft sich also selbst auf
-   // -> 'Maximum call stack size exceeded'. Die Spielobjekte liegen ohnehin
-   // schon auf window, die Bruecke ist im Seitenkontext ueberfluessig.
-   if(o===window && desc && typeof desc.get==='function' && !desc.set){
-    try{if(!window.__odinSkipped)window.__odinSkipped=[];window.__odinSkipped.push(prop);}catch(e0){}
-    return o;
-   }
-   try{ return _odp(o,prop,desc); }
-   catch(err){
-    if(o!==window)throw err;
-    try{OdinNative.status('Bruecke uebersprungen: '+prop);}catch(e3){}
-    return o;
-   }
-  };
- }
+ // --- Odin-Schnittstelle fuer GodBot ---------------------------------------
+ // GodBot meldet sich ausdruecklich (godbot/GodBot.user.js, "Odin-Anbindung").
+ // Die fruehere Umlenkung von Object.defineProperty fuer GodBots Sandbox-
+ // Bruecken ist entfallen: GodBot baut seit v529 keine mehr, und die Umlenkung
+ // veraenderte eine Kernfunktion fuer die ganze Spielseite.
+ window.Odin={istApp:true,version:'__VERSION__',
+  termin:function(schluessel,art,ms){try{OdinNative.termin(String(schluessel),String(art),String(Math.round(Number(ms)||0)));}catch(e){}},
+  lebt:function(){try{OdinNative.lebt();}catch(e){}},
+  protokoll:function(t){try{OdinNative.status(String(t));}catch(e){}}};
  // --- Downloads ------------------------------------------------------------
  // GodBot speichert Protokolle ueber einen Blob und einen <a download>-Klick.
  // In Firefox geht das, in einer WebView passiert nichts: blob:-Adressen
@@ -310,21 +292,21 @@ js = r"""
  var tn=__TEILE__, gb=__GODBOT_AN__, urls=[];
  for(var i=0;i<tn;i++)urls.push('/__odin_t_'+i+'.js');
  var done=0;
+ // Messung: Laden und Ausfuehren von GodBot (Teil 0), vom Einfuegen des
+ // Skript-Elements bis onload. Die "pruefe"-Wartezeit von 3 s ist fest und
+ // sagt ueber GodBot nichts aus.
+ var gbStart=-1, gbMs=-1;
  function add(i){
   if(i>=urls.length){
    try{var V='__VERSION__';var A=document.querySelectorAll('*');for(var k=0;k<A.length;k++){var e=A[k],t=(e.textContent||'').trim();if(/USERSCRIPT OK/i.test(t)&&e.children.length===0){e.remove();continue}if(/loader aktiv/i.test(t)){e.style.width='fit-content';e.style.maxWidth='calc(100% - 24px)';e.style.display='inline-flex';e.style.padding='6px 10px';e.style.margin='8px';e.style.borderRadius='8px'}}}catch(e){}
    // window.godbotCommands wird von GodBot gesetzt - damit laesst sich
    // 'Datei geladen' von 'Skript wirklich durchgelaufen' unterscheiden.
    function verdict(){try{
-    if(window.__odinSkipped&&window.__odinSkipped.length){
-     OdinNative.status('Bruecken uebergangen: '+window.__odinSkipped.join(', '));
-     window.__odinSkipped=[];
-    }
     if(window.__odinErrMsg){OdinNative.status(window.__odinErrMsg);return;}
     // Ohne GodBot gibt es den Marker nicht - dann zaehlt nur, dass alle
     // Teile ohne Fehler durchgelaufen sind.
     if(!gb){OdinNative.status('aktiv ('+done+' Teile, ohne GodBot)');return;}
-    if(typeof window.godbotCommands==='function'){OdinNative.status('aktiv ('+done+' Teile)');return;}
+    if(typeof window.godbotCommands==='function'){OdinNative.status('aktiv ('+done+' Teile'+(gbMs>=0?', GodBot '+gbMs+' ms':'')+')');return;}
     // Kein Fehler geworfen: das Skript lief durch, nur der Marker fehlt.
     OdinNative.status('ausgefuehrt, kein Fehler (Marker fehlt)');
    }catch(e){}}
@@ -334,7 +316,8 @@ js = r"""
   }
   var sc=document.createElement('script');
   sc.src=urls[i]; sc.async=false;
-  sc.onload=function(){done++;add(i+1)};
+  if(i===0&&gb)gbStart=Date.now();
+  sc.onload=function(){if(i===0&&gb&&gbStart>0)gbMs=Date.now()-gbStart;done++;add(i+1)};
   sc.onerror=function(){OdinNative.status('Fehler bei '+urls[i]);window.__odinGodBot=0};
   (document.head||document.documentElement).appendChild(sc);
  }

@@ -454,6 +454,87 @@ public class OdinService extends Service {
  // Laufende Dienstinstanz, damit die Spielansicht Meldungen oertlich
  // uebergeben kann statt ueber den Umweg Supabase.
  static volatile OdinService lauf=null;
+ // --- Termine direkt aus GodBot (window.Odin.termin) ------------------------
+ // Bisher kamen alle Termine auf dem Umweg GodBot -> localStorage -> Supabase
+ // -> Dienst (alle 5 Minuten) an, und ein verpasster Termin wurde verworfen
+ // ("if(weck<=jetzt)continue"). Am 23.09. fiel so der Raubzug um 03:00 aus
+ // und kam bis 07:30 nicht wieder. Jetzt meldet GodBot jeden Planungszeit-
+ // punkt sofort; der Dienst behaelt ihn, bis GodBot einen neuen meldet.
+ // Schluessel: konto|skey -> {ms, konto, bez, art}
+ static final java.util.concurrent.ConcurrentHashMap<String,Object[]> APP_TERMINE=new java.util.concurrent.ConcurrentHashMap<>();
+ // Letztes Lebenszeichen von GodBot je Konto (window.Odin.lebt, alle 5 s).
+ static final java.util.concurrent.ConcurrentHashMap<String,Long> LEBT=new java.util.concurrent.ConcurrentHashMap<>();
+ static void lebt(String konto){ LEBT.put(konto==null?"":konto,System.currentTimeMillis()); }
+ static long zuletztLebend(String konto){ Long l=LEBT.get(konto==null?"":konto); return l==null?0L:l; }
+ static void appTermin(Context c,String konto,String bez,String skey,String art,long ms){
+  String kt=konto==null?"":konto;
+  String k=kt+"|"+skey;
+  Object[] alt=APP_TERMINE.get(k);
+  if(alt!=null&&((Long)alt[0])==ms)return;
+  if(ms<=0)APP_TERMINE.remove(k);
+  else APP_TERMINE.put(k,new Object[]{ms,kt,bez==null?"":bez,art});
+  appTermineSichern(c);
+  OdinService s=lauf;
+  if(s!=null)s.appTermineEinplanen(alt==null?0L:(Long)alt[0],kt,art);
+ }
+ private static void appTermineSichern(Context c){
+  try{
+   JSONObject o=new JSONObject();
+   for(java.util.Map.Entry<String,Object[]> e:APP_TERMINE.entrySet()){
+    Object[] t=e.getValue();
+    o.put(e.getKey(),new JSONArray().put((long)(Long)t[0]).put((String)t[1]).put((String)t[2]).put((String)t[3]));
+   }
+   c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).edit().putString("app_termine",o.toString()).apply();
+  }catch(Exception ignored){}
+ }
+ private static void appTermineLaden(Context c){
+  try{
+   if(!APP_TERMINE.isEmpty())return;
+   JSONObject o=new JSONObject(c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).getString("app_termine","{}"));
+   java.util.Iterator<String> it=o.keys();
+   while(it.hasNext()){
+    String k=it.next(); JSONArray a=o.optJSONArray(k); if(a==null||a.length()<4)continue;
+    APP_TERMINE.put(k,new Object[]{a.optLong(0),a.optString(1),a.optString(2),a.optString(3)});
+   }
+  }catch(Exception ignored){}
+ }
+ // In die Weckliste uebernehmen. altMs: vorheriger Zeitpunkt desselben
+ // Schluessels, dessen Eintrag hier entfernt wird.
+ void appTermineEinplanen(long altMs,String altKonto,String altArt){
+  long jetzt=System.currentTimeMillis();
+  synchronized(faellig){
+   if(altMs>0){
+    String[] v=faellig.get(altMs-20_000L);
+    if(v!=null&&v[0].equals(altKonto)&&v[2].equals(altArt))faellig.remove(altMs-20_000L);
+   }
+   for(Object[] t:APP_TERMINE.values()){
+    long weck=((Long)t[0])-20_000L;
+    if(weck>jetzt)faellig.put(weck,new String[]{(String)t[1],(String)t[2],(String)t[3]});
+   }
+  }
+ }
+ // Nachwecken: Ein Termin ist seit ueber 3 Minuten faellig, und GodBot hat
+ // seitdem KEIN Lebenszeichen gegeben - er lief also nicht. Dann alle 5
+ // Minuten erneut wecken, hoechstens eine Stunde lang. Laeuft GodBot, meldet
+ // er von selbst einen neuen Zeitpunkt und der alte faellt weg.
+ private final java.util.HashMap<String,Long> nachgeweckt=new java.util.HashMap<>();
+ private void ueberfaelligPruefen(){
+  long jetzt=System.currentTimeMillis();
+  for(java.util.Map.Entry<String,Object[]> e:APP_TERMINE.entrySet()){
+   Object[] t=e.getValue();
+   long ms=(Long)t[0]; String konto=(String)t[1], bez=(String)t[2], art=(String)t[3];
+   long ueber=jetzt-ms;
+   if(ueber<180_000L||ueber>3_600_000L)continue;
+   if(zuletztLebend(konto)>ms)continue;
+   Long z=nachgeweckt.get(e.getKey());
+   if(z!=null&&jetzt-z<300_000L)continue;
+   nachgeweckt.put(e.getKey(),jetzt);
+   String text=art+" seit "+(ueber/60000)+" Min überfällig, GodBot ohne Lebenszeichen - wecke erneut";
+   OdinLog.schreib(this,"-","WICHTIG",text);
+   protokoll(this,"WICHTIG","wecker",text);
+   wecken(this,konto,bez,art,"Raubzug".equals(art));
+  }
+ }
  private PowerManager.WakeLock lock;
  private Thread poller; private volatile boolean running;
  private String lastSeen="";
@@ -566,6 +647,7 @@ public class OdinService extends Service {
   OdinAlarm.wachhund(this);   // Rueckfall, feuert auf manchen Geraeten nie
   OdinJob.planen(this);       // eigentlicher Wiederbeleber
   lauf=this;
+  appTermineLaden(this); appTermineEinplanen(0L,"","");
   running=true; poller=new Thread(this::loop); poller.start();
  }
  // Meldungen aus der Spielansicht liefen bisher AUSSCHLIESSLICH ueber
@@ -883,6 +965,7 @@ public class OdinService extends Service {
    try{ poll(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","poll",e); }
    try{ faelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","faellig",e); }
    try{ dimmWaechter(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","dimm",e); }
+   try{ ueberfaelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","ueberfaellig",e); }
    try{ vorwarnPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","vorwarnung",e); }
    try{ botschutzTakt(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","botschutz",e); }
    try{ authPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","auth",e); }
@@ -1040,6 +1123,8 @@ public class OdinService extends Service {
     }
    }catch(Exception e){ android.util.Log.w("ODIN_ALARM","planzeiten",e); }
   }
+  // Direkt gemeldete Termine ueberstehen das Neuaufsetzen der Liste.
+  appTermineEinplanen(0L,"","");
   android.util.Log.i("ODIN_ALARM","Wecker gesetzt: "+gesamt+" ueber "+accs.length()+" Accounts");
   int offen; synchronized(faellig){ offen=faellig.size(); }
   // Auch oertlich festhalten. Bisher sah ich nur, dass keine Meldungen
@@ -2402,7 +2487,7 @@ public class GameWebViewActivity extends Activity {
         .putBoolean("dimm_an",true).putString("dimm_konto",nz(gameAccountId)).apply(); }
   catch(Exception ignored){}
   if(dimDecke!=null){ setStatus("Dimm-Modus aufgefrischt"); return; }
-  if(webView!=null){ webView.removeCallbacks(dimmPuls); webView.postDelayed(dimmPuls,600_000L); }
+  if(webView!=null){ webView.removeCallbacks(dimmPuls); webView.postDelayed(dimmPuls,300_000L); }
   android.widget.LinearLayout decke=new android.widget.LinearLayout(this);
   decke.setOrientation(android.widget.LinearLayout.VERTICAL);
   decke.setGravity(android.view.Gravity.CENTER);
@@ -2522,10 +2607,19 @@ public class GameWebViewActivity extends Activity {
   },5000);
  }
  // Alle 10 Minuten still nachsehen, solange gedimmt ist.
+ private long dimmNeuGeladen=0L;
  private final Runnable dimmPuls=new Runnable(){ @Override public void run(){
   if(dimDecke==null||webView==null)return;
   dimmKontrolle(null);
-  webView.postDelayed(this,600_000L);
+  // Vorn, gedimmt - aber GodBot schweigt? Am 23.09. von 03:00 bis 07:30 kein
+  // einziges Lebenszeichen. Dann die Seite neu laden (hoechstens alle 15 Min).
+  long jetzt=System.currentTimeMillis(), l=OdinService.zuletztLebend(gameAccountId);
+  if(imVordergrund&&l>0&&jetzt-l>300_000L&&jetzt-dimmNeuGeladen>900_000L){
+   dimmNeuGeladen=jetzt;
+   setStatus("Dimm-Kontrolle: GodBot seit "+((jetzt-l)/60000)+" Min ohne Lebenszeichen - lade Seite neu");
+   try{ webView.reload(); }catch(Exception ignored){}
+  }
+  webView.postDelayed(this,300_000L);
  }};
  private int dimBreite(){
   int b=getResources().getDisplayMetrics().widthPixels;
@@ -2917,6 +3011,12 @@ public class GameWebViewActivity extends Activity {
   // Lebenszeichen aus der Seite: GodBot schreibt bei jedem Arbeitsschritt in
   // den localStorage. Bleibt das aus, ist der Durchlauf fertig.
   @JavascriptInterface public void puls(){ letzteAktivitaet=System.currentTimeMillis(); }
+  // window.Odin.lebt / window.Odin.termin (godbot/GodBot.user.js, Odin-Anbindung)
+  @JavascriptInterface public void lebt(){ OdinService.lebt(gameAccountId); }
+  @JavascriptInterface public void termin(String skey,String art,String ms){
+   long z; try{ z=Long.parseLong(ms); }catch(Exception e){ return; }
+   OdinService.appTermin(GameWebViewActivity.this,gameAccountId,kopfName,skey,art,z);
+  }
   // GodBots Protokoll-Download landete im Nichts: <a download> mit einer
   // blob:-Adresse erreicht den Download-Weg von Android nicht. Der Loader
   // faengt den Klick ab und reicht den Text hierher.
