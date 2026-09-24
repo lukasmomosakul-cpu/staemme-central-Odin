@@ -9,6 +9,7 @@ const SEITEN: [string, string][] = [
   ['Dashboard', '/'],
   ['Accounts', '/#accounts'],
   ['GodBot', '/godbot/'],
+  ['Statistik', '/statistik/'],
   ['Protokoll', '/protokoll/'],
   ['Team', '/team/'],
   ['Scripts', '/scripts/'],
@@ -17,6 +18,7 @@ const SEITEN: [string, string][] = [
 
 const FUSS: [string, string, string][] = [
   ['⌂', 'Dashboard', '/'],
+  ['📊', 'Statistik', '/statistik/'],
   ['📋', 'Protokoll', '/protokoll/'],
   ['⚙', 'Einstellungen', '/einstellungen/'],
 ];

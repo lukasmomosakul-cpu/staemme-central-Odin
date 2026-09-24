@@ -200,10 +200,12 @@ js = r"""
  // Geraet, die Zwischenspeicher sind nach Minuten veraltet. Sie wurden bei
  // jedem Seitenaufbau hochgeladen ("gesichert: tw_server_offset_samples,
  // tw_server_offset_ms, ..."), rund 25 Mal in 6 Minuten.
+ // tw_stats_cache (Punkte, Rang, Beute) wird NICHT ausgenommen - die
+ // Statistik-Seite im Dashboard liest ihn; er aendert sich nur stuendlich.
  // tw_active_process ist GodBots Vorgangssperre auf DIESEM Geraet. Ein
  // frisches zweites Geraet bekam sie beim Erstabgleich vom ersten und hielt
  // danach einen fremden Vorgang fuer laufend.
- var NIE_GERAET=/^(tw_active_process|tw_server_offset_samples|tw_server_offset_ms|tw_world_speed|tw_commands_cache|tw_moving_troops_cache|tw_dbinfo_cache|tw_stats_cache|tw_am_troops_cache)$/;
+ var NIE_GERAET=/^(tw_active_process|tw_server_offset_samples|tw_server_offset_ms|tw_world_speed|tw_commands_cache|tw_moving_troops_cache|tw_dbinfo_cache|tw_am_troops_cache)$/;
  // Botschutz-Zustand darf NIE uebernommen werden. Diese Schluessel aendern
  // sich selten, entgehen also der Volatilitaetserkennung - ein alter
  // Serverstand von tw_bot_gesperrt_seit wuerde GodBot beim naechsten Oeffnen
