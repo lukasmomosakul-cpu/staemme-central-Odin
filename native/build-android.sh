@@ -482,6 +482,144 @@ public class OdinService extends Service {
  static final java.util.concurrent.ConcurrentHashMap<String,Long> SPERRE=new java.util.concurrent.ConcurrentHashMap<>();
  static void sperre(String konto,boolean an){ String k=konto==null?"":konto; if(an)SPERRE.putIfAbsent(k,System.currentTimeMillis()); else SPERRE.remove(k); }
  static boolean gesperrt(String konto){ return SPERRE.containsKey(konto==null?"":konto); }
+ // --- Geraete-Sperre je Konto (Supabase: account_leases, 017) --------------
+ // Laufen zwei Geraete fuer DASSELBE Konto mit GodBot, gehen doppelte
+ // Anfragen an den Spielserver - Raubzug, Farmen, Rohstoffe zweimal. Genau
+ // das bestraft der Botschutz. Deshalb darf GodBot je Konto nur auf dem
+ // Geraet laufen, das die Sperre haelt. Gehalten wird sie, solange sich das
+ // Geraet mindestens alle 3 Minuten meldet (leasePflegen, jede Minute).
+ // Manuelles Spielen auf dem zweiten Geraet bleibt moeglich - nur GodBot
+ // pausiert dort.
+ private static String geraetIdCache=null;
+ static String geraetId(Context c){
+  if(geraetIdCache==null){
+   String a="";
+   try{ a=android.provider.Settings.Secure.getString(c.getContentResolver(),android.provider.Settings.Secure.ANDROID_ID); }catch(Exception ignored){}
+   if(a==null||a.isEmpty()){
+    android.content.SharedPreferences p=c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE);
+    a=p.getString("geraet_id","");
+    if(a.isEmpty()){ a=java.util.UUID.randomUUID().toString(); p.edit().putString("geraet_id",a).apply(); }
+   }
+   geraetIdCache="a-"+a;
+  }
+  return geraetIdCache;
+ }
+ static String geraetName(){ return (Build.MANUFACTURER+" "+Build.MODEL).trim(); }
+ // konto -> {Boolean erhalten, String halterName, Long zeitpunkt}
+ static final java.util.concurrent.ConcurrentHashMap<String,Object[]> LEASE=new java.util.concurrent.ConcurrentHashMap<>();
+ // Konten, deren Ansicht auf die Sperre wartet (GodBot nicht geladen).
+ static final java.util.Set<String> WARTET=java.util.concurrent.ConcurrentHashMap.newKeySet();
+ private static String rpc(Context c,String fn,String body){
+  ladeStatisch(c);
+  if(url.isEmpty()||key.isEmpty())return null;
+  for(int versuch=0;versuch<2;versuch++){
+   try{
+    HttpURLConnection con=(HttpURLConnection)new URL(url+"/rest/v1/rpc/"+fn).openConnection();
+    con.setRequestMethod("POST"); con.setDoOutput(true);
+    con.setConnectTimeout(10000); con.setReadTimeout(15000);
+    con.setRequestProperty("apikey",key); con.setRequestProperty("Authorization","Bearer "+token);
+    con.setRequestProperty("Content-Type","application/json");
+    con.getOutputStream().write(body.getBytes("UTF-8"));
+    int st=con.getResponseCode();
+    if(st==401||st==403){ if(versuch==0&&erneuern(c,"rpc "+fn))continue; return null; }
+    if(st>=400)return null;
+    BufferedReader r=new BufferedReader(new InputStreamReader(con.getInputStream(),"UTF-8"));
+    StringBuilder b=new StringBuilder(); String l; while((l=r.readLine())!=null)b.append(l); r.close();
+    return b.toString();
+   }catch(Exception e){ android.util.Log.w("ODIN_LEASE",fn,e); return null; }
+  }
+  return null;
+ }
+ // Nehmen oder verlaengern. null = Supabase nicht erreichbar.
+ static Object[] leaseHolen(Context c,String konto,boolean erzwingen){
+  if(konto==null||konto.isEmpty())return null;
+  try{
+   String body=new JSONObject().put("p_account",konto).put("p_geraet",geraetId(c))
+     .put("p_name",geraetName()).put("p_erzwingen",erzwingen).toString();
+   String r=rpc(c,"lease_holen",body);
+   if(r==null)return null;
+   JSONArray a=new JSONArray(r); if(a.length()==0)return null;
+   JSONObject o=a.getJSONObject(0);
+   Object[] e=new Object[]{o.optBoolean("erhalten",false),o.optString("geraet_name",""),System.currentTimeMillis()};
+   Object[] alt=LEASE.put(konto,e);
+   boolean jetzt=(Boolean)e[0], vorher=alt!=null&&(Boolean)alt[0];
+   if(jetzt!=vorher||alt==null){
+    String t=jetzt?(erzwingen?"Geräte-Sperre übernommen":"Geräte-Sperre erhalten")
+      :"GodBot pausiert - läuft auf "+e[1];
+    OdinLog.schreib(c,"-",jetzt?"info":"WICHTIG",t+" ("+konto.substring(0,Math.min(8,konto.length()))+")");
+   }
+   return e;
+  }catch(Exception ex){ return null; }
+ }
+ static void leaseFreigeben(Context c,String konto){
+  Object[] e=LEASE.remove(konto==null?"":konto);
+  if(e==null||!(Boolean)e[0])return;
+  try{ rpc(c,"lease_freigeben",new JSONObject().put("p_account",konto).put("p_geraet",geraetId(c)).toString()); }
+  catch(Exception ignored){}
+ }
+ // Darf GodBot fuer dieses Konto HIER laufen? Aus dem Zwischenspeicher,
+ // wenn er jung genug ist, sonst fragen. Ist Supabase nicht erreichbar,
+ // entscheidet der letzte Stand: ein fremder Halter, der sich vor weniger
+ // als 3 Minuten gemeldet hat, sperrt weiter; sonst darf dieses Geraet
+ // laufen - ein einzelnes Geraet soll nicht an einem Funkloch haengen.
+ static boolean darfLaufen(Context c,String konto){
+  long jetzt=System.currentTimeMillis();
+  Object[] e=LEASE.get(konto==null?"":konto);
+  if(e!=null&&(Boolean)e[0]&&jetzt-(Long)e[2]<60_000L)return true;
+  Object[] neu=leaseHolen(c,konto,false);
+  if(neu!=null)return (Boolean)neu[0];
+  return !(e!=null&&!(Boolean)e[0]&&jetzt-(Long)e[2]<180_000L);
+ }
+ // Name des fremden Halters, falls ein anderes Geraet das Konto fuehrt.
+ static String fremdHalter(String konto){
+  Object[] e=LEASE.get(konto==null?"":konto);
+  if(e==null||(Boolean)e[0])return null;
+  if(System.currentTimeMillis()-(Long)e[2]>240_000L)return null;
+  return (String)e[1];
+ }
+ private long letztePflege=0L;
+ // Jede Minute: gehaltene Sperren verlaengern, wartende Ansichten erneut
+ // versuchen lassen, Sperren geschlossener Ansichten freigeben.
+ private void leasePflegen(){
+  long jetzt=System.currentTimeMillis();
+  if(jetzt-letztePflege<60_000L)return;
+  letztePflege=jetzt;
+  java.util.Set<String> offen=GameWebViewActivity.offeneKonten();
+  for(String k:offen){
+   Object[] e=LEASE.get(k);
+   boolean hielt=e!=null&&(Boolean)e[0];
+   if(hielt||WARTET.contains(k)){
+    Object[] neu=leaseHolen(this,k,false);
+    if(neu!=null&&(Boolean)neu[0]&&WARTET.remove(k))
+     GameWebViewActivity.neuLadenFuer(k,"Geräte-Sperre frei - GodBot startet");
+   }
+  }
+  for(String k:new java.util.ArrayList<>(LEASE.keySet())){
+   Object[] e=LEASE.get(k);
+   if(e!=null&&(Boolean)e[0]&&!offen.contains(k))leaseFreigeben(this,k);
+  }
+  // Fremde Sperren des Teams lesen (nur lesen, nichts nehmen). Damit weiss
+  // der Wecker, dass er ein Konto, das ein anderes Geraet fuehrt, NICHT
+  // wecken soll - sonst holten beide Geraete ihre Ansicht nach vorn.
+  if(team.isEmpty())return;
+  try{
+   JSONArray a=new JSONArray(hole("account_leases?select=account_id,geraet_id,geraet_name,gemeldet&team_id=eq."
+     +java.net.URLEncoder.encode(team,"UTF-8")));
+   String ich=geraetId(this);
+   for(int i=0;i<a.length();i++){
+    JSONObject o=a.getJSONObject(i);
+    String k=o.optString("account_id",""); if(k.isEmpty())continue;
+    if(ich.equals(o.optString("geraet_id","")))continue;
+    long gemeldet;
+    try{ gemeldet=java.time.OffsetDateTime.parse(o.optString("gemeldet","")).toInstant().toEpochMilli(); }
+    catch(Exception pe){ continue; }
+    if(jetzt-gemeldet>180_000L)continue;
+    Object[] mein=LEASE.get(k);
+    if(mein!=null&&(Boolean)mein[0])continue;
+    LEASE.put(k,new Object[]{false,o.optString("geraet_name",""),gemeldet});
+   }
+  }catch(Exception ex){ android.util.Log.w("ODIN_LEASE","lesen",ex); }
+ }
  // Zeitstempel des letzten Laufs, keine Termine - GodBot bis v530 meldete
  // sie irrtuemlich (Nachwecken "Aufräumen ... überfällig", 23./24.09.).
  static boolean keinTermin(String skey){
@@ -884,6 +1022,11 @@ public class OdinService extends Service {
   c.startActivity(i);
  }
  static void wecken(Context c,String konto,String text,String art,boolean wartung){
+  String fremd=fremdHalter(konto);
+  if(fremd!=null){
+   OdinLog.schreib(c,"-","info","Wecken uebersprungen ("+art+") - Konto läuft auf "+fremd);
+   return;
+  }
   String kt=konto==null?"":konto;
   // Dienstschleife und Wecker koennen denselben Termin sekundenversetzt
   // ausloesen. Ohne diese Sperre kaeme die Ansicht zweimal nach vorn.
@@ -1012,6 +1155,7 @@ public class OdinService extends Service {
    try{ faelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","faellig",e); }
    try{ dimmWaechter(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","dimm",e); }
    try{ ueberfaelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","ueberfaellig",e); }
+   try{ leasePflegen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","lease",e); }
    try{ vorwarnPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","vorwarnung",e); }
    try{ botschutzTakt(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","botschutz",e); }
    try{ authPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","auth",e); }
@@ -2323,6 +2467,18 @@ public class GameWebViewActivity extends Activity {
   dim.setPadding(10,0,10,0);
   dim.setOnClickListener(x->dimmenAn());
   bar.addView(dim,new LinearLayout.LayoutParams(-2,-2));
+  leaseKnopf=new Button(this); leaseKnopf.setText("Übernehmen"); leaseKnopf.setTextSize(12f); leaseKnopf.setAllCaps(false);
+  leaseKnopf.setVisibility(android.view.View.GONE);
+  leaseKnopf.setOnClickListener(x->{
+   final String k=gameAccountId; final Context app=getApplicationContext();
+   setStatus("Übernehme GodBot von dem anderen Gerät ...");
+   new Thread(()->{
+    Object[] e=OdinService.leaseHolen(app,k,true);
+    if(e!=null&&(Boolean)e[0]){ OdinService.WARTET.remove(k); neuLadenFuer(k,"GodBot übernommen - das andere Gerät pausiert bei seiner nächsten Prüfung"); }
+    else setStatus("Übernehmen fehlgeschlagen - keine Verbindung?");
+   }).start();
+  });
+  bar.addView(leaseKnopf,new LinearLayout.LayoutParams(-2,-2));
   Button min=new Button(this); min.setText("Minimieren"); min.setTextSize(12f); min.setAllCaps(false);
   min.setOnClickListener(x->{
    if(!OdinBubble.allowed(this)){
@@ -3101,8 +3257,36 @@ public class GameWebViewActivity extends Activity {
  }
  private void restoreFromFloat(){ holeAusFenster(true); }
  @Override protected void onDestroy(){
-  if(OFFEN.get(gameAccountId)==this)OFFEN.remove(gameAccountId);
+  if(OFFEN.get(gameAccountId)==this){
+   OFFEN.remove(gameAccountId);
+   // Geraete-Sperre sofort freigeben, damit ein anderes Geraet nicht die
+   // 3 Minuten Frist abwarten muss.
+   final String k=gameAccountId; final Context app=getApplicationContext();
+   OdinService.WARTET.remove(k);
+   new Thread(()->OdinService.leaseFreigeben(app,k)).start();
+  }
   super.onDestroy();
+ }
+ static java.util.Set<String> offeneKonten(){
+  synchronized(OFFEN){ return new java.util.HashSet<>(OFFEN.keySet()); }
+ }
+ static void neuLadenFuer(String konto,String grund){
+  final GameWebViewActivity a;
+  synchronized(OFFEN){ a=OFFEN.get(konto); }
+  if(a==null||a.isFinishing())return;
+  a.runOnUiThread(()->{
+   a.setStatus(grund);
+   if(a.leaseKnopf!=null)a.leaseKnopf.setVisibility(android.view.View.GONE);
+   try{ a.webView.setTag(0x0D1A0001,null); a.webView.reload(); }catch(Exception ignored){}
+  });
+ }
+ // Sichtbar nur, solange ein anderes Geraet das Konto fuehrt.
+ Button leaseKnopf;
+ void leaseGesperrtAnzeigen(String halter){
+  runOnUiThread(()->{
+   if(leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
+   setStatus("GodBot pausiert - läuft auf "+halter+". „Übernehmen“ holt ihn hierher.");
+  });
  }
  @Override public void onBackPressed(){
   if(dimDecke!=null){dimmenAus();return;}

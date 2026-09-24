@@ -200,7 +200,10 @@ js = r"""
  // Geraet, die Zwischenspeicher sind nach Minuten veraltet. Sie wurden bei
  // jedem Seitenaufbau hochgeladen ("gesichert: tw_server_offset_samples,
  // tw_server_offset_ms, ..."), rund 25 Mal in 6 Minuten.
- var NIE_GERAET=/^(tw_server_offset_samples|tw_server_offset_ms|tw_world_speed|tw_commands_cache|tw_moving_troops_cache|tw_dbinfo_cache|tw_stats_cache|tw_am_troops_cache)$/;
+ // tw_active_process ist GodBots Vorgangssperre auf DIESEM Geraet. Ein
+ // frisches zweites Geraet bekam sie beim Erstabgleich vom ersten und hielt
+ // danach einen fremden Vorgang fuer laufend.
+ var NIE_GERAET=/^(tw_active_process|tw_server_offset_samples|tw_server_offset_ms|tw_world_speed|tw_commands_cache|tw_moving_troops_cache|tw_dbinfo_cache|tw_stats_cache|tw_am_troops_cache)$/;
  // Botschutz-Zustand darf NIE uebernommen werden. Diese Schluessel aendern
  // sich selten, entgehen also der Volatilitaetserkennung - ein alter
  // Serverstand von tw_bot_gesperrt_seit wuerde GodBot beim naechsten Oeffnen
@@ -396,10 +399,18 @@ new = ''' private void loadEnabledScripts(WebView v){
     // GodBot kommt aus der APK - kein Netz, kein Gist, keine Ablaufzeit.
     String gb=OdinSkripte.godbot(this);
     boolean gbAn=gb.length()>1000;
+    // Geraete-Sperre: fuehrt ein anderes Geraet dieses Konto, bleibt GodBot
+    // hier aus. Zusatzskripte und manuelles Spielen laufen weiter.
+    if(gbAn&&!gameAccountId.isEmpty()&&!OdinService.darfLaufen(this,gameAccountId)){
+     gbAn=false;
+     OdinService.WARTET.add(gameAccountId);
+     String h=OdinService.fremdHalter(gameAccountId);
+     leaseGesperrtAnzeigen(h==null?"einem anderen Gerät":h);
+    }else OdinService.WARTET.remove(gameAccountId);
     if(gbAn){
      teile.add(OdinSkripte.godbotBytes(this));
      if(!godbotGemeldet){ godbotGemeldet=true; versionPruefen(OdinSkripte.GODBOT_ID,"GodBot",gb); }
-    }else setStatus("GodBot fehlt in dieser App-Fassung");
+    }else if(!OdinService.WARTET.contains(gameAccountId))setStatus("GodBot fehlt in dieser App-Fassung");
     // Zusatzskripte (Tampermonkey) aus der Teamliste.
     org.json.JSONArray liste=serverSkripte();
     if(liste==null)liste=OdinSkripte.liste(this);
