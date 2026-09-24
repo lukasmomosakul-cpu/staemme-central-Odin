@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      532
+// @version      533
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -42765,10 +42765,15 @@ let bhTauschLaufAktiv = false;
 const BH_TAUSCH_ERLEDIGT_KEY = "tw_bh_tausch_erledigt";
 const BH_TAUSCH_ERLEDIGT_MS = 6 * 60 * 60 * 1000;
 
-function bhTauschErledigtMerken(villageId) {
+// 25.09.2026 - sperrMs: wie lange das Dorf NICHT erneut angefahren wird.
+// Ohne Angabe die vollen sechs Stunden (Erfolg / nichts zu tun). Bei
+// einem Fehlschlag kuerzer - gespeichert wird so, dass bhTauschErledigt()
+// unveraendert genau sperrMs lang "erledigt" meldet.
+function bhTauschErledigtMerken(villageId, sperrMs) {
     try {
         const d = JSON.parse(localStorage.getItem(BH_TAUSCH_ERLEDIGT_KEY) || "{}");
-        d[String(villageId)] = Date.now();
+        const sperre = (sperrMs > 0 && sperrMs < BH_TAUSCH_ERLEDIGT_MS) ? sperrMs : BH_TAUSCH_ERLEDIGT_MS;
+        d[String(villageId)] = Date.now() - BH_TAUSCH_ERLEDIGT_MS + sperre;
         localStorage.setItem(BH_TAUSCH_ERLEDIGT_KEY, JSON.stringify(d));
     } catch (e) { }
 }
@@ -43061,7 +43066,20 @@ function bhTauschLauf(vonHand) {
                 bhTauschErledigtMerken(vid);
             }
             else {
-                console.warn(`[TW] Bauernhof-Tausch: ${bauDorfKurz(vid)} - ${text}`);
+                // 25.09.2026 GEMESSEN (Diagnose 22:43-00:25): Ein
+                // Fehlschlag setzte KEINEN Merker. Der Sechzig-Sekunden-Takt
+                // fuhr 452|451 deshalb die ganze Nacht jede Minute an -
+                // 123x "Nicht genügend Rohstoffe", je ein "main" und ein
+                // "upgrade_building". Genau das stand im Odin-Anfragezaehler
+                // als "main 10, main:upgrade_building 10" je 10 Minuten,
+                // unbeaufsichtigt, im Gleichtakt. Nach einem Seitenwechsel
+                // kam es sogar alle paar Sekunden (22:45: 15x in einer
+                // Minute). Jetzt: 20-30 Minuten Pause fuer dieses Dorf.
+                // Der Knopf "von Hand" loescht den Merker weiterhin.
+                const pauseMs = humanDelay(20 * 60 * 1000, 30 * 60 * 1000);
+                bhTauschErledigtMerken(vid, pauseMs);
+                console.warn(`[TW] Bauernhof-Tausch: ${bauDorfKurz(vid)} - ${text} - ` +
+                    `naechster Versuch fruehestens in ${Math.round(pauseMs / 60000)} Min.`);
             }
             setTimeout(weiter, humanDelay(1200, 2200));
         });
