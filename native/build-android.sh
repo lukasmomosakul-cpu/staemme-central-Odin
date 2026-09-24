@@ -474,7 +474,14 @@ public class OdinService extends Service {
  static final java.util.concurrent.ConcurrentHashMap<String,Long> SPERRE=new java.util.concurrent.ConcurrentHashMap<>();
  static void sperre(String konto,boolean an){ String k=konto==null?"":konto; if(an)SPERRE.putIfAbsent(k,System.currentTimeMillis()); else SPERRE.remove(k); }
  static boolean gesperrt(String konto){ return SPERRE.containsKey(konto==null?"":konto); }
+ // Zeitstempel des letzten Laufs, keine Termine - GodBot bis v530 meldete
+ // sie irrtuemlich (Nachwecken "Aufräumen ... überfällig", 23./24.09.).
+ static boolean keinTermin(String skey){
+  return skey!=null&&(skey.endsWith("|tw_am_check_at")||skey.endsWith("|tw_plan_aufraeumen_at")
+    ||skey.equals("tw_am_check_at")||skey.equals("tw_plan_aufraeumen_at"));
+ }
  static void appTermin(Context c,String konto,String bez,String skey,String art,long ms){
+  if(keinTermin(skey))return;
   String kt=konto==null?"":konto;
   String k=kt+"|"+skey;
   Object[] alt=APP_TERMINE.get(k);
@@ -501,7 +508,7 @@ public class OdinService extends Service {
    JSONObject o=new JSONObject(c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).getString("app_termine","{}"));
    java.util.Iterator<String> it=o.keys();
    while(it.hasNext()){
-    String k=it.next(); JSONArray a=o.optJSONArray(k); if(a==null||a.length()<4)continue;
+    String k=it.next(); JSONArray a=o.optJSONArray(k); if(a==null||a.length()<4||keinTermin(k))continue;
     APP_TERMINE.put(k,new Object[]{a.optLong(0),a.optString(1),a.optString(2),a.optString(3)});
    }
   }catch(Exception ignored){}
@@ -533,6 +540,7 @@ public class OdinService extends Service {
  private void ueberfaelligPruefen(){
   long jetzt=System.currentTimeMillis();
   for(java.util.Map.Entry<String,Object[]> e:APP_TERMINE.entrySet()){
+   if(keinTermin(e.getKey())){ APP_TERMINE.remove(e.getKey()); continue; }
    Object[] t=e.getValue();
    long ms=(Long)t[0]; String konto=(String)t[1], bez=(String)t[2], art=(String)t[3];
    long ueber=jetzt-ms;
@@ -1128,9 +1136,11 @@ public class OdinService extends Service {
    // nachzuruesten hiesse, bei jeder neuen Funktion wieder etwas zu
    // vergessen - deshalb in einem Rutsch.
    try{
+    // Nur echte kuenftige Zeitpunkte. tw_am_check_at und tw_plan_aufraeumen_at
+    // halten den LETZTEN Lauf - sie standen hier bis 1.69 und wurden nur
+    // deshalb nie zum Problem, weil vergangene Zeitpunkte verworfen werden.
     String liste="tw_next_recheck_at,tw_next_farm_burst_at,tw_next_resource_scan_at,"
-                +"tw_am_check_at,tw_am_check_soon_at,tw_incoming_rename_due_at,"
-                +"tw_plan_aufraeumen_at,tw_mass_support_next_at";
+                +"tw_am_check_soon_at,tw_incoming_rename_due_at,tw_mass_support_next_at";
     JSONArray nx=new JSONArray(hole("godbot_settings?select=skey,value&account_id=eq."
       +java.net.URLEncoder.encode(id,"UTF-8")
       +"&skey=in.("+java.net.URLEncoder.encode(liste,"UTF-8")+")"));

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      530
+// @version      531
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -42,9 +42,12 @@
         tw_next_resource_scan_at: "Rohstoffe",
         tw_mass_support_next_at: "Massenunterstützung",
         tw_incoming_rename_due_at: "Eingehende",
-        tw_am_check_at: "Manager",
-        tw_am_check_soon_at: "Manager",
-        tw_plan_aufraeumen_at: "Aufräumen"
+        tw_am_check_soon_at: "Manager"
+        // NICHT hierher: tw_am_check_at und tw_plan_aufraeumen_at. Beide
+        // halten den Zeitpunkt des LETZTEN Laufs (Date.now()), keinen
+        // kuenftigen Termin. Als Termin gemeldet galten sie nach 3 Minuten
+        // als "ueberfaellig" und loesten Nachwecken aus (24.09. 22:51, 04:04,
+        // 06:00 - "Aufräumen seit 25/38/33 Min überfällig").
     };
     const odinGemeldet = {};
     function odinTermineMelden() {
