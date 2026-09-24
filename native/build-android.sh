@@ -465,6 +465,14 @@ public class OdinService extends Service {
  // Letztes Lebenszeichen von GodBot je Konto (window.Odin.lebt, alle 5 s).
  static final java.util.concurrent.ConcurrentHashMap<String,Long> LEBT=new java.util.concurrent.ConcurrentHashMap<>();
  static void lebt(String konto){ LEBT.put(konto==null?"":konto,System.currentTimeMillis()); }
+ // Wann war die Spielansicht zuletzt im Vordergrund (= ungedrosselt)? Gesetzt
+ // beim Kommen UND Gehen. War sie nach der Faelligkeit eines Termins vorn,
+ // hatte GodBot seine Gelegenheit - dann hilft Nachwecken nicht. Am 24.09.
+ // 13:31-13:42 wurde trotzdem sechsmal geweckt, obwohl jedes Weckfenster
+ // 50 s lief.
+ static final java.util.concurrent.ConcurrentHashMap<String,Long> VORN=new java.util.concurrent.ConcurrentHashMap<>();
+ static void vorn(String konto){ VORN.put(konto==null?"":konto,System.currentTimeMillis()); }
+ static long zuletztVorn(String konto){ Long l=VORN.get(konto==null?"":konto); return l==null?0L:l; }
  static long zuletztLebend(String konto){ Long l=LEBT.get(konto==null?"":konto); return l==null?0L:l; }
  // Zugangssperre (Captcha) je Konto: gesetzt, wenn die Spielansicht die
  // Sperrseite erkennt, geloescht, sobald GodBot wieder injiziert wird. Solange
@@ -549,6 +557,7 @@ public class OdinService extends Service {
    // schwebend weiter, erledigt den Termin dann aber nicht (23.09. 20:00 und
    // 21:05). Massgeblich ist, ob die Ansicht gerade ungedrosselt laeuft.
    if(GameWebViewActivity.laeuftUngedrosselt(this,konto))continue;
+   if(zuletztVorn(konto)>ms+60_000L)continue;
    if(gesperrt(konto))continue;
    Long z=nachgeweckt.get(e.getKey());
    if(z!=null&&jetzt-z<300_000L)continue;
@@ -3038,6 +3047,7 @@ public class GameWebViewActivity extends Activity {
  }
  @Override protected void onPause(){
   super.onPause();
+  if(imVordergrund)OdinService.vorn(gameAccountId);
   imVordergrund=false;
   if(dimDecke!=null){
    try{

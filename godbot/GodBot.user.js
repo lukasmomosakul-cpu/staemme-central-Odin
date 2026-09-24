@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      531
+// @version      532
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -42569,9 +42569,22 @@ function planeNaechstenBauScan() {
         if (!frueheste || at < frueheste) frueheste = at;
     });
 
-    // Nie oefter als alle 30 Sekunden, nie seltener als alle 30 Minuten.
+    // Nie oefter als alle 6-9 Minuten (zufaellig), nie seltener als alle
+    // 30 Minuten.
+    //
+    // 24.09.2026 GEMESSEN (Odin-Anfragezaehler): Bis v531 lag die Grenze bei
+    // 30 Sekunden. Jedes Dorf wurde besucht, sobald EIN Bauauftrag fertig
+    // war - von 15:51 bis 17:12 ununterbrochen 7-12x "main" und ebenso oft
+    // "upgrade_building" je 10 Minuten, also ein Auftrag pro Minute im
+    // Gleichtakt. Um 17:10 kam der Botschutz. Ursaechlich belegt ist das
+    // nicht, aber ein Mensch baut in Runden: alle paar Minuten die faelligen
+    // Doerfer nacheinander, mehrere Auftraege je Dorf (bis
+    // BAU_AUFTRAEGE_JE_BESUCH). Genau das ergibt die neue Untergrenze - die
+    // faelligen Doerfer sammeln sich und werden in EINEM Durchlauf erledigt.
+    // Kosten: eine Bauschleife kann einige Minuten leer stehen.
     const ziel = Math.min(
-        Math.max(frueheste || (Date.now() + 15 * 60 * 1000), Date.now() + 30 * 1000),
+        Math.max(frueheste || (Date.now() + 15 * 60 * 1000),
+            Date.now() + humanDelay(6 * 60 * 1000, 9 * 60 * 1000)),
         Date.now() + 30 * 60 * 1000
     );
     localStorage.setItem(BAU_SCAN_KEY, String(Math.round(ziel)));
