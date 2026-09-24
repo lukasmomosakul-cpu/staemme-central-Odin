@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      534
+// @version      535
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -39312,6 +39312,32 @@ function parseTemplateQueue(doc) {
     return steps.length ? steps : null;
 }
 
+// EINSTELLUNGEN EINER BAUVORLAGE IM ACCOUNT-MANAGER (25.09.2026)
+// ------------------------------------------------------------------
+// Belegt an der Seitenquelle am_village&mode=queue&template=1520
+// (25.09. 00:53) und an Accountmanager.e54082.js_ (saveQueue):
+//   <input type="checkbox" name="auto_demolish" value="1">
+//   <input form="building_queue_form" type="checkbox" name="farm_upgrade_toggle">
+//   <select form="building_queue_form" name="population_upgrades" disabled>
+//       5 / 10 / 15 / 20   ("Weniger als N% Bevoelkerung verfuegbar")
+// Die Auswahl ist gesperrt, solange der Haken fehlt - dann wird sie auch
+// nicht gesendet. Fehlt eines der Elemente, ist die Seite anders als
+// gemessen: null, und niemand schreibt deswegen etwas.
+function parseTemplateOptionen(doc) {
+    if (!doc) return null;
+    const ab = doc.querySelector('input[name="auto_demolish"]');
+    const bhHaken = doc.querySelector('input[name="farm_upgrade_toggle"]');
+    const bhWahl = doc.querySelector('select[name="population_upgrades"]');
+    if (!ab || !bhHaken || !bhWahl) return null;
+    // Attribut UND Eigenschaft: im Frame hat das Spiel die Seite schon
+    // bearbeitet, im geparsten Dokument zaehlt nur das Attribut.
+    const an = (el) => el.checked === true || el.hasAttribute("checked");
+    return {
+        abreissen: an(ab),
+        bhPrio: an(bhHaken) ? (parseInt(bhWahl.value, 10) || 0) : 0
+    };
+}
+
 const TEMPLATE_QUEUE_CACHE_MS = 24 * 60 * 60 * 1000;
 
 function refreshTemplateQueue(templateId, callback) {
@@ -39328,7 +39354,11 @@ function refreshTemplateQueue(templateId, callback) {
             try {
                 const steps = parseTemplateQueue(doc);
                 if (!steps) { if (callback) callback(null); return; }
-                const result = { steps, at: Date.now() };
+                // 25.09.2026: auch die zwei Einstellungen der Vorlage -
+                // GodBot ist der Verwalter und muss sie vergleichen koennen.
+                let optionen = null;
+                try { optionen = parseTemplateOptionen(doc); } catch (e) { }
+                const result = { steps, optionen, at: Date.now() };
                 localStorage.setItem("tw_am_template_queue_" + templateId, JSON.stringify(result));
                 console.log(`[TW] Bauschritte fuer Vorlage ${templateId} geladen: ${steps.length} Schritte.`);
                 if (callback) callback(result);
@@ -41882,6 +41912,9 @@ function bauVorlageAblegen(v) {
         })),
         zusatz: Array.isArray(v.zusatz) ? v.zusatz : [0, 0],
         art: v.art !== undefined ? v.art : "4",
+        // 25.09.2026: "Ueberschuessige Gebaeudestufen abreissen" im
+        // Account-Manager - siehe bauVorlageAmOptionen.
+        abreissen: !!v.abreissen,
         geaendertAt: Date.now()
     };
     const i = liste.findIndex(x => String(x.id) === String(id));
@@ -46895,7 +46928,7 @@ function bauAmAbgleich(callback) {
                             return;
                         }
 
-                        amVorlageSchreiben(r.id, auftraege, (w) => {
+                        amVorlageSchreibenMit(r.id, auftraege, bauVorlageAmOptionen(eigen), (w) => {
                             if (!w || !w.ok) {
                                 gruppe.forEach(f => bauVorkommnisMerken("fehler", f.vid,
                                     `${f.dorf}: Vorlage "${name}" angelegt, aber die Bauschritte ` +
@@ -46963,16 +46996,22 @@ function bauAmAbgleich(callback) {
                     refreshTemplateQueue(amId, (r) => {
                         const soll = bauSchritteAusAuftraegen(v.auftraege);
                         const ist = (r && r.steps) ? r.steps : [];
-                        const gleich = soll.length === ist.length && soll.every((x, k) =>
+                        const schritteGleich = soll.length === ist.length && soll.every((x, k) =>
                             ist[k] && ist[k].building === x.building &&
                             (parseInt(ist[k].targetLevel, 10) || 0) === x.targetLevel);
+                        const sollOpt = bauVorlageAmOptionen(v);
+                        const istOpt = r ? r.optionen : null;
+                        const optGleich = amOptionenGleich(sollOpt, istOpt);
 
-                        if (gleich) { setTimeout(weiter, humanDelay(1000, 1600)); return; }
+                        if (schritteGleich && optGleich) { setTimeout(weiter, humanDelay(1000, 1600)); return; }
 
-                        console.log(`[TW] Vorlage "${v.name}": Account-Manager hat ${ist.length} ` +
-                            `Schritte, GodBot ${soll.length} - wird nachgeschrieben.`);
+                        console.log(`[TW] Vorlage "${v.name}": ` +
+                            (schritteGleich ? "" : `Account-Manager hat ${ist.length} Schritte, GodBot ${soll.length}` +
+                                (optGleich ? "" : "; ")) +
+                            (optGleich ? "" : `Einstellungen ${amOptionenText(istOpt)} statt ${amOptionenText(sollOpt)}`) +
+                            ` - wird nachgeschrieben.`);
 
-                        amVorlageSchreiben(amId, v.auftraege, (w) => {
+                        amVorlageSchreibenMit(amId, v.auftraege, sollOpt, (w) => {
                             if (w && w.ok) {
                                 geschrieben++;
                                 bauVorkommnisMerken("geschrieben", "",
@@ -47466,7 +47505,23 @@ function bauAuftraegeAlsQueueData(auftraege) {
         .join(";");
 }
 
-function amVorlageSchreiben(templateId, auftraege, callback) {
+// 25.09.2026 - GODBOT IST DER VERWALTER, AUCH FUER DIE EINSTELLUNGEN.
+//
+// Bis v534 gingen nur queue_data und h raus. Ein Haken, den jemand im
+// Account-Manager gesetzt hatte, wurde dabei stillschweigend geloescht -
+// ein nicht angehakter Kasten wird vom Browser gar nicht gesendet, das
+// Spiel liest sein Fehlen als "aus". Jetzt sagt GodBot beides ausdruecklich
+// (optionen aus bauVorlageAmOptionen):
+//   auto_demolish=1                                   (nur wenn an)
+//   farm_upgrade_toggle=on&population_upgrades=N      (nur wenn an)
+// "on" ist der Wert, den ein Kasten ohne value-Angabe traegt - so steht
+// farm_upgrade_toggle in der Seite.
+// Reihenfolge wie beim Lesen: erst was, dann womit, dann Rueckruf.
+function amVorlageSchreibenMit(templateId, auftraege, optionen, callback) {
+    amVorlageSchreiben(templateId, auftraege, callback, optionen);
+}
+
+function amVorlageSchreiben(templateId, auftraege, callback, optionen) {
     const fertig = (r) => { try { callback && callback(r); } catch (e) { } };
 
     const daten = bauAuftraegeAlsQueueData(auftraege);
@@ -47499,7 +47554,10 @@ function amVorlageSchreiben(templateId, auftraege, callback) {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `queue_data=${encodeURIComponent(daten)}&h=${encodeURIComponent(csrf)}`
+        body: `queue_data=${encodeURIComponent(daten)}` +
+            ((optionen && optionen.abreissen) ? `&auto_demolish=1` : "") +
+            ((optionen && optionen.bhPrio) ? `&farm_upgrade_toggle=on&population_upgrades=${encodeURIComponent(optionen.bhPrio)}` : "") +
+            `&h=${encodeURIComponent(csrf)}`
     }).then(r => r.text()).then(() => {
         // Die Antwort ist die Vorlagenseite; ob das Richtige drinsteht,
         // sagt sie nicht verlaesslich. Also nachlesen und Schritt fuer
@@ -47512,10 +47570,18 @@ function amVorlageSchreiben(templateId, auftraege, callback) {
                 ist[i] && ist[i].building === x.building &&
                 (parseInt(ist[i].targetLevel, 10) || 0) === x.targetLevel);
 
-            if (gleich) {
+            const optOk = !optionen || amOptionenGleich(optionen, r && r.optionen);
+            if (gleich && optOk) {
                 console.log(`[TW] Bauvorlage ${templateId} geschrieben und nachgelesen: ` +
-                    `${soll.length} Schritte stimmen ueberein.`);
+                    `${soll.length} Schritte stimmen ueberein` +
+                    (optionen ? (r && r.optionen
+                        ? `, Einstellungen ebenfalls (${amOptionenText(r.optionen)})`
+                        : `, Einstellungen NICHT nachlesbar`) : "") + `.`);
                 fertig({ ok: true, schritte: soll.length });
+            } else if (gleich) {
+                console.warn(`[TW] Bauvorlage ${templateId}: Schritte stimmen, Einstellungen nicht - ` +
+                    `soll ${amOptionenText(optionen)}, ist ${amOptionenText(r && r.optionen)}.`);
+                fertig({ ok: false, grund: `Einstellungen: ist ${amOptionenText(r && r.optionen)}` });
             } else {
                 console.warn(`[TW] Bauvorlage ${templateId}: nach dem Schreiben stehen ` +
                     `${ist.length} Schritte auf dem Server, erwartet waren ${soll.length}.`);
@@ -47526,6 +47592,45 @@ function amVorlageSchreiben(templateId, auftraege, callback) {
         console.warn("[TW] Bauvorlage schreiben fehlgeschlagen.", e);
         fertig({ ok: false, grund: "Anfrage fehlgeschlagen" });
     });
+}
+
+// Was GodBot fuer eine Vorlage im Account-Manager eingestellt haben will.
+//   abreissen - je Vorlage, im Editor umschaltbar (Standard aus)
+//   bhPrio    - aus der Bauernhof-Wacht, fuer ALLE Vorlagen gleich: sie
+//               ist in GodBot eine Einstellung fuer das ganze Konto. Aus
+//               = 0. Der Account-Manager kennt nur 5/10/15/20 % - die
+//               Marke der Wacht wird auf die naechste Stufe gerundet
+//               (Gleichstand nach oben, 0 % wird 5 %).
+const AM_BH_STUFEN = [5, 10, 15, 20];
+
+function bauVorlageAmOptionen(v) {
+    let bh = 0;
+    try {
+        const c = bhWachtCfg();
+        if (c && c.enabled) {
+            const p = Math.max(5, parseInt(c.minFreiProzent, 10) || 0);
+            bh = AM_BH_STUFEN.reduce((best, s) => {
+                const d = Math.abs(s - p), db = Math.abs(best - p);
+                return (d < db || (d === db && s > best)) ? s : best;
+            }, AM_BH_STUFEN[0]);
+        }
+    } catch (e) { bh = 0; }
+    return { abreissen: !!(v && v.abreissen), bhPrio: bh };
+}
+
+// ist == null: nicht lesbar. Das ist KEIN Grund zum Schreiben - sonst
+// wuerde eine veraenderte Seite jede Vorlage bei jedem Abgleich neu
+// schreiben lassen.
+function amOptionenGleich(soll, ist) {
+    if (!soll || !ist) return true;
+    return !!soll.abreissen === !!ist.abreissen &&
+        (parseInt(soll.bhPrio, 10) || 0) === (parseInt(ist.bhPrio, 10) || 0);
+}
+
+function amOptionenText(o) {
+    if (!o) return "unbekannt";
+    return `Abriss ${o.abreissen ? "an" : "aus"}, Bauernhof-Vorrang ` +
+        (o.bhPrio ? `unter ${o.bhPrio}%` : "aus");
 }
 
 // Dieselbe Umrechnung wie bauSchritteAusPlan, nur ohne Dorf: relative
@@ -48417,6 +48522,19 @@ function bauUiEditorHtml() {
         ${summe ? `<div style="margin-top:8px;padding:7px;background:#141a26;border-radius:4px;">
             <div style="color:#8fa8c7;font-size:10px;margin-bottom:4px;">Summe je Gebäude</div>
             ${summe}</div>` : ""}
+        <div style="margin-top:8px;padding:7px;background:#141a26;border-radius:4px;">
+            <div style="color:#8fa8c7;font-size:10px;margin-bottom:4px;">Im Account-Manager</div>
+            <div style="display:flex;align-items:center;gap:6px;">
+                ${bauUiKnopf("e-abriss", "", e.abreissen ? "Abriss: AN" : "Abriss: aus")}
+                <span style="font-size:10px;color:${e.abreissen ? "#e8734a" : "#667"};">
+                    ${e.abreissen
+                        ? "Der Account-Manager reißt Stufen ab, die über dieser Vorlage liegen."
+                        : "Überschüssige Gebäudestufen werden nicht abgerissen."}</span>
+            </div>
+            <div style="font-size:10px;color:#667;margin-top:4px;">
+                ${escapeAttackPlanHtml(amOptionenText(bauVorlageAmOptionen(e)).replace(/^Abriss (an|aus), /, ""))}
+                - kommt aus der Bauernhof-Wacht und gilt für alle Vorlagen.</div>
+        </div>
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
             ${bauUiKnopf("e-speichern", "", "Speichern")}
             ${bauUiKnopf("e-verwerfen", "", "Verwerfen")}
@@ -49206,6 +49324,9 @@ function bauUiBefehl(cmd, arg, neuZeichnen) {
 
         case "bh-an": {
             const c = bhWachtSetzen({ enabled: !bhWachtCfg().enabled });
+            // 25.09.2026: die Wacht steht als Bauernhof-Vorrang in jeder
+            // Vorlage des Account-Managers - also nachziehen.
+            try { bauAmPruefungAnfordern(); } catch (e) { }
             bauUiMelde(c.enabled
                 ? `Bauernhof-Wacht an - vorziehen unter ${c.minFreiProzent}% freien Plätzen.`
                 : "Bauernhof-Wacht aus - der Bauernhof wird nicht mehr vorgezogen.",
@@ -49243,6 +49364,7 @@ function bauUiBefehl(cmd, arg, neuZeichnen) {
             }
             bhUiProzentEntwurf = null;
             const c = bhWachtSetzen({ minFreiProzent: w });
+            try { bauAmPruefungAnfordern(); } catch (e) { }
             bauUiMelde(w === 0
                 ? "Marke 0% - der Bauernhof wird erst vorgezogen, wenn kein Platz mehr frei ist."
                 : `Marke gespeichert: vorziehen unter ${c.minFreiProzent}% freien Plätzen.`,
@@ -49399,7 +49521,7 @@ function bauUiBefehl(cmd, arg, neuZeichnen) {
             if (!v) { bauUiMelde("Vorlage nicht gefunden.", "#e8734a"); break; }
             bauUiId = v.id;
             bauUiEntwurf = {
-                id: v.id, name: v.name, zusatz: v.zusatz, art: v.art,
+                id: v.id, name: v.name, zusatz: v.zusatz, art: v.art, abreissen: !!v.abreissen,
                 auftraege: v.auftraege.map(a => ({ gebaeude: a.gebaeude, stufen: a.stufen }))
             };
             bauUiAnsicht = "editor";
@@ -49467,6 +49589,15 @@ function bauUiBefehl(cmd, arg, neuZeichnen) {
                 : null;
             if (!g || !bauUiEntwurf) break;
             bauUiEntwurf.auftraege.push({ gebaeude: g, stufen: 1 });
+            break;
+        }
+
+        case "e-abriss": {
+            if (!bauUiEntwurf) break;
+            bauUiEntwurf.abreissen = !bauUiEntwurf.abreissen;
+            bauUiMelde(bauUiEntwurf.abreissen
+                ? "Abriss AN - wird mit dem Speichern in den Account-Manager übernommen."
+                : "Abriss aus - wird mit dem Speichern übernommen.", "#8fd4a0");
             break;
         }
 
