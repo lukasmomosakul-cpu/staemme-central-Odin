@@ -334,6 +334,25 @@ public class MainActivity extends Activity {
    try{ return OdinSkripte.versionAus(OdinSkripte.godbot(MainActivity.this)); }catch(Exception e){ return ""; }
   }
   // Testfassung: mehrere Welten gleichzeitig in einer Ansicht (Messung).
+  // Zuweisung Konto -> Geraet (Dashboard, Einstellungen).
+  @JavascriptInterface public String geraetId(){ return OdinService.geraetId(MainActivity.this); }
+  @JavascriptInterface public String geraetName(){ return OdinService.geraetName(); }
+  @JavascriptInterface public void kontoHierherHolen(String accountId){
+   if(accountId==null||accountId.isEmpty())return;
+   final android.content.Context app=getApplicationContext();
+   new Thread(()->{
+    Object[] e=OdinService.leaseHolen(app,accountId,true);
+    if(e!=null&&(Boolean)e[0]){
+     OdinService.WARTET.remove(accountId);
+     GameWebViewActivity.neuLadenFuer(accountId,"Konto auf dieses Gerät geholt");
+    }
+   }).start();
+  }
+  @JavascriptInterface public void kontoFreigeben(String accountId){
+   if(accountId==null||accountId.isEmpty())return;
+   final android.content.Context app=getApplicationContext();
+   new Thread(()->OdinService.leaseFreigeben(app,accountId)).start();
+  }
   @JavascriptInterface public void parallelTest(String kontenJson){
    runOnUiThread(()->{
     Intent i=new Intent(MainActivity.this,ParallelTestActivity.class);
@@ -554,8 +573,8 @@ public class OdinService extends Service {
    Object[] alt=LEASE.put(konto,e);
    boolean jetzt=(Boolean)e[0], vorher=alt!=null&&(Boolean)alt[0];
    if(jetzt!=vorher||alt==null){
-    String t=jetzt?(erzwingen?"Geräte-Sperre übernommen":"Geräte-Sperre erhalten")
-      :"GodBot pausiert - läuft auf "+e[1];
+    String t=jetzt?(erzwingen?"Konto auf dieses Gerät geholt":"Konto diesem Gerät zugewiesen")
+      :"Konto ist "+e[1]+" zugewiesen - GodBot und Anmeldung pausieren hier";
     OdinLog.schreib(c,"-",jetzt?"info":"WICHTIG",t+" ("+konto.substring(0,Math.min(8,konto.length()))+")");
    }
    return e;
@@ -3308,7 +3327,30 @@ public class GameWebViewActivity extends Activity {
   OdinService.erfolg();
   return b.toString();
  }
+ // Automatische Anmeldung NUR auf dem Geraet, dem das Konto zugewiesen ist.
+ // Sonst werfen sich zwei Geraete mit hinterlegten Zugangsdaten gegenseitig
+ // aus dem Spiel (eine Sitzung je Welt) und melden sich immer wieder an -
+ // ein auffaelliges Muster auf dem Spielserver. Die Pruefung braucht das
+ // Netz, deshalb im Hintergrund; ein freies Konto wird dabei diesem Geraet
+ // zugewiesen.
  private void anmeldenWennNoetig(WebView v){
+  if(gameAccountId.isEmpty())return;
+  if(!OdinVault.vorhanden(this,gameAccountId))return;
+  final String k=gameAccountId;
+  new Thread(()->{
+   boolean darf=OdinService.darfLaufen(getApplicationContext(),k);
+   runOnUiThread(()->{
+    if(darf)anmeldenJetzt(v);
+    else{
+     String h=OdinService.fremdHalter(k);
+     setStatus("Keine automatische Anmeldung - Konto ist "+(h==null?"einem anderen Gerät":h)+" zugewiesen");
+     OdinService.WARTET.add(k);
+     if(leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
+    }
+   });
+  }).start();
+ }
+ private void anmeldenJetzt(WebView v){
   try{
    if(gameAccountId.isEmpty())return;
    String[] d=OdinVault.lesen(this,gameAccountId); if(d==null)return;

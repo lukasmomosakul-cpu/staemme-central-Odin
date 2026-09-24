@@ -89,6 +89,50 @@ export default function EinstellungenSeite() {
     setPtMeldung('Gestartet. Protokoll: je Welt und Minute eine Zeile „Parallel …“.');
   };
 
+  // Zuweisung Konto -> Geraet. Nur das zugewiesene Geraet meldet sich im Spiel
+  // an und laesst GodBot laufen; es haelt die Zuweisung, solange es sich
+  // mindestens alle 3 Minuten meldet.
+  type Zuweisung = { account_id: string; geraet_id: string; geraet_name: string; gemeldet: string };
+  const [zuw, setZuw] = useState<Zuweisung[]>([]);
+  const [meinGeraet, setMeinGeraet] = useState('');
+  const [zwMeldung, setZwMeldung] = useState('');
+  const bruecke = () => (window as unknown as { Android?: {
+    geraetId?: () => string; kontoHierherHolen?: (id: string) => void; kontoFreigeben?: (id: string) => void;
+  } }).Android;
+  const zuwLaden = async () => {
+    if (!supabase || !teamId) return;
+    const { data } = await supabase.from('account_leases').select('account_id,geraet_id,geraet_name,gemeldet').eq('team_id', teamId);
+    setZuw((data ?? []) as Zuweisung[]);
+  };
+  useEffect(() => {
+    try { setMeinGeraet(bruecke()?.geraetId?.() ?? ''); } catch { /* Browser */ }
+    zuwLaden();
+    const t = setInterval(zuwLaden, 20000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamId]);
+  const zuwText = (id: string) => {
+    const z = zuw.find(x => x.account_id === id);
+    if (!z) return 'frei';
+    const alter = Math.round((Date.now() - new Date(z.gemeldet).getTime()) / 60000);
+    const wer = z.geraet_id === meinGeraet ? 'dieses Gerät' : (z.geraet_name || 'anderes Gerät');
+    return alter >= 3 ? `frei (zuletzt ${wer}, vor ${alter} Min)` : `${wer} · aktiv`;
+  };
+  const hierher = (id: string) => {
+    const br = bruecke();
+    if (!br?.kontoHierherHolen) { setZwMeldung('Nur in der Odin-App möglich.'); return; }
+    br.kontoHierherHolen(id);
+    setZwMeldung('Wird übernommen. Das andere Gerät pausiert bei seiner nächsten Prüfung (spätestens 1 Min).');
+    setTimeout(zuwLaden, 3000);
+  };
+  const freigeben = (id: string) => {
+    const br = bruecke();
+    if (!br?.kontoFreigeben) { setZwMeldung('Nur in der Odin-App möglich.'); return; }
+    br.kontoFreigeben(id);
+    setZwMeldung('Freigegeben. Solange die Spielansicht hier offen ist, holt dieses Gerät das Konto sich wieder.');
+    setTimeout(zuwLaden, 3000);
+  };
+
   const abmelden = async () => {
     await supabase?.auth.signOut();
     window.location.href = '/login/';
@@ -159,6 +203,32 @@ export default function EinstellungenSeite() {
         {testMeldung && <div className="muted" style={{ marginTop: 8, marginLeft: 26 }}>{testMeldung}</div>}
 
         {nbMeldung && <div className="muted" style={{ marginTop: 10 }}>{nbMeldung}</div>}
+      </section>
+
+      <section className="section card">
+        <h2>Geräte-Zuweisung</h2>
+        <div className="muted">
+          Jedes Konto wird von genau einem Gerät gespielt: nur dieses meldet sich im Spiel an und
+          lässt GodBot laufen. Andere Geräte zeigen die Welt, pausieren aber. So werfen sich zwei
+          Geräte nicht gegenseitig aus dem Spiel.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+          {konten.map(k => {
+            const z = zuw.find(x => x.account_id === k.id);
+            const meins = z?.geraet_id === meinGeraet;
+            return (
+              <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span>{k.name || k.id.slice(0, 8)}</span>
+                <span className="muted">{k.world || '–'}</span>
+                <span className="muted">· {zuwText(k.id)}</span>
+                {!meins && <button type="button" onClick={() => hierher(k.id)}>Hierher holen</button>}
+                {meins && <button type="button" onClick={() => freigeben(k.id)}>Freigeben</button>}
+              </div>
+            );
+          })}
+          {!konten.length && <div className="muted">Keine Konten gefunden.</div>}
+        </div>
+        {zwMeldung && <div className="muted" style={{ marginTop: 8 }}>{zwMeldung}</div>}
       </section>
 
       <section className="section card">
