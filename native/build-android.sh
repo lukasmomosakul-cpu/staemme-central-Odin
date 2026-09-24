@@ -81,6 +81,8 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
         <activity android:name=".GameWebViewActivity" android:exported="false"
             android:documentLaunchMode="intoExisting" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
+        <activity android:name=".ParallelTestActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <receiver android:name=".OdinAlarmReceiver" android:exported="false" />
         <receiver android:name=".OdinBootReceiver" android:exported="true">
             <intent-filter>
@@ -330,6 +332,14 @@ public class MainActivity extends Activity {
   // Fassung des eingebauten GodBot, fuer die Skriptseite im Dashboard.
   @JavascriptInterface public String godbotVersion(){
    try{ return OdinSkripte.versionAus(OdinSkripte.godbot(MainActivity.this)); }catch(Exception e){ return ""; }
+  }
+  // Testfassung: mehrere Welten gleichzeitig in einer Ansicht (Messung).
+  @JavascriptInterface public void parallelTest(String kontenJson){
+   runOnUiThread(()->{
+    Intent i=new Intent(MainActivity.this,ParallelTestActivity.class);
+    i.putExtra("konten",kontenJson==null?"[]":kontenJson);
+    startActivity(i);
+   });
   }
   @JavascriptInterface public void testBotschutz(){
    try{ startForegroundService(new Intent(MainActivity.this,OdinService.class)); }catch(Exception ignored){}
@@ -1515,6 +1525,127 @@ public final class OdinLog {
  }
 }
 EOF
+cat > "$JAVA_DIR/ParallelTestActivity.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.app.Activity; import android.app.ActivityManager; import android.content.Context;
+import android.os.Bundle; import android.view.View; import android.view.WindowManager;
+import android.webkit.*; import android.widget.*;
+import org.json.JSONArray; import org.json.JSONObject;
+// TESTFASSUNG: mehrere Welten gleichzeitig in EINER Ansicht, ohne GodBot.
+// Frage: laufen alle gezeichneten WebViews ungedrosselt, wie viel Speicher
+// kostet jede Welt, und meldet das Spiel eine Welt ab, wenn eine zweite
+// denselben Login benutzt? Jede Kachel misst jede Sekunde ihren Zeitgeber
+// und meldet einmal pro Minute ins Protokoll:
+//   Takt 60/60 (ungedrosselt) - weniger heisst gedrosselt.
+public class ParallelTestActivity extends Activity {
+ private final java.util.List<WebView> views=new java.util.ArrayList<>();
+ private View decke; private TextView kopf;
+ private final android.os.Handler h=new android.os.Handler(android.os.Looper.getMainLooper());
+ private static final String PROBE="(function(){try{if(window.__odinProbe)return;window.__odinProbe=1;"
+  +"var n=0,s=0,m=0,l=Date.now();"
+  +"setInterval(function(){var t=Date.now(),d=t-l-1000;l=t;if(d<0)d=0;n++;s+=d;if(d>m)m=d;},1000);"
+  +"setInterval(function(){var mem=(window.performance&&performance.memory&&performance.memory.usedJSHeapSize)||0;"
+  +"var gd=window.game_data;var an=!!(gd&&gd.player&&gd.player.id);"
+  +"OdinProbe.bericht(JSON.stringify({n:n,avg:n?Math.round(s/n):-1,max:m,vis:document.visibilityState,"
+  +"mem:Math.round(mem/1048576),an:an,welt:(gd&&gd.world)||location.host,spieler:(gd&&gd.player&&gd.player.name)||''}));"
+  +"n=0;s=0;m=0;},60000);}catch(e){}})();";
+ private class Probe {
+  private final String name;
+  Probe(String n){ name=n; }
+  @JavascriptInterface public void bericht(String json){
+   try{
+    JSONObject o=new JSONObject(json);
+    String t="Takt "+o.optInt("n")+"/60, Abweichung Ø"+o.optInt("avg")+" max "+o.optInt("max")+" ms, "
+      +o.optString("vis")+", JS "+(o.optInt("mem")>0?o.optInt("mem")+" MB":"?")+", "
+      +(o.optBoolean("an")?"angemeldet ("+o.optString("spieler")+")":"NICHT angemeldet")+" · "+o.optString("welt");
+    OdinLog.schreib(ParallelTestActivity.this,"Parallel "+name,o.optInt("n")>=55?"info":"WICHTIG",t);
+   }catch(Exception ignored){}
+  }
+ }
+ @Override protected void onCreate(Bundle b){
+  super.onCreate(b);
+  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  FrameLayout rahmen=new FrameLayout(this);
+  LinearLayout aussen=new LinearLayout(this); aussen.setOrientation(LinearLayout.VERTICAL);
+  LinearLayout leiste=new LinearLayout(this); leiste.setOrientation(LinearLayout.HORIZONTAL);
+  kopf=new TextView(this); kopf.setTextSize(12f); kopf.setPadding(12,8,12,8);
+  Button ab=new Button(this); ab.setText("Abdecken"); ab.setAllCaps(false); ab.setTextSize(12f);
+  Button ende=new Button(this); ende.setText("Beenden"); ende.setAllCaps(false); ende.setTextSize(12f);
+  leiste.addView(kopf,new LinearLayout.LayoutParams(0,-2,1f)); leiste.addView(ab); leiste.addView(ende);
+  aussen.addView(leiste,new LinearLayout.LayoutParams(-1,-2));
+  LinearLayout spalte=new LinearLayout(this); spalte.setOrientation(LinearLayout.VERTICAL);
+  aussen.addView(spalte,new LinearLayout.LayoutParams(-1,0,1f));
+  rahmen.addView(aussen,new FrameLayout.LayoutParams(-1,-1));
+  setContentView(rahmen);
+  JSONArray konten;
+  try{ konten=new JSONArray(getIntent().getStringExtra("konten")); }catch(Exception e){ konten=new JSONArray(); }
+  StringBuilder t=new StringBuilder("Test: ");
+  for(int i=0;i<konten.length()&&i<3;i++){
+   JSONObject k=konten.optJSONObject(i); if(k==null)continue;
+   String id=k.optString("id",""), name=k.optString("name",""), welt=GameWebViewActivity.normWelt(k.optString("world",""));
+   if(id.isEmpty()||welt.isEmpty())continue;
+   WebView v=new WebView(this);
+   String profil="Standard";
+   try{
+    if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)){
+     profil=OdinVault.profilName(this,id);
+     androidx.webkit.ProfileStore.getInstance().getOrCreateProfile(profil);
+     androidx.webkit.WebViewCompat.setProfile(v,profil);
+    }
+   }catch(Exception e){ profil="Fehler: "+e.getMessage(); }
+   WebSettings s=v.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
+   CookieManager.getInstance().setAcceptCookie(true);
+   CookieManager.getInstance().setAcceptThirdPartyCookies(v,true);
+   final String kurz=(name.isEmpty()?welt:name)+"@"+welt;
+   v.addJavascriptInterface(new Probe(kurz),"OdinProbe");
+   v.setWebViewClient(new WebViewClient(){
+    @Override public void onPageFinished(WebView w,String u){ w.evaluateJavascript(PROBE,null); }
+   });
+   OdinLog.schreib(this,"Parallel "+kurz,"info","Kachel "+(i+1)+": Profil "+profil);
+   v.loadUrl("https://"+welt+".die-staemme.de/game.php");
+   spalte.addView(v,new LinearLayout.LayoutParams(-1,0,1f));
+   views.add(v);
+   t.append(i>0?" | ":"").append(kurz);
+  }
+  kopf.setText(t.toString());
+  // Abdecken wie im Dimm-Modus: schwarze Flaeche davor, Helligkeit aus.
+  // Die WebViews darunter werden weiter gezeichnet.
+  decke=new View(this); decke.setBackgroundColor(0xFF000000); decke.setVisibility(View.GONE);
+  decke.setOnClickListener(x->abdecken(false));
+  rahmen.addView(decke,new FrameLayout.LayoutParams(-1,-1));
+  ab.setOnClickListener(x->abdecken(true));
+  ende.setOnClickListener(x->finish());
+  h.postDelayed(speicher,60_000L);
+ }
+ private void abdecken(boolean an){
+  decke.setVisibility(an?View.VISIBLE:View.GONE);
+  WindowManager.LayoutParams lp=getWindow().getAttributes();
+  lp.screenBrightness=an?0f:WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+  getWindow().setAttributes(lp);
+  OdinLog.schreib(this,"-","info","Parallel-Test: "+(an?"abgedeckt":"aufgedeckt"));
+ }
+ // Einmal pro Minute: freier Geraetespeicher und Speicher des App-Prozesses.
+ // Der Renderer der WebViews laeuft in einem eigenen Prozess; seinen Anteil
+ // zeigt der freie Geraetespeicher im Vergleich zum Start.
+ private long startFrei=-1;
+ private final Runnable speicher=new Runnable(){ @Override public void run(){
+  try{
+   ActivityManager am=(ActivityManager)getSystemService(Context.ACTIVITY_SERVICE);
+   ActivityManager.MemoryInfo mi=new ActivityManager.MemoryInfo(); am.getMemoryInfo(mi);
+   long frei=mi.availMem/1048576L; if(startFrei<0)startFrei=frei;
+   long app=android.os.Debug.getPss()/1024L;
+   OdinLog.schreib(ParallelTestActivity.this,"-","info","Parallel-Test Speicher: frei "+frei+" MB (Start "+startFrei
+     +"), App "+app+" MB, "+views.size()+" Welt(en)"+(mi.lowMemory?" - KNAPP":""));
+  }catch(Exception ignored){}
+  h.postDelayed(this,60_000L);
+ }};
+ @Override protected void onDestroy(){
+  h.removeCallbacksAndMessages(null);
+  for(WebView v:views){ try{ v.destroy(); }catch(Exception ignored){} }
+  super.onDestroy();
+ }
+}
+EOF
 cat > "$JAVA_DIR/OdinVault.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.content.Context; import android.content.SharedPreferences;
@@ -1570,6 +1701,40 @@ public final class OdinVault {
   }catch(Exception e){ android.util.Log.e("ODIN_VAULT","lesen",e); return null; }
  }
  public static boolean vorhanden(Context c,String accountId){ return p(c).contains(accountId); }
+ // WebView-Profil je Staemme-LOGIN statt je Odin-Konto. Mehrere Welten mit
+ // demselben Login teilen sich ein Profil - wie mehrere Tabs im selben
+ // Browser: eine Anmeldung, gemeinsame Cookies. Ein anderer Login bekommt
+ // sein eigenes Profil und laeuft getrennt daneben.
+ //
+ // Der Name bleibt "acc_<id>" des Kontos, das den Login zuerst benutzt hat.
+ // So behaelt ein bestehendes Konto sein Profil samt Anmeldung und
+ // GodBot-Daten; neue Welten desselben Logins haengen sich daran. Ohne
+ // hinterlegte Zugangsdaten bleibt es beim Profil je Konto wie bisher.
+ public static String profilName(Context c,String accountId){
+  String eigen="acc_"+accountId.replaceAll("[^A-Za-z0-9]","");
+  try{
+   String[] ich=lesen(c,accountId);
+   if(ich==null||ich[0]==null||ich[0].trim().isEmpty())return eigen;
+   String login=ich[0].trim().toLowerCase(java.util.Locale.ROOT);
+   SharedPreferences zp=c.getSharedPreferences("odin_profile",Context.MODE_PRIVATE);
+   String fest=zp.getString("login:"+login,"");
+   if(!fest.isEmpty())return fest;
+   java.util.List<String> da=new java.util.ArrayList<>();
+   try{ da.addAll(androidx.webkit.ProfileStore.getInstance().getAllProfileNames()); }catch(Exception ignored){}
+   String wahl=eigen;
+   if(!da.contains(eigen)){
+    for(String k:p(c).getAll().keySet()){
+     if(k.endsWith("_ivlen")||k.equals(accountId))continue;
+     String[] t=lesen(c,k);
+     if(t==null||t[0]==null||!login.equals(t[0].trim().toLowerCase(java.util.Locale.ROOT)))continue;
+     String kand="acc_"+k.replaceAll("[^A-Za-z0-9]","");
+     if(da.contains(kand)){ wahl=kand; break; }
+    }
+   }
+   zp.edit().putString("login:"+login,wahl).apply();
+   return wahl;
+  }catch(Exception e){ return eigen; }
+ }
  public static void loeschen(Context c,String accountId){
   p(c).edit().remove(accountId).remove(accountId+"_ivlen").apply();
  }
@@ -2606,7 +2771,7 @@ public class GameWebViewActivity extends Activity {
   if(accountId==null||accountId.isEmpty())return;
   try{
    if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)){
-    String name="acc_"+accountId.replaceAll("[^A-Za-z0-9]","");
+    String name=OdinVault.profilName(this,accountId);
     androidx.webkit.ProfileStore.getInstance().getOrCreateProfile(name);
     androidx.webkit.WebViewCompat.setProfile(v,name);
     setStatus("Profil "+name);

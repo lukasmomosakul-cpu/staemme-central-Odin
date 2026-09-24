@@ -66,6 +66,29 @@ export default function EinstellungenSeite() {
       + `der Wecker nach ${nb.botschutz_wecker_min} Minuten. Ende, sobald du wieder hier bist.`);
   };
 
+  // Testfassung "mehrere Welten gleichzeitig" - nur in der App.
+  type Konto = { id: string; name: string | null; world: string | null };
+  const [konten, setKonten] = useState<Konto[]>([]);
+  const [wahl, setWahl] = useState<string[]>([]);
+  const [ptMeldung, setPtMeldung] = useState('');
+  useEffect(() => {
+    (async () => {
+      if (!supabase || !teamId) return;
+      const { data } = await supabase.from('game_accounts').select('id,name,world').eq('team_id', teamId);
+      setKonten((data ?? []) as Konto[]);
+    })();
+  }, [teamId]);
+  const umschalten = (id: string) => setWahl(w => w.includes(id) ? w.filter(x => x !== id)
+    : (w.length >= 3 ? w : [...w, id]));
+  const parallelStarten = () => {
+    const br = (window as unknown as { Android?: { parallelTest?: (j: string) => void } }).Android;
+    if (!br?.parallelTest) { setPtMeldung('Nur in der Odin-App (ab 1.73) möglich.'); return; }
+    const liste = konten.filter(k => wahl.includes(k.id));
+    if (liste.length < 2) { setPtMeldung('Mindestens zwei Konten mit Welt auswählen.'); return; }
+    br.parallelTest(JSON.stringify(liste));
+    setPtMeldung('Gestartet. Protokoll: je Welt und Minute eine Zeile „Parallel …“.');
+  };
+
   const abmelden = async () => {
     await supabase?.auth.signOut();
     window.location.href = '/login/';
@@ -136,6 +159,31 @@ export default function EinstellungenSeite() {
         {testMeldung && <div className="muted" style={{ marginTop: 8, marginLeft: 26 }}>{testMeldung}</div>}
 
         {nbMeldung && <div className="muted" style={{ marginTop: 10 }}>{nbMeldung}</div>}
+      </section>
+
+      <section className="section card">
+        <h2>Mehrere Welten gleichzeitig – Test</h2>
+        <div className="muted">
+          Öffnet 2–3 Konten nebeneinander in einer Ansicht, noch ohne GodBot. Jede Welt meldet
+          jede Minute, ob ihr Zeitgeber ungedrosselt läuft („Takt 60/60“), wie viel Speicher sie
+          braucht und ob sie angemeldet ist. Welten mit demselben Stämme-Login teilen sich
+          dabei eine Anmeldung. Vorher die Spielansichten dieser Konten schließen.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+          {konten.map(k => (
+            <label key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={wahl.includes(k.id)} disabled={!k.world}
+                     onChange={() => umschalten(k.id)} />
+              <span>{k.name || k.id.slice(0, 8)}</span>
+              <span className="muted">{k.world || 'keine Welt eingetragen'}</span>
+            </label>
+          ))}
+          {!konten.length && <div className="muted">Keine Konten gefunden.</div>}
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <button type="button" onClick={parallelStarten}>Test starten</button>
+        </div>
+        {ptMeldung && <div className="muted" style={{ marginTop: 8 }}>{ptMeldung}</div>}
       </section>
 
       <section className="section card">
