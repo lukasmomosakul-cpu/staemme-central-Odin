@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      533
+// @version      534
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -22907,10 +22907,23 @@ function captchaAutoOpenGrund() {
         }
     }
 
+    // 25.09.2026 - DIE GRENZE DES SPIELS IST JETZT BELEGT, NICHT GELERNT.
+    //
+    // Spielskript Scavenging.dd2ec0.js, CandidateSquad:
+    //   sendable = hasEnoughUnitsToSend()
+    //            = units_calculator.calcPop(unit_counts) >= min_pop_to_send
+    // min_pop_to_send kommt als drittes Argument in new ScavengeMassScreen(...)
+    // - auf de256 steht dort 10 (Seitenquelle scavenge_mass, 25.09. 00:24).
+    // Die Bevoelkerungswerte der Einheiten in derselben Seite decken sich
+    // mit UNIT_VALUE (Speer/Schwert/Axt/Bogen 1, LKav 4, BBogen 5, SKav 6).
+    //
+    // Eine Welle mit 10 oder mehr Bevoelkerung ist fuer das Spiel also NIE
+    // zu klein. Die gelernten Werte (Slot 2: 56, Slot 3: 60, Slot 4: 49)
+    // stammen aus gesperrten Senden-Knoepfen mit anderer Ursache und haben
+    // Slot 4 in 17 Offdoerfern stillgelegt (Welle 48 < 49). Sie werden
+    // nicht mehr beachtet.
     function scavengeMinUnitValue(slotId) {
-        const entry = loadLearnedMinValues()[String(slotId)];
-        const learned = entry && entry.value > 0 ? entry.value : 0;
-        return Math.max(MIN_SCAVENGE_UNIT_VALUE, Math.min(learned, MAX_LEARNED_MIN_UNIT_VALUE));
+        return MIN_SCAVENGE_UNIT_VALUE;
     }
 
     // Wird aufgerufen, wenn das SPIEL eine bereits fertig eingetragene
@@ -22918,6 +22931,20 @@ function captchaAutoOpenGrund() {
     // niedrig; geplant wird kuenftig erst darueber.
     function noteScavengeSendRejected(slotId, unitValue) {
         if (!(unitValue > 0)) return;
+
+        // Siehe scavengeMinUnitValue: ab 10 Bevoelkerung ist die Menge laut
+        // Spielskript ausreichend. Ein gesperrter Knopf hat dann eine andere
+        // Ursache - die Diagnose aus massDiagnoseDisabledSend steht direkt
+        // darueber im Protokoll. Nichts lernen, sonst legt eine Fehldeutung
+        // den Slot 24 Stunden still.
+        if (unitValue >= MIN_SCAVENGE_UNIT_VALUE) {
+            console.warn(
+                `[TW] Raubzug: Slot ${slotId} - Senden gesperrt bei Einheitenwert ${Math.floor(unitValue)}. ` +
+                `Das Spiel verlangt nur ${MIN_SCAVENGE_UNIT_VALUE} - die Menge ist NICHT die Ursache, ` +
+                `Untergrenze bleibt unveraendert. Ursache siehe Diagnose darueber.`
+            );
+            return;
+        }
 
         if (unitValue >= MAX_LEARNED_MIN_UNIT_VALUE) {
             console.warn(
