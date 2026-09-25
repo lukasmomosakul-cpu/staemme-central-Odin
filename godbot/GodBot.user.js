@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      540
+// @version      541
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -1897,7 +1897,33 @@
         return true;
     }
 
+// 25.09.2026 (v541) - DIE SPERRE GILT, BIS SIE ENTWARNT IST.
+//
+// Gemessen am 25.09., 04:48:53-06:22: Botschutz im HINTERGRUND-Rahmen
+// erkannt, haltAllAutomation() schliesst den Rahmen - und ab dann fand
+// die reine DOM-Pruefung nichts mehr. Alle 134 Abfragestellen bekamen
+// "kein Botschutz", die Massenunterstuetzung holte 90 Minuten lang alle
+// 15 s die Truppenuebersicht (35-38 je 10 Min.), waehrend die Abfrage
+// offen stand. Deshalb zaehlt jetzt auch der gemerkte Zustand
+// (botProtectionHandled bzw. tw_bot_gesperrt_seit). Nur der Waechter
+// selbst fragt weiter botMarkerSichtbar() - er muss die Entwarnung
+// ja feststellen koennen.
 function isBotProtectionActive() {
+    if (botMarkerSichtbar()) return true;
+    try { if (botProtectionHandled) return true; } catch (e) { }
+    try {
+        if (botSperreStehtNoch()) {
+            // Wie die Rekonstruktion in startBotProtectionWatchdog(): wer
+            // VOR dem Waechter fragt, soll die bestehende Sperre nicht als
+            // neuen Vorfall melden (haltAllAutomation prueft dieses Flag).
+            botProtectionHandled = true;
+            return true;
+        }
+    } catch (e) { }
+    return false;
+}
+
+function botMarkerSichtbar() {
     // 01.09.2026 - HIER STAND EIN HAUPTSCHALTER, KEIN SOLVER-BYPASS.
     //
     // Entfernt wurde:
@@ -12051,7 +12077,14 @@ function isBotProtectionActive() {
             fetchTabbenTroops(targets[0].villageId, cfg, () => {
                 massSupportJobActive = false;
                 const fresh = loadTabbenRawTroops();
-                if (fresh && fresh.villages) {
+                // 25.09.2026 (v541): Erfolg heisst "jetzt NICHT mehr
+                // veraltet". Vorher reichte irgendein Bestand - also der
+                // alte. Ein gescheiterter Abruf (Botschutz, Zeitueberschreitung)
+                // galt so als Erfolg, setzte checkPending und der naechste
+                // Takt holte 15 s spaeter wieder die Truppenuebersicht:
+                // 35-38 Abrufe je 10 Min., gemessen 25.09. 04:55-06:16.
+                if (fresh && fresh.villages &&
+                    (Date.now() - (fresh.at || 0)) <= mc.troopsMaxAgeSec * 1000) {
                     massSupportTroopFetchFails = 0;
                     massSupportTroopFetchBlockUntilMs = 0;
                     massSupportCheckPending = true;
@@ -19959,6 +19992,18 @@ function isBotProtectionActive() {
     let botClearBelegLaeuft = false;
     let botClearNaechsterBelegAt = 0;
     const BOT_CLEAR_BELEG_ABSTAND_MS = 20000;
+    // 25.09.2026 (v541): Sagt der Server "weiterhin gesperrt", verdoppelt
+    // sich der Abstand bis hoechstens 10 Min. Vorher: 90 Minuten lang alle
+    // 20 s eine Uebersichtsseite (30 je 10 Min.) - genau das Muster, das
+    // die offene Pruefung bewertet. Wer am Geraet ist, bekommt die
+    // Abfrage ueber das einmalige Neuladen ohnehin ins Hauptdokument.
+    const BOT_CLEAR_BELEG_ABSTAND_MAX_MS = 10 * 60 * 1000;
+    let botClearBelegGesperrtZahl = 0;
+    function botClearBelegAbstandMs() {
+        const n = Math.min(10, botClearBelegGesperrtZahl);
+        return Math.min(BOT_CLEAR_BELEG_ABSTAND_MAX_MS,
+            BOT_CLEAR_BELEG_ABSTAND_MS * Math.pow(2, n));
+    }
     // 11.08.2026 von 10 Minuten / 6 Erinnerungen auf stuendlich / 3
     // geaendert. Die Erinnerung selbst fragt nichts beim Spiel ab - sie
     // liest nur die ohnehin geladene Seite und schickt eine Nachricht an
@@ -20853,6 +20898,7 @@ function isBotProtectionActive() {
             botClearBrauchtBeleg = true;
         }
         botClearNaechsterBelegAt = 0;
+        botClearBelegGesperrtZahl = 0;
         // Beides gehoert zu DIESEM Vorfall.
         botClearBelegFrei = false;
         try {
@@ -22304,8 +22350,10 @@ function captchaAutoOpenGrund() {
             }
         }
 
-        // hCaptcha-Erkennung auf DOM-Ebene (braucht kein game_data)
-        if (isBotProtectionActive()) {
+        // hCaptcha-Erkennung auf DOM-Ebene (braucht kein game_data).
+        // v541: bewusst botMarkerSichtbar() - isBotProtectionActive()
+        // meldet die gemerkte Sperre, der Waechter braucht den Messwert.
+        if (botMarkerSichtbar()) {
             botClearStreakMs = 0;
             // Der Termin fuer die HUB-Kachel ist damit hinfaellig.
             try { localStorage.removeItem(BOT_ENTWARNUNG_AB_KEY); } catch (e) { }
@@ -22409,7 +22457,7 @@ function captchaAutoOpenGrund() {
                 if (botClearBelegLaeuft) return;
 
                 if (Date.now() >= botClearNaechsterBelegAt) {
-                    botClearNaechsterBelegAt = Date.now() + BOT_CLEAR_BELEG_ABSTAND_MS;
+                    botClearNaechsterBelegAt = Date.now() + botClearBelegAbstandMs();
                     botClearBelegLaeuft = true;
 
                     probeBotProtectionState((urteil) => {
@@ -22425,9 +22473,12 @@ function captchaAutoOpenGrund() {
                             // Noch gesperrt. Die Wartezeit faengt von vorn an,
                             // damit nicht im Sekundentakt nachgefragt wird.
                             botClearStreakMs = 0;
+                            botClearBelegGesperrtZahl++;
+                            botClearNaechsterBelegAt = Date.now() + botClearBelegAbstandMs();
                             try { localStorage.removeItem(BOT_ENTWARNUNG_AB_KEY); } catch (e) { }
                             console.log("[TW] Botschutz: Nachprüfung sagt weiterhin gesperrt - " +
-                                "die Abfrage ist noch offen.");
+                                "die Abfrage ist noch offen. Nächste Nachprüfung in " +
+                                Math.round(botClearBelegAbstandMs() / 1000) + "s.");
                             return;
                         }
                         console.log(`[TW] Botschutz: Nachprüfung ohne Ergebnis (${urteil}) - ` +
@@ -22462,6 +22513,7 @@ function captchaAutoOpenGrund() {
             botProtectionHandled = false;
             botClearBrauchtBeleg = false;
             botClearBelegFrei = false;
+            botClearBelegGesperrtZahl = 0;
             try { localStorage.removeItem(BOT_ENTWARNUNG_AB_KEY); } catch (e) { }
             // Der Beweis gehoert zu DIESEM Vorfall. Bliebe er liegen,
             // wuerde botSchutzSchnappschussNehmen() beim naechsten Fund
@@ -39962,6 +40014,23 @@ function computeVillageResourceDiagnosis(villageId) {
     const villageFreeFarm = stockSnapshot && stockSnapshot.farmMax != null && stockSnapshot.farmUsed != null
         ? Math.max(0, stockSnapshot.farmMax - stockSnapshot.farmUsed) : null;
 
+    // 25.09.2026 (v541) - OHNE VORLAGE KEIN BEDARF, ALSO GEBERDORF.
+    // Beleg 452|451: kein Plan, keine Vorlage -> templateQueueCache leer,
+    // der Bauernhof fehlte im Bedarf, und um 07:57 gab das Dorf Holz und
+    // Lehm ab, waehrend der Notausbau genau dort Rohstoffe brauchte.
+    if (!templateQueueCache) {
+        try {
+            const nurBh = bhSchritteErgaenzen([], stockSnapshot);
+            if (nurBh) {
+                templateQueueCache = { steps: nurBh, at: Date.now(), quelle: "Bauernhof-Wacht" };
+                console.log(`[TW] Rohstoff-Fix: Dorf ${villageId} - ohne Vorlage, aber die ` +
+                    `Plätze laufen aus - Bauernhof als Bedarf eingetragen.`);
+            }
+        } catch (e) {
+            console.warn("[TW] Rohstoff-Fix: Bauernhof-Bedarf ohne Vorlage fehlgeschlagen.", e);
+        }
+    }
+
     // Denselben Bauernhof sehen wie der Bauautomat - Begruendung bei
     // bhSchritteErgaenzen(). Wirkt fuer GodBot-Plaene UND fuer Vorlagen
     // des Account-Managers.
@@ -40886,6 +40955,21 @@ function readBuildState(win, doc) {
     // Vorausschau auf den Stand NACH der Bauschleife - siehe
     // bhVorausBelegung(). Schlaegt das Lesen fehl, bleibt es beim
     // Stand von jetzt; die Wacht arbeitet dann wie in v446.
+    // 25.09.2026 (v541): Vorrat und Speicher aus game_data - dieselbe
+    // Quelle wie pop/pop_max oben. Damit wird vor dem Senden gerechnet,
+    // statt den Server "Nicht genügend Rohstoffe" sagen zu lassen.
+    stand.vorrat = null;
+    try {
+        const gv = win && win.game_data && win.game_data.village;
+        if (gv) {
+            const w = Math.floor(Number(gv.wood)), st = Math.floor(Number(gv.stone)),
+                ir = Math.floor(Number(gv.iron)), sm = Math.floor(Number(gv.storage_max));
+            if ([w, st, ir, sm].every(x => isFinite(x) && x >= 0) && sm > 0) {
+                stand.vorrat = { wood: w, stone: st, iron: ir, storageMax: sm };
+            }
+        }
+    } catch (e) { }
+
     try {
         stand.bhVoraus = bhVorausBelegung(stand, readBuildQueueOrders(doc));
     } catch (e) {
@@ -41365,8 +41449,33 @@ function bhNotAusbauBeiAmDorf(stand) {
         stand.zusatzProzent > BAU_MAX_ZUSATZ_PROZENT) return null;
 
     const lage = `nur ${Math.round(frei * 10) / 10}% freie Plätze ` +
-        `(Marke ${cfg.minFreiProzent}%), und der Account-Manager führt dieses ` +
-        `Dorf - seine Vorlage hat keinen Bauernhof. `;
+        `(Marke ${cfg.minFreiProzent}%)` +
+        (stand.accountManagerAktiv
+            ? `, und der Account-Manager führt dieses Dorf - seine Vorlage hat keinen Bauernhof. `
+            : ` - im Account-Manager steht keine Vorlage. `);
+
+    // 25.09.2026 (v541) - SELBST RECHNEN STATT DEN SERVER ABLEHNEN LASSEN.
+    // can_build steht immer auf true, forecast fehlt nicht selten. Folge
+    // (452|451): alle 20-30 Min. "Nicht genügend Rohstoffe", obwohl Vorrat
+    // und Kosten auf derselben Seite stehen.
+    const roh = bhRohstoffLage(stand, b);
+    if (roh && roh.speicherZuKlein) {
+        return {
+            art: "vormerken", index: -1, gebaeude: BH_GEBAEUDE,
+            zielStufe: b.zielStufe, reichtAbMs: null, amAusnahme: true,
+            speicherZuKlein: true,
+            grund: `Bauernhof-Notausbau: ${lage}${b.name} Stufe ${b.zielStufe}: ` +
+                   `der Speicher ist zu klein (${roh.text}) - erst den Speicher ausbauen.`
+        };
+    }
+    if (roh && !roh.reicht && !b.vorschau) {
+        return {
+            art: "vormerken", index: -1, gebaeude: BH_GEBAEUDE,
+            zielStufe: b.zielStufe, reichtAbMs: null, amAusnahme: true,
+            grund: `Bauernhof-Notausbau: ${lage}${b.name} Stufe ${b.zielStufe}: ` +
+                   `Rohstoffe fehlen noch (${roh.text}).`
+        };
+    }
 
     // Baubar, aber die Rohstoffe fehlen noch: vormerken statt scheitern.
     if (b.vorschau) {
@@ -41389,6 +41498,27 @@ function bhNotAusbauBeiAmDorf(stand) {
         zielStufe: b.zielStufe,
         grund: `Bauernhof-Notausbau: ${lage}Die Vorlage wird kurz ausgetragen, ` +
                `damit ${b.name} Stufe ${b.zielStufe} in die Schleife kann.`
+    };
+}
+
+// 25.09.2026 (v541): Kosten gegen Vorrat und Speicher. null, wenn eins
+// von beiden nicht lesbar ist - dann bleibt es beim bisherigen Weg.
+function bhRohstoffLage(stand, b) {
+    if (!stand || !stand.vorrat || !b || !b.kosten) return null;
+    const v = stand.vorrat, k = b.kosten;
+    const RES = [["wood", "Holz"], ["stone", "Lehm"], ["iron", "Eisen"]];
+    if (!RES.some(([r]) => (k[r] || 0) > 0)) return null;
+    const zuGross = RES.filter(([r]) => (k[r] || 0) > v.storageMax);
+    if (zuGross.length) {
+        return {
+            speicherZuKlein: true, reicht: false,
+            text: zuGross.map(([r, n]) => `${n} ${k[r]} > Speicher ${v.storageMax}`).join(", ")
+        };
+    }
+    const fehlt = RES.filter(([r]) => (k[r] || 0) > (v[r] || 0));
+    return {
+        speicherZuKlein: false, reicht: !fehlt.length,
+        text: fehlt.map(([r, n]) => `${n} ${v[r]}/${k[r]}`).join(", ")
     };
 }
 
@@ -42266,7 +42396,9 @@ function bhStufeAusKapazitaet(farmMax) {
 // Gibt eine ERGAENZTE Schrittliste zurueck, oder null wenn nichts zu
 // tun ist. Die uebergebene Liste wird nicht veraendert.
 function bhSchritteErgaenzen(steps, stockSnapshot) {
-    if (!Array.isArray(steps) || !steps.length) return null;
+    // v541: leere Liste erlaubt - ein Dorf ganz ohne Vorlage braucht den
+    // Bauernhof genauso (452|451 am 25.09.).
+    if (!Array.isArray(steps)) return null;
     if (!stockSnapshot) return null;
 
     let cfg = null;
@@ -42859,6 +42991,28 @@ function bhTauschErledigtMerken(villageId, sperrMs) {
     } catch (e) { }
 }
 
+// 25.09.2026 (v541): Fehlversuche je Dorf, fuer den wachsenden Aufschub.
+const BH_TAUSCH_FEHL_KEY = "tw_bh_tausch_fehlversuche";
+function bhTauschFehlversuchZaehlen(villageId) {
+    try {
+        const d = JSON.parse(localStorage.getItem(BH_TAUSCH_FEHL_KEY) || "{}");
+        const alt = d[String(villageId)];
+        // Nach einem Tag ohne Versuch beginnt die Zaehlung von vorn.
+        const n = (alt && Date.now() - (alt.at || 0) < 24 * 60 * 60 * 1000) ? (alt.n || 0) + 1 : 1;
+        d[String(villageId)] = { n: n, at: Date.now() };
+        localStorage.setItem(BH_TAUSCH_FEHL_KEY, JSON.stringify(d));
+        return n;
+    } catch (e) { return 1; }
+}
+function bhTauschFehlversucheZuruecksetzen(villageId) {
+    try {
+        const d = JSON.parse(localStorage.getItem(BH_TAUSCH_FEHL_KEY) || "{}");
+        if (!d[String(villageId)]) return;
+        delete d[String(villageId)];
+        localStorage.setItem(BH_TAUSCH_FEHL_KEY, JSON.stringify(d));
+    } catch (e) { }
+}
+
 function bhTauschErledigt(villageId) {
     try {
         const d = JSON.parse(localStorage.getItem(BH_TAUSCH_ERLEDIGT_KEY) || "{}");
@@ -42903,12 +43057,12 @@ function bhTauschFuerDorf(villageId, onDone) {
     // "3 von 3 Doerfern haben jetzt einen Bauernhof in der Schleife" -
     // gebaut wurde aber nur in einem. "ok" heisst nur, dass nichts
     // schiefging; "nichts zu tun" ist auch ok.
-    const fertig = (ok, text, gebaut) => {
+    const fertig = (ok, text, gebaut, pauseMs) => {
         if (raus) return;
         raus = true;
         if (wachhund) clearTimeout(wachhund);
         try { iframe.remove(); } catch (e) { }
-        try { onDone && onDone(ok, text, !!gebaut); } catch (e) { }
+        try { onDone && onDone(ok, text, !!gebaut, pauseMs || 0); } catch (e) { }
     };
 
     if (isBotProtectionActive()) {
@@ -42948,6 +43102,29 @@ function bhTauschFuerDorf(villageId, onDone) {
         if (phase === 1) {
             const schritt = bhNotAusbauBeiAmDorf(stand);
             if (!schritt) { fertig(true, "nichts zu tun - die Plätze reichen"); return; }
+            // 25.09.2026 (v541): "vormerken" ist KEIN Erfolg. Bisher galt es
+            // als erledigt (6 h Ruhe) - das war richtig, nur kam der Fall nie
+            // vor, weil forecast fehlte. Jetzt entscheidet die eigene
+            // Rechnung, und zwar VOR dem Austragen: kein Austragen, kein
+            // Wiedereintragen, kein Bauauftrag - null zusaetzliche Abrufe.
+            if (schritt.art === "vormerken") {
+                if (schritt.speicherZuKlein) {
+                    try {
+                        bauVorkommnisMerken("fehler", villageId,
+                            `Bauernhof Stufe ${schritt.zielStufe} passt nicht in den Speicher - ` +
+                            `erst den Speicher ausbauen. GodBot versucht es erst in 6 Std. wieder.`, true);
+                    } catch (e) { }
+                    fertig(false, schritt.grund, false, BH_TAUSCH_ERLEDIGT_MS);
+                    return;
+                }
+                let pause = 0;
+                if (schritt.reichtAbMs && schritt.reichtAbMs > Date.now()) {
+                    pause = Math.min(4 * 60 * 60 * 1000,
+                        Math.max(20 * 60 * 1000, schritt.reichtAbMs - Date.now() + 60000));
+                }
+                fertig(false, schritt.grund, false, pause);
+                return;
+            }
             if (schritt.art !== "amtausch") { fertig(true, schritt.grund); return; }
 
             const v = bhAmVorlageVon(villageId);
@@ -43022,6 +43199,14 @@ function bhTauschFuerDorf(villageId, onDone) {
         if (stand.plaetzeMax !== null && stand.plaetzeBelegt !== null &&
             stand.plaetzeBelegt >= stand.plaetzeMax) {
             abschluss(false, "Bauschleife voll");
+            return;
+        }
+
+        // v541: auch nach dem Austragen noch einmal rechnen - zwischen den
+        // beiden Ladungen kann ein Haendler Rohstoffe abgeholt haben.
+        const rohNachher = bhRohstoffLage(stand, b);
+        if (rohNachher && !rohNachher.reicht) {
+            abschluss(false, "Rohstoffe fehlen noch (" + rohNachher.text + ") - nichts gesendet");
             return;
         }
 
@@ -43138,13 +43323,14 @@ function bhTauschLauf(vonHand) {
             return;
         }
         const vid = liste[i++];
-        bhTauschFuerDorf(vid, (ok, text, warGebaut) => {
+        bhTauschFuerDorf(vid, (ok, text, warGebaut, pauseVorgabeMs) => {
             // Auch ein "nichts zu tun" ist erledigt: die Bauseite hat
             // gerade gesagt, dass nichts ansteht. Ohne Merker kaeme das
             // Dorf beim naechsten Takt sofort wieder.
             if (ok) {
                 if (warGebaut) gebaut++; else nichtsZuTun++;
                 bhTauschErledigtMerken(vid);
+                bhTauschFehlversucheZuruecksetzen(vid);
             }
             else {
                 // 25.09.2026 GEMESSEN (Diagnose 22:43-00:25): Ein
@@ -43157,7 +43343,15 @@ function bhTauschLauf(vonHand) {
                 // kam es sogar alle paar Sekunden (22:45: 15x in einer
                 // Minute). Jetzt: 20-30 Minuten Pause fuer dieses Dorf.
                 // Der Knopf "von Hand" loescht den Merker weiterhin.
-                const pauseMs = humanDelay(20 * 60 * 1000, 30 * 60 * 1000);
+                // 25.09.2026 (v541): wachsender Aufschub 30/60/120/240 Min.
+                // - oder die Vorgabe des Ablaufs (Speicher zu klein: 6 Std.,
+                // Rohstoffe laut Server ab ...).
+                const nFehl = bhTauschFehlversuchZaehlen(vid);
+                const stufenMin = [30, 60, 120, 240];
+                const basisMin = stufenMin[Math.min(stufenMin.length - 1, nFehl - 1)];
+                const pauseMs = pauseVorgabeMs > 0
+                    ? pauseVorgabeMs
+                    : humanDelay(basisMin * 60 * 1000, basisMin * 60 * 1000 * 1.2);
                 bhTauschErledigtMerken(vid, pauseMs);
                 console.warn(`[TW] Bauernhof-Tausch: ${bauDorfKurz(vid)} - ${text} - ` +
                     `naechster Versuch fruehestens in ${Math.round(pauseMs / 60000)} Min.`);
