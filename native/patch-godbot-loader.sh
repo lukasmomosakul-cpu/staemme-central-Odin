@@ -445,7 +445,11 @@ new = ''' private void loadEnabledScripts(WebView v){
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$"))return;
   // Bei aktiver Zugangssperre bewusst nichts injizieren, damit die Captcha-
   // Seite unveraendert bleibt. Marker aus dem echten Seitenquelltext.
-  v.evaluateJavascript("(function(){try{return !!document.getElementById('botprotection_quest')}catch(e){return false}})()",bp->{
+  // 1.94.0: Nicht nur #botprotection_quest (nur aus der Desktop-Seite
+  // belegt, die App laedt das mobile Layout), sondern dieselben layoutfreien
+  // Marker wie GodBots docHasBotProtection(): body[data-bot-protect] und
+  // das hCaptcha-Element.
+  v.evaluateJavascript("(function(){try{return !!(document.getElementById('botprotection_quest')||(document.body&&document.body.hasAttribute('data-bot-protect'))||document.querySelector('iframe[src*=hcaptcha],.h-captcha,#h-captcha,[data-hcaptcha-widget-id]'))}catch(e){return false}})()",bp->{
    if("true".equals(bp)){
     OdinService.sperre(gameAccountId,true);
     setStatus("Zugangssperre aktiv - pausiert");

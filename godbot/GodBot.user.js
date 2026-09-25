@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      541
+// @version      542
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -77,6 +77,66 @@
     //     Angriffsplaner nicht blockieren.
     //   - Harte Groeszengrenze mit Ringpuffer, sonst laeuft localStorage
     //     ueber Nacht voll und reiszt die uebrigen tw_-Schluessel mit.
+    // === v542: SPEICHERWAECHTER ============================================
+    // localStorage hat je Welt-Origin ein festes Kontingent (ueblich ~5 MB).
+    // GodBot legt dort Protokolle ab, die im schlimmsten Fall zusammen ueber
+    // 4 MB belegen (Anfragen-Protokoll ~2 MB, Seitenmitschnitt bis 2 MB,
+    // Konsole 300 KB). Ist es voll, wirft setItem QuotaExceededError - und
+    // fast jede Schreibstelle faengt das still ab. Dann gingen auch
+    // Einstellungen und Plaene verloren, ohne dass es jemand merkt.
+    //
+    // Deshalb hier EINMAL zentral: scheitert ein Schreibzugriff am
+    // Kontingent, werden zuerst die Protokolle gekuerzt (nie Einstellungen),
+    // der Zugriff einmal wiederholt und der Vorfall laut gemeldet.
+    (function speicherWaechterEinbauen() {
+        try {
+            if (Storage.prototype.__twSpeicherWaechter) return;
+            const vorher = Storage.prototype.setItem;
+            const warn = console.warn.bind(console);   // vor dem Konsolen-Mitschnitt: keine Rueckkopplung
+            const istVoll = (e) => !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014);
+            let letzteMeldung = 0;
+            const freiraeumen = (ls) => {
+                const frei = [];
+                const kuerzen = (k, fn) => {
+                    try {
+                        const alt = ls.getItem(k);
+                        if (alt === null) return;
+                        const neu = fn(alt);
+                        if (neu === null) ls.removeItem(k); else vorher.call(ls, k, neu);
+                        frei.push(k + " " + Math.round(alt.length / 1024) + "→" + (neu === null ? 0 : Math.round(neu.length / 1024)) + " KB");
+                    } catch (e) { }
+                };
+                // Reihenfolge: was am wenigsten wert ist, zuerst.
+                kuerzen("tw_page_capture_store", () => null);
+                kuerzen("tw_request_log", (a) => {
+                    try { const l = JSON.parse(a); return Array.isArray(l) ? JSON.stringify(l.slice(-1000)) : null; } catch (e) { return null; }
+                });
+                kuerzen("tw_console_log", (a) => a.slice(-Math.floor(a.length / 4)));
+                return frei;
+            };
+            Storage.prototype.setItem = function (k, v) {
+                try {
+                    return vorher.call(this, k, v);
+                } catch (e) {
+                    if (!istVoll(e) || this !== window.localStorage) throw e;
+                    const frei = freiraeumen(this);
+                    const jetzt = Date.now();
+                    if (jetzt - letzteMeldung > 10 * 60 * 1000) {
+                        letzteMeldung = jetzt;
+                        let belegt = 0;
+                        try { for (let i = 0; i < this.length; i++) { const kk = this.key(i); belegt += kk.length + (this.getItem(kk) || "").length; } } catch (e2) { }
+                        const text = "Achtung: Speicher voll beim Schreiben von " + k + " (" + Math.round(belegt / 1024) +
+                            " KB belegt nach dem Kürzen) - gekürzt: " + (frei.join(", ") || "nichts zu kürzen");
+                        warn("[TW] " + text);
+                        try { odin.protokoll(text); } catch (e3) { }
+                    }
+                    return vorher.call(this, k, v);   // zweiter Versuch; scheitert er, wirft er wie bisher
+                }
+            };
+            Storage.prototype.__twSpeicherWaechter = true;
+        } catch (e) { }
+    })();
+
     const CONSOLE_LOG_KEY = "tw_console_log";
     const CONSOLE_LOG_ENABLED_KEY = "tw_console_log_enabled";
     const CONSOLE_LOG_MAX_CHARS = 300000;   // rund 300 KB
@@ -577,7 +637,12 @@
     // mehrere tausend Eintraege langes Feld pro Anfrage neu zu
     // serialisieren.
     const REQUEST_LOG_KEY = "tw_request_log";
-    const REQUEST_LOG_MAX = 20000;
+    // v542: 20000 -> 5000. Bei ~100 Bytes je Eintrag waren das ~2 MB, die
+    // alle 15 s komplett gelesen, gefiltert und neu geschrieben wurden - der
+    // groesste Posten im Speicher und spuerbare Rechenzeit auf dem Handy.
+    // 5000 Eintraege reichen fuer mehrere Tage Auswertung (Taktwaechter und
+    // Botschutzzaehler rechnen hoechstens 7 Tage zurueck).
+    const REQUEST_LOG_MAX = 5000;
     const REQUEST_LOG_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
     const REQUEST_LOG_FLUSH_MS = 15000;
 

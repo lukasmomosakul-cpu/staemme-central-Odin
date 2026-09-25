@@ -119,6 +119,60 @@ function status(m, stufe) {
 }
 
 // ===================================================================
+// Spielserver-Zaehler wie in der App (anfrageZaehlen, build-android.sh):
+// alle 10 Min eine Zeile "Spielserver N Min: X Anfragen, Y Seitenaufrufe"
+// ins Protokoll. Seitenaufrufe tragen ein *. Die App sieht jede Anfrage der
+// WebView; hier zaehlen Seitenaufruf, Anfragen der Seite (Resource Timing)
+// und Anfragen in den Hintergrundrahmen - verschachtelte Rahmen fehlen, die
+// Zahl ist also eine Untergrenze. Stand je Tab in sessionStorage, damit er
+// Seitenwechsel ueberlebt.
+// ===================================================================
+var SZ = 'odinpc_sz';
+function szStand() { return jparse(sget(SZ), null) || { seit: Date.now(), n: 0, s: 0, k: {} }; }
+function szZaehlen(url, seite) {
+    try {
+        var u = new URL(url, location.href);
+        if (!/die-staemme\.de$/.test(u.hostname) || !/\/game\.php$/.test(u.pathname)) return;
+        var p = u.searchParams, sc = p.get('screen'), mo = p.get('mode');
+        var aj = p.get('ajaxaction') || p.get('ajax') || p.get('action');
+        var k = (sc || '?') + (mo ? '/' + mo : '') + (aj ? ':' + aj : '') + (seite ? '*' : '');
+        var z = szStand(); z.n++; if (seite) z.s++; z.k[k] = (z.k[k] || 0) + 1;
+        sset(SZ, JSON.stringify(z));
+    } catch (e) { }
+}
+function szBericht() {
+    var z = szStand(), jetzt = Date.now();
+    if (jetzt - z.seit < 600000) return;
+    sset(SZ, JSON.stringify({ seit: jetzt, n: 0, s: 0, k: {} }));
+    if (!z.n) return;
+    var l = Object.keys(z.k).map(function (k) { return [k, z.k[k]]; }).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 10);
+    status('Spielserver ' + Math.round((jetzt - z.seit) / 60000) + ' Min: ' + z.n + ' Anfragen, ' + z.s + ' Seitenaufrufe - ' +
+        l.map(function (x) { return x[0] + ' ' + x[1]; }).join(', '), 'info');
+}
+(function szStarten() {
+    szZaehlen(location.href, true);
+    try {
+        new PerformanceObserver(function (liste) {
+            liste.getEntries().forEach(function (e) { szZaehlen(e.name, false); });
+        }).observe({ type: 'resource', buffered: true });
+    } catch (e) { }
+    // Hintergrundrahmen (GodBot arbeitet dort): eigene Resource-Timing-Liste
+    // je Dokument. Der Rahmen selbst zaehlt schon oben (initiatorType iframe).
+    var gesehen = new WeakMap();
+    setInterval(function () {
+        for (var i = 0; i < window.frames.length; i++) {
+            try {
+                var w = window.frames[i], d = w.document, n = gesehen.get(d) || 0;
+                var es = w.performance.getEntriesByType('resource');
+                for (var j = n; j < es.length; j++) szZaehlen(es[j].name, false);
+                gesehen.set(d, es.length);
+            } catch (e) { }
+        }
+        szBericht();
+    }, 5000);
+})();
+
+// ===================================================================
 // Supabase: Anmeldung und REST
 // ===================================================================
 function netzFehler(e) {
