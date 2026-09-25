@@ -61,7 +61,9 @@ js = r"""
  window.Odin={istApp:true,version:'__VERSION__',
   termin:function(schluessel,art,ms){try{OdinNative.termin(String(schluessel),String(art),String(Math.round(Number(ms)||0)));}catch(e){}},
   lebt:function(){try{OdinNative.lebt();}catch(e){}},
-  protokoll:function(t){try{OdinNative.status(String(t));}catch(e){}}};
+  protokoll:function(t){try{OdinNative.status(String(t));}catch(e){}},
+  // GodBot-Leiste der Spielansicht (nativ). Nur oertlich, keine Netzanfrage.
+  stand:function(j){try{OdinNative.steuerstand(String(j));}catch(e){}}};
  // --- Downloads ------------------------------------------------------------
  // GodBot speichert Protokolle ueber einen Blob und einen <a download>-Klick.
  // In Firefox geht das, in einer WebView passiert nichts: blob:-Adressen
@@ -173,7 +175,7 @@ js = r"""
   'tw_farm_template_counts','tw_farm_template_units'];
  // Nur hochladen: der Wecker und die Uebersicht brauchen sie, uebernommen
  // werden duerfen sie nie - sonst kippt der Stand des zweiten Geraets.
- var NUR_HOCH=['tw_next_recheck_at','tw_loop_active','tw_scavenge_slots','tw_aktivitaet'];
+ var NUR_HOCH=['tw_next_recheck_at','tw_loop_active','tw_scavenge_slots','tw_aktivitaet','tw_odin_steuerstand'];
 
  function istVolatil(k){
   if(IMMER.indexOf(k)>=0)return false;
@@ -309,6 +311,36 @@ js = r"""
   };
   window.addEventListener('pagehide',flush);
   window.__odinSyncFlush=flush;
+ })();
+ // --- Steuerzentrale: Befehle aus der App ------------------------------------
+ // Die App schreibt einzelne Einstellungen in godbot_befehle. Hier werden sie
+ // abgeholt und an GodBot gegeben - ueber dieselben Schalter wie im Spiel.
+ // Liegt GodBot noch nicht bereit ('spaeter'), bleibt der Befehl offen und
+ // kommt beim naechsten Abholen wieder dran.
+ (function(){
+  var erledigt={};
+  window.__odinBefehle=function(liste){
+   var st=window.GodBotSteuerung;
+   if(!st||typeof st.anwenden!=='function'||!liste||!liste.length)return;
+   var n=0;
+   for(var i=0;i<liste.length;i++){
+    var b=liste[i], r;
+    if(!b||erledigt[b.id])continue;
+    try{ r=st.anwenden(String(b.pfad), b.wert, Date.parse(b.erstellt_at)||0); }
+    catch(e){ r={ok:false,text:'Fehler: '+(e&&e.message)}; }
+    if(r&&r.spaeter)continue;
+    erledigt[b.id]=1; n++;
+    try{ OdinNative.befehlErledigt(String(b.id), !!(r&&r.ok), String((r&&r.text)||'')); }catch(e){}
+   }
+   if(n&&window.__odinSyncFlush)setTimeout(window.__odinSyncFlush,300);
+  };
+  function holen(){
+   if(!window.GodBotSteuerung)return;
+   try{ if(OdinNative.syncReady())OdinNative.befehleAbrufen(); }catch(e){}
+  }
+  setTimeout(holen,2500);
+  setInterval(holen,10000);
+  document.addEventListener('visibilitychange',function(){ if(!document.hidden)setTimeout(holen,500); });
  })();
  // --------------------------------------------------------------------------
  // Reihenfolge: erst GodBot (eingebaut), dann je Zusatzskript dessen

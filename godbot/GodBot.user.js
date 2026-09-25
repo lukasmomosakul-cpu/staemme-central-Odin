@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      535
+// @version      536
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32907,6 +32907,26 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                 root.style.left = "50%";
                 root.style.transform = "translate(-50%, -50%)";
             }
+
+            // In der App: zugeklappt unsichtbar (die GodBot-Leiste der App
+            // zeigt den Zustand), aufgeklappt als Blatt am unteren Rand -
+            // wie ein Bedienfeld der App, nicht wie ein Fenster darueber.
+            if (odinEingebettet()) {
+                if (minimized) {
+                    root.style.display = "none";
+                } else {
+                    root.style.display = "flex";
+                    root.style.top = "";
+                    root.style.left = "0";
+                    root.style.right = "0";
+                    root.style.bottom = "0";
+                    root.style.transform = "none";
+                    root.style.width = "100%";
+                    root.style.maxHeight = "72vh";
+                    root.style.borderRadius = "14px 14px 0 0";
+                    root.style.borderBottom = "none";
+                }
+            }
         }
 
         const minToggleEl = btn("–", () => {
@@ -32939,6 +32959,15 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             }
         });
         right.appendChild(minToggleEl);
+
+        // Fuer die Leiste der App (siehe odinOeffnen): auf-/zuklappen ueber
+        // DENSELBEN Knopf - mit derselben Rueckfrage, wenn gerade etwas
+        // laeuft - und die Einstellungen.
+        TW_AKTIONEN.hub = {
+            istZu: () => minimized,
+            umschalten: () => minToggleEl.click()
+        };
+        TW_AKTIONEN.einstellungen = () => openSettings();
 
         header.appendChild(left);
         header.appendChild(right);
@@ -60621,6 +60650,232 @@ if (location.href.includes("mode=scavenge_mass")) {
     // Wird beim Aufbau des Overlays gefuellt. Die eigenstaendigen Fenster
     // greifen ueber diese Bruecke auf die Schleifen-Schalter zu.
     const TW_AKTIONEN = {};
+
+    // === STEUERUNG AUS DER APP (25.09.2026) ================================
+    // Die App ist die Oberflaeche, GodBot die Arbeit. Bis v535 floss der
+    // Abgleich nur nach oben - die App konnte zusehen, aber nichts
+    // schalten. Jetzt gibt es zwei feste Wege:
+    //
+    //   runter: GodBotSteuerung.anwenden(pfad, wert, erstelltMs)
+    //           Aufgerufen vom Bootstrap der App mit Befehlen aus der
+    //           Tabelle godbot_befehle. Geschaltet wird ueber DIESELBEN
+    //           Funktionen wie die Knoepfe im Spiel (TW_AKTIONEN) - es
+    //           gibt keinen zweiten Weg, der sich anders verhaelt.
+    //   hoch:   tw_odin_steuerstand - der Ist-Zustand aller Schalter.
+    //           Geschrieben bei jeder Aenderung und sonst alle 2 Minuten
+    //           (Lebenszeichen fuer die App).
+    //
+    // Einzelne Werte statt des ganzen tw_settings-Blocks: ein Befehl
+    // aendert genau ein Feld und kann damit nie einen aelteren Stand
+    // ueber einen neueren legen.
+    const ODIN_STEUERSTAND_KEY = "tw_odin_steuerstand";
+    const ODIN_BEFEHL_VERFALL_MS = 60 * 60 * 1000;
+
+    function odinCfgTeil(name) {
+        let s = {};
+        try { s = loadSettings() || {}; } catch (e) { s = {}; }
+        return Object.assign({}, (DEFAULT_SETTINGS && DEFAULT_SETTINGS[name]) || {}, s[name] || {});
+    }
+
+    function odinCfgTeilSetzen(name, aenderung) {
+        let s = {};
+        try { s = loadSettings() || {}; } catch (e) { s = {}; }
+        s[name] = Object.assign({}, (DEFAULT_SETTINGS && DEFAULT_SETTINGS[name]) || {}, s[name] || {}, aenderung);
+        saveSettings(s);
+        return s[name];
+    }
+
+    // Schalter: an() liest den Zustand, aktion ist der Knopf im Spiel.
+    const ODIN_SCHALTER = {
+        raubzug:   { an: () => localStorage.getItem("tw_loop_active") === "1", aktion: "scavenge" },
+        farmen:    { an: () => localStorage.getItem("tw_farm_loop_active") === "1", aktion: "farm" },
+        bau:       { an: () => bauLoopAn(), aktion: "bau", ersatz: () => toggleBauLoop() },
+        rohstoffe: { an: () => !!odinCfgTeil("resourceAuto").enabled, aktion: "resources" },
+        bhwacht:   {
+            an: () => !!bhWachtCfg().enabled,
+            setzen: (an) => {
+                bhWachtSetzen({ enabled: an });
+                try { bauAmPruefungAnfordern(); } catch (e) { }
+            }
+        }
+    };
+
+    // Takte "von-bis" in Minuten. Grenzen bewusst eng: ein Tippfehler in
+    // der App darf keinen Takt von einer Minute erzeugen.
+    const ODIN_TAKTE = {
+        "farmen.takt":    { teil: "farmLoop",     min: 5,  max: 240 },
+        "raubzug.takt":   { teil: "recheck",      min: 10, max: 480 },
+        "rohstoffe.takt": { teil: "resourceAuto", min: 15, max: 480 }
+    };
+
+    function odinSteuerstand() {
+        const out = { schalter: {}, werte: {} };
+        Object.keys(ODIN_SCHALTER).forEach(k => {
+            try { out.schalter[k] = !!ODIN_SCHALTER[k].an(); } catch (e) { out.schalter[k] = null; }
+        });
+        try { out.werte["bhwacht.prozent"] = bhWachtCfg().minFreiProzent; } catch (e) { }
+        Object.keys(ODIN_TAKTE).forEach(p => {
+            try {
+                const c = odinCfgTeil(ODIN_TAKTE[p].teil);
+                out.werte[p] = { von: c.minMinutes, bis: c.maxMinutes };
+            } catch (e) { }
+        });
+        try {
+            out.naechst = {
+                raubzug: parseInt(localStorage.getItem("tw_next_recheck_at") || "0", 10) || null,
+                farmen: parseInt(localStorage.getItem("tw_next_farm_burst_at") || "0", 10) || null,
+                rohstoffe: parseInt(localStorage.getItem("tw_next_resource_scan_at") || "0", 10) || null
+            };
+        } catch (e) { }
+        try { out.laeuft = currentProcessOwner() || null; } catch (e) { out.laeuft = null; }
+        try { out.botschutz = !!isBotProtectionActive(); } catch (e) { out.botschutz = null; }
+        return out;
+    }
+
+    let odinStandVorher = "", odinStandGeschriebenAt = 0;
+    function odinSteuerstandMelden(sofort) {
+        try {
+            const st = odinSteuerstand();
+            const kern = JSON.stringify({ s: st.schalter, w: st.werte, l: st.laeuft, b: st.botschutz });
+            const jetzt = Date.now();
+            if (!sofort && kern === odinStandVorher && jetzt - odinStandGeschriebenAt < 2 * 60 * 1000) return;
+            odinStandVorher = kern;
+            odinStandGeschriebenAt = jetzt;
+            try { odinLeisteMelden(); } catch (e) { }
+            st.at = jetzt;
+            st.version = (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) || "";
+            localStorage.setItem(ODIN_STEUERSTAND_KEY, JSON.stringify(st));
+        } catch (e) { }
+    }
+
+    function odinBefehlAnwenden(pfad, wert, erstelltMs) {
+        pfad = String(pfad || "");
+        if (erstelltMs && Date.now() - erstelltMs > ODIN_BEFEHL_VERFALL_MS) {
+            return { ok: false, text: "verfallen - lag über 60 Min ungelesen" };
+        }
+
+        // --- Schalter ---------------------------------------------------
+        if (Object.prototype.hasOwnProperty.call(ODIN_SCHALTER, pfad)) {
+            const sch = ODIN_SCHALTER[pfad];
+            const soll = wert === true || wert === "an" || wert === 1 || wert === "1";
+            const vorher = !!sch.an();
+            if (vorher === soll) {
+                odinSteuerstandMelden(true);
+                return { ok: true, text: `${pfad} war schon ${soll ? "an" : "aus"}` };
+            }
+            if (sch.setzen) {
+                sch.setzen(soll);
+            } else {
+                const f = TW_AKTIONEN[sch.aktion] || sch.ersatz;
+                // Die Knoepfe entstehen mit der Oberflaeche. Ist sie noch
+                // nicht aufgebaut, bleibt der Befehl liegen und kommt beim
+                // naechsten Abholen wieder dran - nicht als Fehler werten.
+                if (typeof f !== "function") return { ok: false, spaeter: true, text: "GodBot noch nicht bereit" };
+                f();
+            }
+            const nachher = !!sch.an();
+            odinSteuerstandMelden(true);
+            if (nachher !== soll) {
+                let grund = "";
+                try { if (isBotProtectionActive()) grund = " - Botschutz aktiv"; } catch (e) { }
+                console.warn(`[TW] App-Befehl ${pfad}=${soll ? "an" : "aus"} nicht wirksam${grund}.`);
+                return { ok: false, text: `nicht geschaltet${grund}` };
+            }
+            console.log(`[TW] App-Befehl: ${pfad} ${soll ? "eingeschaltet" : "ausgeschaltet"}.`);
+            return { ok: true, text: `${pfad} ${soll ? "an" : "aus"}` };
+        }
+
+        // --- Bauernhof-Wacht-Marke ------------------------------------------
+        if (pfad === "bhwacht.prozent") {
+            const w = parseInt(wert, 10);
+            if (isNaN(w) || w < 0 || w > 100) return { ok: false, text: `ungültiger Wert ${wert}` };
+            bhWachtSetzen({ minFreiProzent: w });
+            try { bauAmPruefungAnfordern(); } catch (e) { }
+            odinSteuerstandMelden(true);
+            console.log(`[TW] App-Befehl: Bauernhof-Wacht-Marke ${w}%.`);
+            return { ok: true, text: `Marke ${w}%` };
+        }
+
+        // --- Takte ----------------------------------------------------------
+        if (Object.prototype.hasOwnProperty.call(ODIN_TAKTE, pfad)) {
+            const t = ODIN_TAKTE[pfad];
+            const von = parseInt(wert && wert.von, 10), bis = parseInt(wert && wert.bis, 10);
+            if (isNaN(von) || isNaN(bis) || von < t.min || bis > t.max || von > bis) {
+                return { ok: false, text: `ungültig: ${von}-${bis} (erlaubt ${t.min}-${t.max} Min, von ≤ bis)` };
+            }
+            odinCfgTeilSetzen(t.teil, { minMinutes: von, maxMinutes: bis });
+            odinSteuerstandMelden(true);
+            console.log(`[TW] App-Befehl: ${pfad} ${von}-${bis} Min.`);
+            return { ok: true, text: `${von}-${bis} Min` };
+        }
+
+        return { ok: false, text: `unbekannte Einstellung "${pfad}"` };
+    }
+
+    // --- Eingebettet in die App -----------------------------------------
+    // Die Spielansicht der App hat eine eigene GodBot-Leiste (nativ, unter
+    // der Kopfzeile). Dann braucht GodBot keine eigene schwebende
+    // Kurzmeldung mehr: zugeklappt ist GodBot unsichtbar, aufgeklappt
+    // erscheint er als Blatt am unteren Rand. Im Browser (Gist) fehlt
+    // window.Odin.stand - dort bleibt alles wie es war.
+    function odinEingebettet() {
+        try {
+            return !!(window.Odin && window.Odin.istApp && typeof window.Odin.stand === "function");
+        } catch (e) { return false; }
+    }
+
+    // Die Leiste der App fragt NICHT, sie bekommt: alle 5 s und bei jeder
+    // Aenderung sofort. Nur oertlich (Bruecke), keine Netzanfrage.
+    function odinLeisteMelden() {
+        if (!odinEingebettet()) return;
+        try {
+            const st = odinSteuerstand();
+            st.at = Date.now();
+            try { st.hubOffen = !!(TW_AKTIONEN.hub && !TW_AKTIONEN.hub.istZu()); } catch (e) { }
+            window.Odin.stand(JSON.stringify(st));
+        } catch (e) { }
+    }
+
+    const ODIN_OEFFNEN = {
+        raubzug: () => openScavengeWindow(),
+        farmen: () => openFarmPlanWindow(),
+        rohstoffe: () => openVillageOverviewPopup(),
+        bau: () => openManagerPopup(),
+        angriffe: () => openAttackPlanPopup(),
+        rausstellen: () => openTabbenPopup(),
+        statistik: () => openStatsPopup(),
+        einstellungen: () => { if (TW_AKTIONEN.einstellungen) TW_AKTIONEN.einstellungen(); },
+        godbot: () => { if (TW_AKTIONEN.hub) TW_AKTIONEN.hub.umschalten(); }
+    };
+
+    function odinOeffnen(modul) {
+        const f = ODIN_OEFFNEN[String(modul || "")];
+        if (!f) return { ok: false, text: `unbekannt: ${modul}` };
+        try { f(); } catch (e) { return { ok: false, text: String(e && e.message || e) }; }
+        setTimeout(odinLeisteMelden, 50);
+        return { ok: true };
+    }
+
+    // Langer Druck in der Leiste: schalten wie der lange Druck auf der
+    // Kachel im Spiel - und die Leiste sofort nachziehen.
+    function odinUmschalten(modul) {
+        const sch = ODIN_SCHALTER[String(modul || "")];
+        if (!sch) return { ok: false, text: `nicht schaltbar: ${modul}` };
+        const r = odinBefehlAnwenden(modul, !sch.an(), 0);
+        odinLeisteMelden();
+        return r;
+    }
+
+    try {
+        window.GodBotSteuerung = {
+            anwenden: odinBefehlAnwenden,
+            stand: odinSteuerstand,
+            oeffnen: odinOeffnen,
+            umschalten: odinUmschalten
+        };
+        setInterval(() => { odinSteuerstandMelden(false); odinLeisteMelden(); }, 5000);
+        setTimeout(() => { odinSteuerstandMelden(true); odinLeisteMelden(); }, 1500);
+    } catch (e) { }
 
     // Rueckmeldung IM Fenster. Der Toast erscheint am Bildschirmrand und
     // liegt je nach Fensterlage darunter oder ausserhalb des Blicks - beim

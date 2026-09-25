@@ -2683,7 +2683,112 @@ public class GameWebViewActivity extends Activity {
    }
   });
   bar.addView(min,new LinearLayout.LayoutParams(-2,-2));
-  return bar;
+  // Kopf = Titelleiste + GodBot-Leiste. Als EIN Kind der Wurzel, damit die
+  // WebView weiter an Position 1 steht (holeAusFenster setzt sie dort ein).
+  LinearLayout kopf=new LinearLayout(this); kopf.setOrientation(LinearLayout.VERTICAL);
+  kopf.addView(bar,new LinearLayout.LayoutParams(-1,-2));
+  kopf.addView(buildGodBotLeiste(),new LinearLayout.LayoutParams(-1,-2));
+  return kopf;
+ }
+ // --- GodBot-Leiste (1.79.0) ------------------------------------------------
+ // GodBot gehoert zur App. Sein Zustand steht hier nativ unter der
+ // Kopfzeile statt als schwebendes Kaestchen in der Spielseite. Bedienung
+ // wie bei den Kacheln im Spiel: Tippen oeffnet den Bereich, langer Druck
+ // schaltet ihn an oder aus. GodBot liefert den Stand selbst (Odin.stand),
+ // alle 5 s und bei jeder Aenderung - die Leiste fragt nie nach.
+ private HorizontalScrollView godbotLeiste;
+ private final java.util.Map<String,TextView> godbotChips=new java.util.LinkedHashMap<>();
+ private org.json.JSONObject godbotStand=null;
+ private boolean godbotTickerAn=false;
+ // Schluessel, Beschriftung, Name der Prozesssperre in GodBot (laeuft gerade)
+ private static final String[][] GODBOT_BEREICHE={
+  {"raubzug","Raubzug","scavenge"},{"farmen","Farmen","farm"},{"bau","Bau","bau"},
+  {"rohstoffe","Rohstoffe","resources"},{"angriffe","Angriffe","attack"},
+  {"rausstellen","Rausstellen","rausstellen"},{"statistik","Statistik",""},{"godbot","GodBot ⋯",""}};
+ private static boolean godbotSchaltbar(String k){
+  return "raubzug".equals(k)||"farmen".equals(k)||"bau".equals(k)||"rohstoffe".equals(k);
+ }
+ private android.graphics.drawable.GradientDrawable godbotChipGrund(int farbe,int rand){
+  android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
+  g.setCornerRadius(60f); g.setColor(farbe); g.setStroke(2,rand); return g;
+ }
+ private android.view.View buildGodBotLeiste(){
+  HorizontalScrollView sc=new HorizontalScrollView(this);
+  sc.setHorizontalScrollBarEnabled(false); sc.setBackgroundColor(0xFF1E2430);
+  LinearLayout row=new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL);
+  row.setPadding(18,10,18,10); row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+  for(String[] b:GODBOT_BEREICHE){
+   final String key=b[0];
+   TextView c=new TextView(this); c.setText(b[1]); c.setTextSize(12f); c.setTextColor(0xFFC9D4E3);
+   c.setSingleLine(true); c.setPadding(26,11,26,11);
+   c.setBackground(godbotChipGrund(0xFF2A3342,0xFF3A4556));
+   LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.rightMargin=12; c.setLayoutParams(lp);
+   c.setOnClickListener(x->godbotJs("GodBotSteuerung.oeffnen('"+key+"')&&''",null));
+   c.setOnLongClickListener(x->{
+    if(!godbotSchaltbar(key))return false;
+    x.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+    godbotJs("(function(){var r=GodBotSteuerung.umschalten('"+key+"');return (r&&r.ok?'':'nicht geschaltet: ')+((r&&r.text)||'')})()",
+     r->{ try{ Object o=new org.json.JSONTokener(r).nextValue(); if(o instanceof String)setStatus("GodBot: "+o); }catch(Exception ignored){} });
+    return true;
+   });
+   godbotChips.put(key,c); row.addView(c);
+  }
+  sc.addView(row);
+  // Erst zeigen, wenn GodBot sich gemeldet hat - ohne GodBot (Geraete-
+  // Sperre, Zugangssperre) waere die Leiste eine leere Behauptung.
+  sc.setVisibility(android.view.View.GONE);
+  godbotLeiste=sc;
+  return sc;
+ }
+ private void godbotJs(String ausdruck,ValueCallback<String> cb){
+  final WebView w=webView; if(w==null)return;
+  final String js="(function(){try{if(!window.GodBotSteuerung)return null;return "+ausdruck+"}catch(e){return null}})()";
+  runOnUiThread(()->{ try{ w.evaluateJavascript(js,cb); }catch(Exception ignored){} });
+ }
+ private void godbotStandEmpfangen(String json){
+  try{ godbotStand=new org.json.JSONObject(json); }catch(Exception e){ return; }
+  runOnUiThread(()->{
+   if(godbotLeiste!=null&&godbotLeiste.getVisibility()!=android.view.View.VISIBLE)
+    godbotLeiste.setVisibility(android.view.View.VISIBLE);
+   godbotLeisteZeichnen();
+   if(!godbotTickerAn&&godbotLeiste!=null){ godbotTickerAn=true; godbotTicker(); }
+  });
+ }
+ // Restzeiten laufen nativ weiter, auch wenn GodBot gerade gedrosselt ist.
+ private void godbotTicker(){
+  if(godbotLeiste==null||isFinishing()){ godbotTickerAn=false; return; }
+  godbotLeiste.postDelayed(()->{ godbotLeisteZeichnen(); godbotTicker(); },15000L);
+ }
+ private void godbotLeisteZeichnen(){
+  org.json.JSONObject st=godbotStand; if(st==null)return;
+  org.json.JSONObject sch=st.optJSONObject("schalter"), nx=st.optJSONObject("naechst");
+  String laeuft=st.optString("laeuft","");
+  boolean bot=st.optBoolean("botschutz",false), hub=st.optBoolean("hubOffen",false);
+  long jetzt=System.currentTimeMillis();
+  // Seit ueber 30 s nichts gehoert: GodBot schlaeft (gedrosselt, Seite
+  // laedt). Der Stand bleibt stehen, wirkt aber zurueckgenommen.
+  boolean frisch=jetzt-st.optLong("at",0)<30000L;
+  for(String[] b:GODBOT_BEREICHE){
+   TextView c=godbotChips.get(b[0]); if(c==null)continue;
+   String name=b[1]; int punkt=0, grund=0xFF2A3342, rand=0xFF3A4556, schrift=0xFFC9D4E3; String zusatz="";
+   boolean istLauf=!b[2].isEmpty()&&b[2].equals(laeuft);
+   if(godbotSchaltbar(b[0])&&sch!=null&&sch.has(b[0])){
+    boolean an=sch.optBoolean(b[0],false);
+    if(bot&&an){ punkt=0xFFE05555; zusatz=" · Botschutz"; rand=0xFF7A2E2E; }
+    else if(istLauf){ punkt=0xFFFFD24A; zusatz=" · läuft"; rand=0xFF8A7430; grund=0xFF332D1E; }
+    else if(an){
+     punkt=0xFF4CC38A; rand=0xFF2F6B52; grund=0xFF1F3129;
+     long t=nx!=null?nx.optLong(b[0],0):0;
+     if(t>0){ long m=(t-jetzt)/60000L; zusatz=t<=jetzt?" · fällig":(m<1?" · <1 Min":" · "+m+" Min"); }
+    } else { punkt=0xFF5B6678; schrift=0xFF8A96A8; }
+   } else if(istLauf){ punkt=0xFFFFD24A; zusatz=" · läuft"; rand=0xFF8A7430; grund=0xFF332D1E; }
+   else if("godbot".equals(b[0])&&hub){ grund=0xFF3A3222; rand=0xFFB8893F; schrift=0xFFEAD7B0; }
+   android.text.SpannableStringBuilder t=new android.text.SpannableStringBuilder();
+   if(punkt!=0){ t.append("● "); t.setSpan(new android.text.style.ForegroundColorSpan(punkt),0,1,0); }
+   t.append(name).append(zusatz);
+   c.setText(t); c.setTextColor(schrift); c.setBackground(godbotChipGrund(grund,rand));
+   c.setAlpha(frisch?1f:0.6f);
+  }
  }
  private android.view.View buildFooter(String accountsJson,String activeName){
   HorizontalScrollView sc=new HorizontalScrollView(this); sc.setBackgroundColor(0xFFF2F2F2);
@@ -3599,7 +3704,42 @@ public class GameWebViewActivity extends Activity {
     // Meldung kommt aus dem Bootstrap inklusive Schluesselnamen.
     return true;
    }catch(Exception e){ setStatus("Abgleich schreiben fehlgeschlagen: "+e.getMessage()); return false; }
-  } @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
+  }
+  // Steuerzentrale (1.79.0): Befehle der App an GodBot. Nur offene Zeilen
+  // dieses Kontos, aelteste zuerst. Erledigt wird ueber eine RPC, weil
+  // HttpURLConnection kein PATCH kann.
+  // Nicht blockierend: GodBot arbeitet teils sekundengenau (Rausstellen).
+  // Eine Netzabfrage auf dem JS-Faden alle 10 s waere dort spuerbar. Das
+  // Ergebnis kommt deshalb per evaluateJavascript zurueck.
+  // GodBot meldet seinen Stand fuer die GodBot-Leiste (Odin.stand).
+  @JavascriptInterface public void steuerstand(String json){ if(json!=null)godbotStandEmpfangen(json); }
+  @JavascriptInterface public void befehleAbrufen(){
+   if(!syncReady())return;
+   new Thread(()->{
+    try{
+     String q="godbot_befehle?select=id,pfad,wert,erstellt_at&erledigt_at=is.null&order=id.asc&limit=20&account_id=eq."
+       +java.net.URLEncoder.encode(gameAccountId,"UTF-8");
+     String json=supaRequest("GET",q,null);
+     if(json==null)return; json=json.trim();
+     if(!json.startsWith("[")||json.equals("[]"))return;
+     final String js="(function(){try{if(window.__odinBefehle)window.__odinBefehle("+json+")}catch(e){}})()";
+     runOnUiThread(()->{ try{ if(webView!=null)webView.evaluateJavascript(js,null); }catch(Exception ignored){} });
+    }catch(Exception ignored){}
+   }).start();
+  }
+  @JavascriptInterface public void befehlErledigt(String id,boolean ok,String ergebnis){
+   if(!syncReady())return;
+   new Thread(()->{
+    try{
+     org.json.JSONObject b=new org.json.JSONObject();
+     b.put("p_id",Long.parseLong(id)); b.put("p_ok",ok); b.put("p_ergebnis",ergebnis==null?"":ergebnis);
+     supaRequest("POST","rpc/godbot_befehl_erledigt",b.toString());
+     OdinLog.schreib(GameWebViewActivity.this,gameAccountId,ok?"info":"warn",
+       "App-Befehl "+(ok?"übernommen":"nicht übernommen")+": "+(ergebnis==null?"":ergebnis));
+    }catch(Exception e){ setStatus("Befehl bestätigen fehlgeschlagen: "+e.getMessage()); }
+   }).start();
+  }
+  @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
  private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
 }
 EOF

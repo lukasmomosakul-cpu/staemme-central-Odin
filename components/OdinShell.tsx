@@ -18,6 +18,7 @@ const SEITEN: [string, string][] = [
 
 const FUSS: [string, string, string][] = [
   ['⌂', 'Dashboard', '/'],
+  ['⚔', 'GodBot', '/godbot/'],
   ['📊', 'Statistik', '/statistik/'],
   ['📋', 'Protokoll', '/protokoll/'],
   ['⚙', 'Einstellungen', '/einstellungen/'],
