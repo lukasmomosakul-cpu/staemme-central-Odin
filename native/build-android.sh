@@ -469,6 +469,7 @@ public class OdinService extends Service {
  // und damit auch die Botschutz-Meldung. Mit dem Erneuerungstoken holt sich
  // der Dienst selbst einen neuen.
  static volatile long letzteErneuerung=0L;
+ static volatile boolean letzteErneuerungOk=false;
  static volatile int authFehler=0;
  // Jede geglueckte Anfrage beweist, dass der Token taugt. Ohne das blieb ein
  // einzelner Fehlschlag fuer immer stehen und die Warnung kam alle 30 Minuten
@@ -767,8 +768,12 @@ public class OdinService extends Service {
    ladeStatisch(c);
    if(url.isEmpty()||key.isEmpty()||refresh.isEmpty())return false;
    long jetzt=System.currentTimeMillis();
-   if(jetzt-letzteErneuerung<20_000L)return false;
-   letzteErneuerung=jetzt;
+   // 1.93.1: Hat ein anderer Faden in den letzten 20 s erneuert, liegt schon
+   // ein frischer Token vor - dann ist das ein Erfolg, kein Fehlschlag.
+   // Vorher kam hier false, und der Aufrufer warf den 401 weiter:
+   // "Abgleich schreiben fehlgeschlagen: JWT expired" (15./21./23./25.09.).
+   if(jetzt-letzteErneuerung<20_000L)return letzteErneuerungOk;
+   letzteErneuerung=jetzt; letzteErneuerungOk=false;
    HttpURLConnection x=(HttpURLConnection)new URL(url+"/auth/v1/token?grant_type=refresh_token").openConnection();
    x.setRequestMethod("POST"); x.setRequestProperty("apikey",key);
    x.setRequestProperty("Content-Type","application/json");
@@ -806,6 +811,7 @@ public class OdinService extends Service {
    sichern(c,url,key,token,team,refresh);
    sitzungFrisch();
    OdinLog.schreib(c,"-","info","Zugangstoken erneuert (Anlass: "+anlass+")");
+   letzteErneuerungOk=true;
    return true;
   }catch(Exception e){
    authFehler++;
@@ -1303,6 +1309,20 @@ public class OdinService extends Service {
     +java.net.URLEncoder.encode(team,"UTF-8")));
   OdinAlarm.zuruecksetzen(this);
   synchronized(faellig){ faellig.clear(); }
+  // 1.93.1: Termine geloeschter Accounts verwerfen. APP_TERMINE ueberlebt
+  // in den SharedPreferences - 25.09. 11:02 weckte noch fuer 50ddc1ae,
+  // eine Stunde nachdem der Account geloescht war.
+  {
+   java.util.Set<String> ids=new java.util.HashSet<>();
+   for(int i=0;i<accs.length();i++)ids.add(accs.getJSONObject(i).optString("id",""));
+   int weg=0;
+   for(String k:new java.util.ArrayList<>(APP_TERMINE.keySet())){
+    Object[] t=APP_TERMINE.get(k); if(t==null)continue;
+    String kt=(String)t[1];
+    if(!kt.isEmpty()&&!ids.contains(kt)){ APP_TERMINE.remove(k); weg++; }
+   }
+   if(weg>0){ appTermineSichern(this); protokoll(this,"info","wecker",weg+" Termine gelöschter Accounts verworfen"); }
+  }
   int gesamt=0, uebersprungen=0;
   for(int i=0;i<accs.length();i++){
    JSONObject a=accs.getJSONObject(i);
@@ -1356,7 +1376,8 @@ public class OdinService extends Service {
   // 1.86.0: Haben ALLE Accounts keine Daten (z.B. alle Module aus), gibt es
   // schlicht nichts zu wecken - das ist kein Fehler. FEHLER bleibt, wenn
   // Accounts Daten liefern und trotzdem kein Termin herauskommt.
-  boolean nurOhneDaten=uebersprungen>0&&uebersprungen>=accs.length();
+  // 1.93.1: auch ohne jeden Account (0 >= 0) ist das kein Fehler.
+  boolean nurOhneDaten=uebersprungen>=accs.length();
   protokoll(this,(gesamt>0||offen>0)?"WICHTIG":(nurOhneDaten?"info":"FEHLER"),"wecker",
     "Termine: "+offen+" vorgemerkt, "+gesamt+" Alarme, "
     +uebersprungen+" Accounts ohne Daten übersprungen");

@@ -225,8 +225,15 @@ js = r"""
   if(IMMER.indexOf(k)>=0)return true;
   try{ return !localStorage.getItem('odin_vol_'+k); }catch(e){ return true; }
  }
+ // 25.09.2026 (1.93.1): Abgleich NUR auf einer Spielwelt (deXXX.die-staemme.de).
+ // Auf der Anmeldeseite www. lief der Erstabgleich in den localStorage
+ // der falschen Origin: 20 Schluessel und der Freischaltcode-Zustand lagen
+ // danach dort, die Welt selbst bekam nichts.
+ var WELT=/^[a-z]+[0-9]+[.]die-staemme[.]de$/i.test(location.hostname);
  try{
-  if(OdinNative.syncReady()){
+  if(!WELT){
+   OdinNative.status('Abgleich übersprungen - keine Spielwelt ('+location.hostname+')');
+  }else if(OdinNative.syncReady()){
    // NUR EINMAL je Profil. Bei jedem Seitenaufruf zu hydrieren erzeugt eine
    // Rueckkopplung: GodBot loescht bestimmte Schluessel absichtlich als
    // Erledigt-Markierung, wir schreiben sie aus der Datenbank zurueck, GodBot
@@ -268,6 +275,7 @@ js = r"""
  // Schreibzugriffe sammeln und gebuendelt zurueckschreiben, damit nicht jede
  // Einzelaenderung eine eigene Anfrage ausloest.
  (function(){
+  if(!WELT)return;
   var pending={}, timer=null;
   // Am Prototyp ansetzen, damit auch Schreibzugriffe aus Arbeitsrahmen
   // (iframes) erfasst werden - die haben ein eigenes localStorage-Objekt.
@@ -289,9 +297,12 @@ js = r"""
      // WAS gesichert wurde, und kann Rauschen nicht von Nutzlast trennen.
      // Erst nach erfolgreichem Schreiben merken - sonst ginge ein Wert, der
      // bei einem Fehler verworfen wurde, nie mehr hoch.
-     if(OdinNative.settingsSave(JSON.stringify(batch))===true)
+     // 1.93.1: "gesichert" nur nach Erfolg - vorher stand es auch vor
+     // "Abgleich schreiben fehlgeschlagen" (25.09. 09:53:30).
+     if(OdinNative.settingsSave(JSON.stringify(batch))===true){
       for(var hk in hashes){ try{ rohSetzen('odin_lh_'+hk,hashes[hk]); }catch(eh2){} }
-     OdinNative.status('gesichert: '+Object.keys(batch).join(', ').slice(0,120));
+      OdinNative.status('gesichert: '+Object.keys(batch).join(', ').slice(0,120));
+     }
    } }catch(e){}
   }
   var letzterPuls=0;
@@ -460,6 +471,10 @@ new = ''' private void loadEnabledScripts(WebView v){
     // GodBot kommt aus der APK - kein Netz, kein Gist, keine Ablaufzeit.
     String gb=OdinSkripte.godbot(this);
     boolean gbAn=gb.length()>1000;
+    // 1.93.1: GodBot nur auf einer Spielwelt, nicht auf der Anmeldeseite www.
+    // Dort schrieb er seinen Freischaltcode-Zustand in die falsche Origin.
+    try{ String host=android.net.Uri.parse(seite).getHost();
+     if(gbAn&&(host==null||!host.toLowerCase().matches("[a-z]+[0-9]+[.]die-staemme[.]de")))gbAn=false; }catch(Exception ignored){}
     // Geraete-Sperre: fuehrt ein anderes Geraet dieses Konto, bleibt GodBot
     // hier aus. Zusatzskripte und manuelles Spielen laufen weiter.
     if(gbAn&&!gameAccountId.isEmpty()&&!OdinService.darfLaufen(this,gameAccountId)){
