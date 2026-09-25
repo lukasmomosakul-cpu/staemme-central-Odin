@@ -57,6 +57,7 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -2589,7 +2590,26 @@ public class GameWebViewActivity extends Activity {
      "zweite Ansicht verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
    OdinService.protokoll(this,"WICHTIG","doppelstart",
      "zweite Ansicht verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
+   // 1.91.0: die bestehende Ansicht auch ZEIGEN - sonst endet das Antippen
+   // mit gar keiner sichtbaren Welt.
+   try{
+    if(OdinFloat.active(wer))vorhanden.holeAusFenster(false);
+    aufgabeNachVorn(this,vorhanden.getTaskId());
+   }catch(Exception ig){}
    finish(); return;
+  }
+  // 1.91.0 - VERWAISTE SCHWEBEANSICHT. Die Ansicht einer Welt wurde beendet,
+  // ihre WebView lebte aber im Schwebesymbol weiter - samt GodBot. Die
+  // Sperre oben sah keine lebende Ansicht, und beim Antippen entstand eine
+  // zweite (25.09., 14:17: #2019 -> #f9f1, #ebfa -> #7be6, #e664 -> #b791).
+  // Zwei GodBots in einer Welt darf es nicht geben: die alte wird beendet.
+  if(OdinFloat.active(wer)){
+   try{
+    WebView alt=OdinFloat.hide(wer);
+    if(alt!=null){ alt.stopLoading(); alt.loadUrl("about:blank"); alt.destroy(); }
+   }catch(Exception ig){}
+   OdinService.protokoll(this,"WICHTIG","doppelstart",
+     "verwaiste Schwebeansicht beendet, neu #"+instanz);
   }
   // Wer hier eine bestehende Instanz ersetzt, ohne dass die Sperre oben
   // gegriffen hat, ist der Fall, den das Protokoll vom 20.09. zeigt:
@@ -2907,6 +2927,15 @@ public class GameWebViewActivity extends Activity {
   final boolean schwebt=false;
   schwebendeEinholen(id);
   setStatus("Wechsel zu "+ziel);
+  // 1.91.0: Laeuft die Zielwelt schon, ihre Aufgabe direkt nach vorn holen
+  // statt ein Intent zu schicken, das Android womoeglich als neue Ansicht
+  // anlegt.
+  GameWebViewActivity da;
+  synchronized(OFFEN){ da=OFFEN.get(id); }
+  if(da!=null&&!da.isFinishing()&&!da.isDestroyed()){
+   try{ if(OdinFloat.active(id))da.holeAusFenster(false); }catch(Exception ig){}
+   if(aufgabeNachVorn(this,da.getTaskId())){ wechselZiel=ziel; wechselAt=System.currentTimeMillis(); return; }
+  }
   try{
    Intent i=new Intent(this,GameWebViewActivity.class);
    i.setData(android.net.Uri.parse("odin://account/"+id));
@@ -3657,8 +3686,35 @@ public class GameWebViewActivity extends Activity {
  // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
  // Nur zurueckhaengen, ohne die App nach vorne zu holen. Wird gebraucht, wenn
  // das kleine Fenster nach getaner Arbeit von selbst schliessen soll.
+ static boolean aufgabeNachVorn(Context c,int taskId){
+  try{
+   android.app.ActivityManager am=(android.app.ActivityManager)c.getSystemService(Context.ACTIVITY_SERVICE);
+   am.moveTaskToFront(taskId,0);
+   return true;
+  }catch(Exception e){ android.util.Log.w("ODIN","moveTaskToFront",e); return false; }
+ }
  private void holeAusFenster(boolean nachVorne){
   if(!OdinFloat.active(gameAccountId))return;
+  // 1.91.0: Ist diese Ansicht schon beendet, kann die WebView nicht mehr in
+  // ihr Layout zurueck - bisher geschah genau das, und der anschliessende
+  // Start legte eine zweite Ansicht daneben an. Jetzt: alte WebView beenden,
+  // eine frische Ansicht starten, die dann die einzige ist.
+  if(isDestroyed()||isFinishing()){
+   try{ WebView alt=OdinFloat.hide(gameAccountId);
+        if(alt!=null){ alt.stopLoading(); alt.loadUrl("about:blank"); alt.destroy(); } }catch(Exception ig){}
+   if(nachVorne){
+    try{
+     Intent i=new Intent(getApplicationContext(),GameWebViewActivity.class);
+     i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
+     i.putExtra("accountId",gameAccountId); i.putExtra("username",kopfName);
+     i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
+     i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
+     i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+     getApplicationContext().startActivity(i);
+    }catch(Exception e){ android.util.Log.e("ODIN_FLOAT","neu starten",e); }
+   }
+   return;
+  }
   WebView w=OdinFloat.hide(gameAccountId);
   if(w==null||rootLayout==null)return;
   webView=w;
@@ -3670,7 +3726,12 @@ public class GameWebViewActivity extends Activity {
     w.setLayoutParams(new LinearLayout.LayoutParams(-1,0,1f));
     rootLayout.addView(w,1,new LinearLayout.LayoutParams(-1,0,1f));
     w.requestLayout(); w.invalidate();
-    if(nachVorne){
+    // 1.91.0: zuerst die eigene Aufgabe direkt nach vorn. Ein neues Intent
+    // aus einer Hintergrund-Ansicht verlaesst sich darauf, dass Android die
+    // Aufgabe wiederfindet - das ging am 25.09. dreimal daneben.
+    if(nachVorne&&aufgabeNachVorn(this,getTaskId())){
+     setStatus("zurueck im Vordergrund");
+    }else if(nachVorne){
      Intent i=new Intent(this,GameWebViewActivity.class);
      if(!gameAccountId.isEmpty()){
       i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
