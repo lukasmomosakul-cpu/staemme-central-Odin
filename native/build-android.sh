@@ -2720,7 +2720,7 @@ public class GameWebViewActivity extends Activity {
  private boolean godbotTickerAn=false;
  // Schluessel, Beschriftung, Name der Prozesssperre in GodBot (laeuft gerade)
  private static final String[][] GODBOT_BEREICHE={
-  {"raubzug","Raubzug","scavenge"},{"farmen","Farmen","farm"},{"bau","Bau","bau"},
+  {"raubzug","Raubzug","scavenge"},{"farmen","Farmen","farm"},{"bau","Manager","bau"},
   {"rohstoffe","Rohstoffe","resources"},{"angriffe","Angriffe","attack"},
   {"rausstellen","Rausstellen","rausstellen"},{"statistik","Statistik",""},{"godbot","GodBot ⋯",""}};
  private static boolean godbotSchaltbar(String k){
@@ -2779,7 +2779,7 @@ public class GameWebViewActivity extends Activity {
  }
  private void godbotLeisteZeichnen(){
   org.json.JSONObject st=godbotStand; if(st==null)return;
-  org.json.JSONObject sch=st.optJSONObject("schalter"), nx=st.optJSONObject("naechst");
+  org.json.JSONObject sch=st.optJSONObject("schalter"), nx=st.optJSONObject("naechst"), pr=st.optJSONObject("probleme");
   String laeuft=st.optString("laeuft","");
   boolean bot=st.optBoolean("botschutz",false), hub=st.optBoolean("hubOffen",false);
   long jetzt=System.currentTimeMillis();
@@ -2790,6 +2790,12 @@ public class GameWebViewActivity extends Activity {
    TextView c=godbotChips.get(b[0]); if(c==null)continue;
    String name=b[1]; int punkt=0, grund=0xFF2A3342, rand=0xFF3A4556, schrift=0xFFC9D4E3; String zusatz="";
    boolean istLauf=!b[2].isEmpty()&&b[2].equals(laeuft);
+   // Problem wie das rote "!" der Kachel im Spiel (Vorlage fehlt, kein
+   // Premium, ...). Steht ueber "an" - sonst wirkt alles in Ordnung.
+   String problem=pr!=null?pr.optString(b[0],""):"";
+   if(!bot&&!istLauf&&!problem.isEmpty()){
+    punkt=0xFFE8734A; zusatz=" · Problem"; rand=0xFF8A4A2E; grund=0xFF33241E; schrift=0xFFF0D2C4;
+   } else
    if(godbotSchaltbar(b[0])&&sch!=null&&sch.has(b[0])){
     boolean an=sch.optBoolean(b[0],false);
     if(bot&&an){ punkt=0xFFE05555; zusatz=" · Botschutz"; rand=0xFF7A2E2E; }

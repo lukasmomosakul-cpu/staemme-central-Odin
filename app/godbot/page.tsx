@@ -24,13 +24,14 @@ type Stand = {
   naechst?: Record<string, number | null>;
   laeuft?: string | null;
   botschutz?: boolean | null;
+  probleme?: Record<string, string>;
 };
 type Befehl = { id: number; pfad: string; wert: unknown; zeit: number; erledigt?: boolean; ok?: boolean | null; ergebnis?: string | null };
 
 const MODULE: { key: string; titel: string; text: string; sperre: string }[] = [
   { key: 'raubzug', titel: 'Raubzug', text: 'Schickt Truppen auf Raubzüge und holt sie zurück.', sperre: 'scavenge' },
   { key: 'farmen', titel: 'Farmen', text: 'Farmassistent im Takt, mit Farmwert-Wächter.', sperre: 'farm' },
-  { key: 'bau', titel: 'Bauautomat', text: 'Baut nach den Vorlagen, solange der Account-Manager ruht.', sperre: 'bau' },
+  { key: 'bau', titel: 'Manager', text: 'Schalter = Bauautomat. Vorlagen, Zuweisungen und Abgleich mit dem Account-Manager laufen immer.', sperre: 'bau' },
   { key: 'rohstoffe', titel: 'Rohstoff-Fix', text: 'Gleicht Rohstoffe zwischen den Dörfern aus.', sperre: 'resources' },
   { key: 'bhwacht', titel: 'Bauernhof-Wacht', text: 'Zieht den Bauernhof vor, bevor Plätze fehlen – auch im Account-Manager.', sperre: '' },
 ];
@@ -188,6 +189,7 @@ export default function GodBotSeite() {
     const an = !!stand?.schalter?.[m.key];
     if (bot && an) return { farbe: '#c0392b', text: 'Botschutz – pausiert' };
     if (m.sperre && stand?.laeuft === m.sperre) return { farbe: '#d4a017', text: 'läuft gerade' };
+    if (stand?.probleme?.[m.key]) return { farbe: '#c7612f', text: `Problem${an ? '' : ' (aus)'}` };
     if (!an) return { farbe: '#9aa7b5', text: 'aus' };
     if (m.key === 'bhwacht') {
       const p = stand?.werte?.['bhwacht.prozent'];
@@ -257,6 +259,9 @@ export default function GodBotSeite() {
                   <div style={{ fontSize: 12, marginTop: 4, color: z.farbe, fontWeight: 700 }}>
                     <Punkt farbe={z.farbe} />{z.text}
                   </div>
+                  {stand?.probleme?.[m.key] && (
+                    <div style={{ fontSize: 12, marginTop: 4, color: '#a64a22' }}>{stand.probleme[m.key]}</div>
+                  )}
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{m.text}</div>
                 </div>
                 <Schalter an={an} wartet={!!offenFuer(m.key)} aus={!stand} onClick={() => senden(m.key, !an)} />

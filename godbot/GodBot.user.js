@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      538
+// @version      539
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -60766,6 +60766,27 @@ if (location.href.includes("mode=scavenge_mass")) {
             };
         } catch (e) { }
         try { out.laeuft = currentProcessOwner() || null; } catch (e) { out.laeuft = null; }
+
+        // 25.09.2026: Probleme wie das rote "!" der Kacheln im Spiel. Ohne
+        // sie zeigte die Leiste "Bau · an", waehrend der Manager im Spiel
+        // laengst "Vorlage fehlt" meldete - es sah aus, als klappe alles.
+        // Fuer den Manager dieselben drei Quellen wie seine Kachel.
+        out.probleme = {};
+        const PROBLEM_MODUL = { raubzug: "scavenge", farmen: "farm", rohstoffe: "resources", angriffe: "attack", bau: "manager" };
+        Object.keys(PROBLEM_MODUL).forEach(k => {
+            const teile = [];
+            try {
+                if (k === "bau") {
+                    const v = managerVerwaisteZuweisungen();
+                    const summe = (v && (v.bau + v.truppen)) || 0;
+                    if (summe) teile.push(`${summe}x Vorlage fehlt${v.beispiel ? " (z.B. " + v.beispiel + ")" : ""}`);
+                    const tp = managerTruppenProblem();
+                    if (tp) teile.push(tp);
+                }
+            } catch (e) { }
+            try { const t = twProblemLesen(PROBLEM_MODUL[k]); if (t) teile.push(t); } catch (e) { }
+            if (teile.length) out.probleme[k] = teile.join(" — ");
+        });
         try { out.botschutz = !!isBotProtectionActive(); } catch (e) { out.botschutz = null; }
         return out;
     }
@@ -60774,7 +60795,7 @@ if (location.href.includes("mode=scavenge_mass")) {
     function odinSteuerstandMelden(sofort) {
         try {
             const st = odinSteuerstand();
-            const kern = JSON.stringify({ s: st.schalter, w: st.werte, l: st.laeuft, b: st.botschutz });
+            const kern = JSON.stringify({ s: st.schalter, w: st.werte, l: st.laeuft, b: st.botschutz, p: st.probleme });
             const jetzt = Date.now();
             if (!sofort && kern === odinStandVorher && jetzt - odinStandGeschriebenAt < 2 * 60 * 1000) return;
             odinStandVorher = kern;
