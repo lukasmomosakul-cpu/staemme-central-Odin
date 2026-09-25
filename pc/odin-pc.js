@@ -357,8 +357,15 @@ function settingsSchreiben(batch, versuch) {
         status('Abgleich schreiben fehlgeschlagen: ' + e.message);
     });
 }
+// Meldungen, die der Loader bei JEDEM Seitenaufruf schreibt, nur einmal je
+// Tab ins Protokoll (541.3).
+var EINMAL_JE_TAB = /^Abgleich: bereits eingerichtet/;
 var OdinNative = {
-    status: function (m) { status(String(m == null ? '' : m)); },
+    status: function (m) {
+        m = String(m == null ? '' : m);
+        if (EINMAL_JE_TAB.test(m)) { if (sget('odinpc_einmal_' + m)) return; sset('odinpc_einmal_' + m, '1'); }
+        status(m);
+    },
     puls: function () { }, lebt: function () { }, termin: function () { }, steuerstand: function () { },
     syncReady: function () { return !!(Z.konto && Z.team && sitzung()); },
     settingsLoad: function () {
@@ -579,7 +586,8 @@ async function main() {
         status('Anmeldung/Konto fehlgeschlagen: ' + e.message);
         return;
     }
-    status('Odin PC ' + PCV + ' verbunden (' + geraetName + ')');
+    // Einmal je Tab - jeder Seitenaufruf im Spiel laedt das Skript neu.
+    if (!sget('odinpc_verbunden')) { sset('odinpc_verbunden', '1'); status('Odin PC ' + PCV + ' verbunden (' + geraetName + ')'); }
     pflegeStarten();
     if (sget(SK.pause)) { Z.modus = 'pause'; Z.hinweis = 'pausiert'; ui(); return; }
     starten(false);

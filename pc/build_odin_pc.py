@@ -12,7 +12,7 @@ Schicht erhoehen; bei neuem GodBot wieder auf 1 setzen.
 """
 import io, re, sys, os
 
-PC_REV = 2
+PC_REV = 3
 ANON = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNqcmNvb21odXVhaGF5enR6ZGdjIiwi"
         "cm9sZSI6ImFub24iLCJpYXQiOjE3ODg3NzM4NzIsImV4cCI6MjEwNDM0OTg3Mn0.XvgEyjfhczIM0hKnVcHIOPJ4MSfndoshw0oOuWcmDoM")
 
@@ -49,7 +49,6 @@ schluss = r""" // --- Odin PC: GodBot direkt starten (statt der Teil-Dateien der
  try{ delete window.Odin.stand; }catch(e){}
  odinPcHochladenErzwingen();
  var gbStart=Date.now(), gbMs=-1;
- OdinNative.status('starte GodBot...');
  try{ odinPcGodBotStarten(); gbMs=Date.now()-gbStart; }
  catch(e){ window.__odinErrMsg='JS-Fehler beim Start: '+(e&&e.message); }
  var letztesUrteil='', spaet=false;
