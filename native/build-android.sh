@@ -2864,6 +2864,10 @@ public class GameWebViewActivity extends Activity {
  // Die Zielwelt kommt ueber dieselbe Daten-URI wie aus dem Dashboard:
  // documentLaunchMode=intoExisting holt eine offene Ansicht nach vorn
  // (Anmeldung bleibt), sonst entsteht eine neue.
+ private String wechselZiel=""; private long wechselAt=0L;
+ // Ganz verdeckt = der Wechsel hat gegriffen. onPause reicht dafuer nicht:
+ // auch ein gescheiterter Wechsel pausiert die Ansicht kurz.
+ @Override protected void onStop(){ super.onStop(); wechselAt=0L; }
  private void kontoWechseln(String id,String nm,String user,String welt,String alle){
   if(id==null||id.isEmpty()||id.equals(gameAccountId))return;
   final String ziel=nm+(welt.isEmpty()?"":" · "+welt);
@@ -2882,7 +2886,14 @@ public class GameWebViewActivity extends Activity {
    i.putExtra("world",welt); i.putExtra("accountsJson",alle==null?"[]":alle);
    i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
    i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
-   i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+   // 1.88.0 - KEIN REORDER_TO_FRONT HIER. Das Flag sucht die Zielklasse in
+   // der EIGENEN Aufgabe - und fand dort genau diese Ansicht. Ergebnis im
+   // Protokoll vom 25.09., 11:41: "Wechsel zu FetterOrk" und sofort
+   // "zurueck im Vordergrund" derselben Instanz #aebf, die andere Welt
+   // kam nie nach vorn. NEW_DOCUMENT passt zu documentLaunchMode=intoExisting:
+   // offene Aufgabe mit derselben Daten-URI nach vorn, sonst eine neue.
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+   wechselZiel=ziel; wechselAt=System.currentTimeMillis();
    startActivity(i);
   }catch(Exception e){
    // Wechsel gescheitert: die Welt nicht im Symbol haengen lassen.
@@ -3588,6 +3599,11 @@ public class GameWebViewActivity extends Activity {
   sitzungNachladen();
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
   OdinBubble.hide(); restoreFromFloat();
+  // 1.88.0: Kommt diese Ansicht binnen 5 s nach einem Wechsel selbst wieder
+  // nach vorn, hat der Wechsel nicht gegriffen - sagen statt schweigen.
+  if(wechselAt>0L&&System.currentTimeMillis()-wechselAt<5000L)
+   setStatus("Achtung: Wechsel zu "+wechselZiel+" hat nicht gegriffen");
+  wechselAt=0L;
  }
  @Override protected void onPause(){
   super.onPause();
