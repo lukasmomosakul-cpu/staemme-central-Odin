@@ -2231,11 +2231,59 @@ public final class OdinFloat {
  private static String schluessel(String a){ return a==null||a.isEmpty()?"_":a; }
 
  public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore){
-  return show(ctx,accountId,web,onRestore,GROSS);
+  return show(ctx,accountId,web,onRestore,GROSS,null);
+ }
+ public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore,Runnable onClose){
+  return show(ctx,accountId,web,onRestore,GROSS,onClose);
+ }
+ public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore,int win){
+  return show(ctx,accountId,web,onRestore,win,null);
+ }
+
+ // 1.92.0 - MUELLEIMER BEIM ZIEHEN. Sobald ein Symbol bewegt wird, erscheint
+ // unten mittig ein Muelleimer. Wird das Symbol darauf losgelassen, schliesst
+ // sich die Welt (onClose). Der Muelleimer nimmt selbst keine Beruehrungen an,
+ // er ist nur Ziel; getroffen wird ueber die Fingerposition.
+ private static final int MUELL=190;
+ private static TextView muell; private static android.graphics.drawable.GradientDrawable muellGrund;
+ private static boolean muellHeiss;
+ private static void muellZeigen(Context app,WindowManager wm){
+  if(muell!=null)return;
+  try{
+   TextView t=new TextView(app); t.setText("\uD83D\uDDD1"); t.setTextSize(30f); t.setGravity(Gravity.CENTER);
+   android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
+   g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+   g.setColor(0xCC202020); g.setStroke(4,0xFFE8E8E8); t.setBackground(g);
+   int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                                     :WindowManager.LayoutParams.TYPE_PHONE;
+   WindowManager.LayoutParams lp=new WindowManager.LayoutParams(MUELL,MUELL,type,
+     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+     PixelFormat.TRANSLUCENT);
+   lp.gravity=Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL; lp.y=160;
+   wm.addView(t,lp); muell=t; muellGrund=g; muellHeiss=false;
+  }catch(Exception e){ muell=null; muellGrund=null; }
+ }
+ private static boolean ueberMuell(float x,float y){
+  if(muell==null)return false;
+  int[] l=new int[2]; muell.getLocationOnScreen(l);
+  int w=muell.getWidth(), h=muell.getHeight(); if(w<=0||h<=0)return false;
+  int rand=50;
+  return x>=l[0]-rand&&x<=l[0]+w+rand&&y>=l[1]-rand&&y<=l[1]+h+rand;
+ }
+ private static void muellHervorheben(boolean an){
+  if(muell==null||muellGrund==null||an==muellHeiss)return;
+  muellHeiss=an;
+  muellGrund.setColor(an?0xEED32F2F:0xCC202020);
+  muell.setScaleX(an?1.2f:1f); muell.setScaleY(an?1.2f:1f);
+ }
+ private static void muellWeg(WindowManager wm){
+  if(muell==null)return;
+  try{ wm.removeView(muell); }catch(Exception ig){}
+  muell=null; muellGrund=null; muellHeiss=false;
  }
  // Fuer Aktionen im Hintergrund reicht ein sehr kleines Fenster: entscheidend
  // ist, dass die WebView GERENDERT wird, nicht wie gross sie ist.
- public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore,int win){
+ public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore,int win,final Runnable onClose){
   final Context app=ctx.getApplicationContext();
   final String key=schluessel(accountId);
   if(offen.containsKey(key)||web==null||!allowed(app))return false;
@@ -2301,10 +2349,26 @@ public final class OdinFloat {
       case MotionEvent.ACTION_MOVE:
        lp.x=(int)(e.getRawX()+dx); lp.y=(int)(e.getRawY()+dy);
        if(Math.abs(e.getRawX()-sx)>10||Math.abs(e.getRawY()-sy)>10)bewegt=true;
-       try{wm.updateViewLayout(f.rahmen,lp);}catch(Exception ig){} return true;
-      case MotionEvent.ACTION_UP:
-       if(!bewegt&&onRestore!=null)onRestore.run();
+       try{wm.updateViewLayout(f.rahmen,lp);}catch(Exception ig){}
+       if(bewegt){ muellZeigen(app,wm); muellHervorheben(ueberMuell(e.getRawX(),e.getRawY())); }
        return true;
+      case MotionEvent.ACTION_UP:{
+       boolean weg=bewegt&&ueberMuell(e.getRawX(),e.getRawY());
+       muellWeg(wm);
+       if(weg){
+        if(onClose!=null){ try{ onClose.run(); }catch(Exception ig){} }
+        else{
+         // Ohne Rueckruf: Symbol entfernen und die WebView beenden, damit
+         // kein unsichtbarer GodBot weiterlaeuft.
+         WebView w=hide(accountId);
+         try{ if(w!=null){ w.stopLoading(); w.loadUrl("about:blank"); w.destroy(); } }catch(Exception ig){}
+        }
+        return true;
+       }
+       if(!bewegt&&onRestore!=null)onRestore.run();
+       return true;}
+      case MotionEvent.ACTION_CANCEL:
+       muellWeg(wm); return true;
      }
      return false;
     }
@@ -2725,7 +2789,7 @@ public class GameWebViewActivity extends Activity {
    // Die WebView wandert in ein sichtbares Overlay. Nur so bleiben die
    // JS-Zeitgeber ungedrosselt - ein blosses moveTaskToBack() macht sie
    // unsichtbar und Chromium taktet sie auf etwa einmal pro Minute herunter.
-   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat)){
+   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,this::ausSymbolSchliessen)){
     setStatus("schwebt ("+OdinFloat.anzahl()+" aktiv) – Symbol antippen");
     moveTaskToBack(true);
    }else{
@@ -3013,7 +3077,7 @@ public class GameWebViewActivity extends Activity {
    if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
    // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
    // gerendert wird. Groesse spielt fuer die Drosselung keine Rolle.
-   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN)){
+   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN,this::ausSymbolSchliessen)){
     setStatus("Termin - kleines Fenster, Gerät nicht gestört");
     leiseSchliessenNachArbeit();
    }
@@ -3473,7 +3537,7 @@ public class GameWebViewActivity extends Activity {
      setStatus("Weckfenster beendet – zurück in den Dimm-Modus");
      return;
     }
-    if(warGeschwebt&&OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat)){
+    if(warGeschwebt&&OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,this::ausSymbolSchliessen)){
      // Zurueck ins schwebende Fenster statt in den Hintergrund: dort bleibt
      // die WebView sichtbar und damit ungedrosselt.
      setStatus("Weckfenster beendet – schwebt wieder");
@@ -3749,6 +3813,18 @@ public class GameWebViewActivity extends Activity {
   });
  }
  private void restoreFromFloat(){ holeAusFenster(true); }
+ // 1.92.0: Symbol in den Muelleimer gezogen - diese Welt wird geschlossen.
+ // WebView beenden (sonst liefe GodBot unsichtbar weiter) und die Ansicht
+ // samt Aufgabe entfernen; onDestroy gibt die Geraete-Sperre frei.
+ // Hat der Dienst fuer diese Welt einen Termin, weckt er sie spaeter wieder.
+ private void ausSymbolSchliessen(){
+  try{
+   WebView w=OdinFloat.hide(gameAccountId);
+   if(w!=null){ w.stopLoading(); w.loadUrl("about:blank"); w.destroy(); }
+  }catch(Exception ig){}
+  setStatus("Welt geschlossen (Symbol in den Mülleimer gezogen)");
+  try{ finishAndRemoveTask(); }catch(Exception e){ try{ finish(); }catch(Exception ig){} }
+ }
  @Override protected void onDestroy(){
   if(OFFEN.get(gameAccountId)==this){
    OFFEN.remove(gameAccountId);
