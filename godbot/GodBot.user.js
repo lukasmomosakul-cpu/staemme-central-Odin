@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      539
+// @version      540
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33463,6 +33463,11 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                         ? (managerProblem + " — " + truppenProblem)
                         : truppenProblem;
                 }
+                let haeltNicht = null;
+                try { haeltNicht = managerHaeltNichtProblem(); } catch (e) { }
+                if (haeltNicht) {
+                    managerProblem = managerProblem ? (managerProblem + " — " + haeltNicht) : haeltNicht;
+                }
 
                 // 06.09.2026: die eigene Zeile ist wieder weg. Sie war
                 // in v468 dazugekommen, damit der Grund nicht allein im
@@ -46291,6 +46296,37 @@ function amEintragErlaubt(villageId, name) {
     if (Date.now() - (e.at || 0) >= BAU_AM_EINTRAG_SPERRE_MS) return { ok: true };
     if ((e.versuche || 0) < BAU_AM_EINTRAG_MAX) return { ok: true };
     return { ok: false, versuche: e.versuche, at: e.at };
+}
+
+// 25.09.2026 - "HAELT NICHT" GEHOERT AUF DIE KACHEL.
+// Stand bisher nur als Summe in der Abgleichszeile und als Vorkommnis.
+// Die Kachel (und die GodBot-Leiste der App) zeigten "an", waehrend der
+// Account-Manager dieselbe Vorlage immer wieder hinauswarf (458|462,
+// "3. Vollausbau", 3x am 25.09.). Gleiche Quelle und gleiche Regel wie
+// der Abgleich selbst: gesperrt ist, was amEintragErlaubt ablehnt.
+function managerHaeltNichtProblem() {
+    const alle = ladeAmEintraege();
+    const betroffen = [];
+    Object.keys(alle).forEach(vid => {
+        const e = alle[vid];
+        if (!e || !e.name) return;
+        let r = null;
+        try { r = amEintragErlaubt(vid, e.name); } catch (x) { return; }
+        if (r && !r.ok) betroffen.push({ vid, name: e.name });
+    });
+    if (!betroffen.length) return null;
+    const namen = [];
+    betroffen.forEach(b => { if (namen.indexOf(b.name) < 0) namen.push(b.name); });
+    let wo = "";
+    try {
+        wo = betroffen.slice(0, 3).map(b => getVillageDisplayNameWithCoord(b.vid)).join(", ") +
+            (betroffen.length > 3 ? ` und ${betroffen.length - 3} weitere` : "");
+    } catch (x) { wo = betroffen.map(b => b.vid).join(", "); }
+    const kopf = betroffen.length === 1
+        ? "1 Dorf: Bauvorlage hält nicht"
+        : `${betroffen.length} Dörfer: Bauvorlage hält nicht`;
+    return `${kopf} (${namen.map(n => `"${n}"`).join(", ")}): ${wo}. ` +
+        `Der Account-Manager wirft sie immer wieder raus (fertig? Bauernhof voll?). Andere Vorlage zuweisen.`;
 }
 
 // Zaehler streichen, ohne den Namen zu kennen. Gebraucht, sobald sich
@@ -60782,6 +60818,8 @@ if (location.href.includes("mode=scavenge_mass")) {
                     if (summe) teile.push(`${summe}x Vorlage fehlt${v.beispiel ? " (z.B. " + v.beispiel + ")" : ""}`);
                     const tp = managerTruppenProblem();
                     if (tp) teile.push(tp);
+                    const hn = managerHaeltNichtProblem();
+                    if (hn) teile.push(hn);
                 }
             } catch (e) { }
             try { const t = twProblemLesen(PROBLEM_MODUL[k]); if (t) teile.push(t); } catch (e) { }
