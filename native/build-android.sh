@@ -2214,7 +2214,7 @@ import java.util.*;
 public final class OdinFloat {
  private OdinFloat(){}
  private static final int LAY_W=420, LAY_H=740;
- public static final int GROSS=150, KLEIN=44;   // Kantenlaenge in Pixeln
+ public static final int GROSS=150, KLEIN=72;   // Kantenlaenge in Pixeln
  private static class Fenster {
   View rahmen; WebView web; WindowManager wm;
  }
@@ -2272,7 +2272,13 @@ public final class OdinFloat {
    // gegen die Drosselung an.
    if(win<GROSS){
     lp.gravity=Gravity.TOP|Gravity.END;
-    lp.x=8+offen.size()*(win+8); lp.y=2;
+    // 1.89.0: UNTER die Statusleiste. Bei y=2 lag das Symbol im Bereich,
+    // dessen Beruehrungen Android fuer das Herunterwischen abfaengt - es
+    // liess sich nicht antippen und blieb stehen (Bildschirmfoto 25.09.).
+    int sb=0;
+    try{ int rid=app.getResources().getIdentifier("status_bar_height","dimen","android");
+         if(rid>0)sb=app.getResources().getDimensionPixelSize(rid); }catch(Exception ig){}
+    lp.x=8+offen.size()*(win+8); lp.y=sb+6;
    }else{
     lp.gravity=Gravity.TOP|Gravity.START;
     lp.x=16; lp.y=180+offen.size()*(win+24);
@@ -2875,7 +2881,10 @@ public class GameWebViewActivity extends Activity {
   try{
    if(OdinFloat.active(gameAccountId))schwebt=true;
    else if(OdinBubble.allowed(this)&&webView!=null)
-    schwebt=OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN);
+    // 1.89.0: das GROSSE, antippbare Symbol wie bei "Minimieren". Das
+    // kleine sass auf Hoehe der Statusleiste - dort nimmt Android jede
+    // Beruehrung selbst (Herunterwischen), das Symbol war nicht zu fassen.
+    schwebt=OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat);
   }catch(Exception e){ android.util.Log.w("ODIN","wechsel schweben",e); }
   setStatus(schwebt?"Wechsel zu "+ziel+" - diese Welt läuft oben im Symbol weiter"
                    :"Wechsel zu "+ziel+" - ohne Overlay-Erlaubnis läuft diese Welt gedrosselt");
