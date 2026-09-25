@@ -1352,7 +1352,11 @@ public class OdinService extends Service {
   // ankommen - nicht, ob der Dienst tot ist oder bloss kein Netz hat. Das
   // Geraeteprotokoll braucht kein Netz und unterscheidet beides.
   OdinLog.schreib(this,"-","info","Dienst lebt · "+offen+" Termine vorgemerkt");
-  protokoll(this,(gesamt>0||offen>0)?"WICHTIG":"FEHLER","wecker",
+  // 1.86.0: Haben ALLE Accounts keine Daten (z.B. alle Module aus), gibt es
+  // schlicht nichts zu wecken - das ist kein Fehler. FEHLER bleibt, wenn
+  // Accounts Daten liefern und trotzdem kein Termin herauskommt.
+  boolean nurOhneDaten=uebersprungen>0&&uebersprungen>=accs.length();
+  protokoll(this,(gesamt>0||offen>0)?"WICHTIG":(nurOhneDaten?"info":"FEHLER"),"wecker",
     "Termine: "+offen+" vorgemerkt, "+gesamt+" Alarme, "
     +uebersprungen+" Accounts ohne Daten übersprungen");
  }
@@ -2470,7 +2474,8 @@ public class GameWebViewActivity extends Activity {
   }
   runOnUiThread(()->{if(statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+msg);});
   android.util.Log.i("ODIN_GODBOT",msg);
-  String stufe = (msg.contains("Fehler")||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
+  // 1.86.0: "kein Fehler" ist kein Fehler.
+  String stufe = ((msg.contains("Fehler")&&!msg.contains("kein Fehler"))||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
                : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
   OdinLog.schreib(this,kopfName+"#"+instanz,stufe,msg);
   // Alles wandert nach Odin, aber gebuendelt: einzelne Anfragen je Meldung
@@ -3737,8 +3742,19 @@ public class GameWebViewActivity extends Activity {
      org.json.JSONObject r=new org.json.JSONObject();
      r.put("team_id",supaTeam); r.put("account_id",gameAccountId);
      r.put("skey",k); r.put("value",in.getString(k)); rows.put(r); }
-    if(rows.length()==0)return true;
-    supaRequest("POST","godbot_settings?on_conflict=account_id,skey",rows.toString());
+    // 1.86.0: leerer Wert = geloescht (Loeschmarke aus dem Bootstrap).
+    // Diese Zeilen werden in der Tabelle geloescht statt als "" gespeichert.
+    org.json.JSONArray behalten=new org.json.JSONArray(); StringBuilder weg=new StringBuilder();
+    for(int i=0;i<rows.length();i++){ org.json.JSONObject r=rows.getJSONObject(i);
+     if(r.optString("value","").isEmpty()){ if(weg.length()>0)weg.append(',');
+      weg.append('"').append(r.getString("skey").replace("\"","")).append('"'); }
+     else behalten.put(r); }
+    if(weg.length()>0){
+     supaRequest("DELETE","godbot_settings?account_id=eq."+java.net.URLEncoder.encode(gameAccountId,"UTF-8")
+       +"&skey=in."+java.net.URLEncoder.encode("("+weg+")","UTF-8"),null);
+    }
+    if(behalten.length()==0)return true;
+    supaRequest("POST","godbot_settings?on_conflict=account_id,skey",behalten.toString());
     // Meldung kommt aus dem Bootstrap inklusive Schluesselnamen.
     return true;
    }catch(Exception e){ setStatus("Abgleich schreiben fehlgeschlagen: "+e.getMessage()); return false; }

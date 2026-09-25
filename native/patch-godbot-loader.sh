@@ -309,6 +309,26 @@ js = r"""
     if(!timer)timer=setTimeout(flush,4000);   // laeuft ab dem ERSTEN Eintrag
    } }catch(e){}
   };
+  // 25.09.2026 (1.86.0) - LOESCHEN WIRD MITGESCHICKT.
+  // Bisher gingen nur Schreibzugriffe hoch. Ein von GodBot geloeschter
+  // Schluessel blieb in godbot_settings stehen - belegt am 25.09.:
+  // tw_farm_loop_active = 1 in beiden Welten, obwohl Farmen danach aus war.
+  // Ein frisches Profil haette Farmen damit wieder angeschaltet, und alte
+  // Termine (tw_next_recheck_at) weckten fuer laengst Erledigtes.
+  // Ein leerer Wert ist die Loeschmarke: settingsSave() loescht die Zeile.
+  // Nur Schluessel, die es wirklich gab - sonst ginge fuer jedes
+  // vorsorgliche removeItem() eine Loeschung raus.
+  var origRemove=Storage.prototype.removeItem, origGet=Storage.prototype.getItem;
+  Storage.prototype.removeItem=function(k){
+   var hatte=false;
+   try{ hatte=(this===localStorage)&&origGet.call(this,k)!==null; }catch(e){}
+   origRemove.call(this,k);
+   if(!hatte)return;
+   try{ if(sollHoch(k)){ pending[k]='';
+    try{ rohSetzen('odin_lw_'+k,Date.now()); }catch(e2){}
+    if(!timer)timer=setTimeout(flush,4000);
+   } }catch(e){}
+  };
   window.addEventListener('pagehide',flush);
   window.__odinSyncFlush=flush;
  })();
@@ -366,10 +386,17 @@ js = r"""
     // Zweite Pruefung nach 12 s meldet nur, wenn sich etwas geaendert hat.
     if(!gb){melde('aktiv ('+done+' Teile, ohne GodBot)');return;}
     if(typeof window.godbotCommands==='function'){melde('aktiv ('+done+' Teile'+(gbMs>=0?', GodBot '+gbMs+' ms':'')+')');return;}
-    // Kein Fehler geworfen: das Skript lief durch, nur der Marker fehlt.
-    melde('ausgefuehrt, kein Fehler (Marker fehlt)');
+    // 25.09.2026 (1.86.0): Auf einem frischen Profil wartet GodBot auf den
+    // Freischaltcode und startet erst danach - das ist kein Fehler.
+    if(document.getElementById('tw-gate-input')){melde('wartet auf Freischaltcode');return;}
+    // Nach 3 s noch nichts sagen: erst die zweite Pruefung zaehlt. Vorher
+    // stand hier bei jedem ersten Start "kein Fehler" - und das Wort
+    // "Fehler" machte daraus eine FEHLER-Zeile im Protokoll.
+    if(!spaet)return;
+    melde('Achtung: GodBot ausgefuehrt, aber nicht gestartet (Marker fehlt)');
    }catch(e){}}
-   setTimeout(verdict,3000); setTimeout(verdict,12000);
+   var spaet=false;
+   setTimeout(verdict,3000); setTimeout(function(){spaet=true;verdict();},12000);
    OdinNative.status('geladen ('+done+' Teile), pruefe...');
    return;
   }
