@@ -2829,9 +2829,21 @@ public class GameWebViewActivity extends Activity {
     org.json.JSONObject o=arr.optJSONObject(i); if(o==null)continue;
     String nm=o.optString("name",""); if(nm.isEmpty())continue;
     String welt=o.optString("world","");
-    boolean active=nm.equals(activeName);
+    // 1.87.0: ueber die Konto-ID, nicht den Namen - zwei Welten desselben
+    // Spielers heissen gleich (FetterOrk de257/de259) und waren beide
+    // "aktiv" markiert. Ohne ID (altes Dashboard) bleibt der Namensvergleich.
+    final String kid=o.optString("id","");
+    boolean active=kid.isEmpty()?nm.equals(activeName):kid.equals(gameAccountId);
     TextView c=new TextView(this);
     c.setText(welt.isEmpty()?nm:(nm+"  ·  "+welt));
+    // 1.87.0: Tippen wechselt in diese Welt.
+    if(!active){
+     final String fNm=nm, fWelt=welt, fUser=o.optString("username",""), fAlle=accountsJson;
+     c.setOnClickListener(x->{
+      if(kid.isEmpty()){ setStatus("Wechsel nicht möglich - Spiel einmal über das Dashboard neu öffnen"); return; }
+      kontoWechseln(kid,fNm,fUser,fWelt,fAlle);
+     });
+    }
     c.setTextSize(12f); c.setPadding(22,10,22,10);
     c.setTextColor(active?0xFFFFFFFF:0xFF333333);
     android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
@@ -2842,6 +2854,41 @@ public class GameWebViewActivity extends Activity {
    }
   }catch(Exception e){Log.e("ODIN","footer",e);}
   sc.addView(row); return sc;
+ }
+ // 1.87.0 - WELTEN WECHSELN UEBER DIE FUSSLEISTE.
+ // Die verlassene Welt wandert vorher in ein kleines schwebendes Fenster
+ // (wie beim leisen Wecken). Ohne das waere ihre WebView nicht mehr
+ // gerendert, und Chromium drosselt ihre Zeitgeber auf etwa einmal je
+ // Minute - Raubzug und Rausstellen dieser Welt kaemen zu spaet. Ohne
+ // Overlay-Erlaubnis wird trotzdem gewechselt, das wird aber gesagt.
+ // Die Zielwelt kommt ueber dieselbe Daten-URI wie aus dem Dashboard:
+ // documentLaunchMode=intoExisting holt eine offene Ansicht nach vorn
+ // (Anmeldung bleibt), sonst entsteht eine neue.
+ private void kontoWechseln(String id,String nm,String user,String welt,String alle){
+  if(id==null||id.isEmpty()||id.equals(gameAccountId))return;
+  final String ziel=nm+(welt.isEmpty()?"":" · "+welt);
+  boolean schwebt=false;
+  try{
+   if(OdinFloat.active(gameAccountId))schwebt=true;
+   else if(OdinBubble.allowed(this)&&webView!=null)
+    schwebt=OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN);
+  }catch(Exception e){ android.util.Log.w("ODIN","wechsel schweben",e); }
+  setStatus(schwebt?"Wechsel zu "+ziel+" - diese Welt läuft oben im Symbol weiter"
+                   :"Wechsel zu "+ziel+" - ohne Overlay-Erlaubnis läuft diese Welt gedrosselt");
+  try{
+   Intent i=new Intent(this,GameWebViewActivity.class);
+   i.setData(android.net.Uri.parse("odin://account/"+id));
+   i.putExtra("accountId",id); i.putExtra("username",user.isEmpty()?nm:user);
+   i.putExtra("world",welt); i.putExtra("accountsJson",alle==null?"[]":alle);
+   i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
+   i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
+   i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+   startActivity(i);
+  }catch(Exception e){
+   // Wechsel gescheitert: die Welt nicht im Symbol haengen lassen.
+   setStatus("Wechsel fehlgeschlagen: "+e.getMessage());
+   try{ if(schwebt)restoreFromFloat(); }catch(Exception ig){}
+  }
  }
  private static String nz(String x){ return x==null?"":x; }
  // Leises Wecken: die Seite muss sichtbar sein, damit die Zeitgeber laufen -
