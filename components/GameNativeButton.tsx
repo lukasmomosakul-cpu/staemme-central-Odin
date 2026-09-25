@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { Browser } from '@capacitor/browser';
 import { supabase } from '../lib/supabase';
 
@@ -20,9 +21,13 @@ type Props = { accountId: string; username?: string; world?: string; accounts?: 
 type ScriptEntry = { id:string; name:string; source:string; enabled:boolean; type:'Tampermonkey'|'Gist' };
 
 const GAME_URL = 'https://www.die-staemme.de/';
+// Odin PC: GodBot im PC-Browser mit Odin-Anbindung (Tampermonkey).
+// Liegt im selben Gist wie GodBot, Quelle: pc/ im Repo.
+const ODIN_PC_URL = 'https://gist.githubusercontent.com/lukasmomosakul-cpu/caadd6e90305d081454e1ca95e3397f6/raw/OdinPC.user.js';
 const SCRIPTS_KEY = 'odin-script-library';
 
 export default function GameNativeButton({ accountId, username = '', world = '', accounts = [], teamId = null }: Props) {
+  const [pcHilfe, setPcHilfe] = useState(false);
   const openGame = async () => {
     localStorage.setItem('odin-selected-game-account', accountId);
 
@@ -90,6 +95,12 @@ export default function GameNativeButton({ accountId, username = '', world = '',
       return;
     }
 
+    // Im Browser (PC): keine App-Ansicht. Das Spiel laeuft im normalen
+    // Tab, GodBot kommt ueber Odin PC (Tampermonkey) dazu.
+    if (typeof window !== 'undefined' && !window.Android) {
+      setPcHilfe(true);
+      return;
+    }
     await Browser.open({
       url: GAME_URL,
       toolbarColor: '#0b1020',
@@ -97,9 +108,40 @@ export default function GameNativeButton({ accountId, username = '', world = '',
     });
   };
 
+  const welt = (world ?? '').trim().toLowerCase();
   return (
-    <button type="button" className="iconButton" onClick={openGame} title="Die Stämme in Odin öffnen" aria-label="Die Stämme in Odin öffnen">
-      🎮
-    </button>
+    <>
+      <button type="button" className="iconButton" onClick={openGame} title="Die Stämme in Odin öffnen" aria-label="Die Stämme in Odin öffnen">
+        🎮
+      </button>
+      {pcHilfe && (
+        <div className="modalBackdrop" role="presentation" onMouseDown={() => setPcHilfe(false)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="odinpc-title" onMouseDown={(e) => e.stopPropagation()} style={{ whiteSpace: 'normal' }}>
+            <div className="modalHead">
+              <div>
+                <div className="eyebrow">{welt || 'Die Stämme'} · am PC</div>
+                <h2 id="odinpc-title">Spielen mit Odin PC</h2>
+              </div>
+              <button type="button" className="iconButton" onClick={() => setPcHilfe(false)} aria-label="Schließen">×</button>
+            </div>
+            <div className="permissionNote" style={{ lineHeight: 1.6 }}>
+              Im Browser läuft das Spiel im normalen Tab. <strong>Odin PC</strong> (Tampermonkey) bringt GodBot mit:
+              Einstellungsabgleich mit der App, Befehle aus der Steuerzentrale, Geräte-Sperre und Protokoll.
+            </div>
+            <ol style={{ paddingLeft: 20, lineHeight: 1.7, fontSize: 14 }}>
+              <li>Tampermonkey im Browser installieren (tampermonkey.net). In Chrome/Edge in den Erweiterungsdetails ggf. „Nutzerskripte zulassen“ bzw. den Entwicklermodus einschalten.</li>
+              <li>„Odin PC installieren“ tippen und in Tampermonkey bestätigen.</li>
+              <li>Ein vorhandenes Skript „GodBot“ in Tampermonkey <strong>deaktivieren</strong> – sonst läuft GodBot doppelt.</li>
+              <li>Spiel öffnen, Welt betreten und unten links im Feld „Odin PC“ mit deinem Odin-Konto anmelden (einmal je Welt).</li>
+            </ol>
+            <div className="muted">Führt gerade die App dieses Konto, pausiert GodBot am PC. „Hier übernehmen“ holt ihn herüber.</div>
+            <div className="modalActions">
+              <button type="button" className="button secondary" onClick={() => window.open(ODIN_PC_URL, '_blank', 'noopener')}>Odin PC installieren</button>
+              <button type="button" className="button" onClick={() => { window.open(GAME_URL, '_blank', 'noopener'); setPcHilfe(false); }}>Spiel öffnen</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
