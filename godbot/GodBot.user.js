@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      536
+// @version      537
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32909,23 +32909,10 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             }
 
             // In der App: zugeklappt unsichtbar (die GodBot-Leiste der App
-            // zeigt den Zustand), aufgeklappt als Blatt am unteren Rand -
-            // wie ein Bedienfeld der App, nicht wie ein Fenster darueber.
+            // zeigt den Zustand), aufgeklappt zentriert wie bisher.
+            // 25.09.2026: das Blatt am unteren Rand (v536) war nicht gewollt.
             if (odinEingebettet()) {
-                if (minimized) {
-                    root.style.display = "none";
-                } else {
-                    root.style.display = "flex";
-                    root.style.top = "";
-                    root.style.left = "0";
-                    root.style.right = "0";
-                    root.style.bottom = "0";
-                    root.style.transform = "none";
-                    root.style.width = "100%";
-                    root.style.maxHeight = "72vh";
-                    root.style.borderRadius = "14px 14px 0 0";
-                    root.style.borderBottom = "none";
-                }
+                root.style.display = minimized ? "none" : "flex";
             }
         }
 
