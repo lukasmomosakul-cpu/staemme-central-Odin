@@ -2216,13 +2216,17 @@ public final class OdinFloat {
  private static final int LAY_W=420, LAY_H=740;
  public static final int GROSS=150, KLEIN=72;   // Kantenlaenge in Pixeln
  private static class Fenster {
-  View rahmen; WebView web; WindowManager wm;
+  View rahmen; WebView web; WindowManager wm; int win;
  }
  private static final Map<String,Fenster> offen=new LinkedHashMap<>();
 
  public static boolean allowed(Context c){ return Settings.canDrawOverlays(c); }
  public static synchronized boolean active(String accountId){ return offen.containsKey(schluessel(accountId)); }
  public static synchronized int anzahl(){ return offen.size(); }
+ // 1.90.0: kleines Fenster = leises Wecken, arbeitet gerade einen Termin ab.
+ public static synchronized boolean klein(String accountId){
+  Fenster f=offen.get(schluessel(accountId)); return f!=null&&f.win<GROSS;
+ }
  private static String schluessel(String a){ return a==null||a.isEmpty()?"_":a; }
 
  public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore){
@@ -2285,7 +2289,7 @@ public final class OdinFloat {
    }
 
    final WindowManager wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
-   final Fenster f=new Fenster(); f.web=web; f.wm=wm;
+   final Fenster f=new Fenster(); f.web=web; f.wm=wm; f.win=win;
 
    symbol.setOnTouchListener(new View.OnTouchListener(){
     float dx,dy,sx,sy; boolean bewegt;
@@ -2871,23 +2875,38 @@ public class GameWebViewActivity extends Activity {
  // documentLaunchMode=intoExisting holt eine offene Ansicht nach vorn
  // (Anmeldung bleibt), sonst entsteht eine neue.
  private String wechselZiel=""; private long wechselAt=0L;
+ // Holt alle Welten ausser 'ausser' aus ihren grossen Schwebesymbolen zurueck
+ // in die eigene Ansicht (ohne sie nach vorn zu holen). Die kleinen Fenster
+ // des leisen Weckens bleiben - sie arbeiten gerade einen Termin ab.
+ static void schwebendeEinholen(String ausser){
+  java.util.List<GameWebViewActivity> l;
+  synchronized(OFFEN){ l=new java.util.ArrayList<>(OFFEN.values()); }
+  for(GameWebViewActivity a:l){
+   try{
+    if(a==null||a.isFinishing())continue;
+    if(a.gameAccountId.equals(ausser==null?"":ausser))continue;
+    if(!OdinFloat.active(a.gameAccountId)||OdinFloat.klein(a.gameAccountId))continue;
+    a.runOnUiThread(()->a.holeAusFenster(false));
+   }catch(Exception ignored){}
+  }
+ }
  // Ganz verdeckt = der Wechsel hat gegriffen. onPause reicht dafuer nicht:
  // auch ein gescheiterter Wechsel pausiert die Ansicht kurz.
  @Override protected void onStop(){ super.onStop(); wechselAt=0L; }
  private void kontoWechseln(String id,String nm,String user,String welt,String alle){
   if(id==null||id.isEmpty()||id.equals(gameAccountId))return;
   final String ziel=nm+(welt.isEmpty()?"":" · "+welt);
-  boolean schwebt=false;
-  try{
-   if(OdinFloat.active(gameAccountId))schwebt=true;
-   else if(OdinBubble.allowed(this)&&webView!=null)
-    // 1.89.0: das GROSSE, antippbare Symbol wie bei "Minimieren". Das
-    // kleine sass auf Hoehe der Statusleiste - dort nimmt Android jede
-    // Beruehrung selbst (Herunterwischen), das Symbol war nicht zu fassen.
-    schwebt=OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat);
-  }catch(Exception e){ android.util.Log.w("ODIN","wechsel schweben",e); }
-  setStatus(schwebt?"Wechsel zu "+ziel+" - diese Welt läuft oben im Symbol weiter"
-                   :"Wechsel zu "+ziel+" - ohne Overlay-Erlaubnis läuft diese Welt gedrosselt");
+  // 1.90.0 - NUR DIE ANGETIPPTE WELT IST ZU SEHEN (Nutzerwunsch 25.09.).
+  // Kein Schwebesymbol mehr fuer die verlassene Welt, und Symbole, die von
+  // frueheren Wechseln oder "Minimieren" noch stehen, werden eingeholt.
+  // Folge, bewusst in Kauf genommen: die verlassenen Welten laufen im
+  // Hintergrund gedrosselt (Chromium). Termine (Raubzug, Rausstellen,
+  // Massenunterstuetzung) weckt der Dienst weiter ueber das kleine Fenster
+  // des leisen Weckens - das bleibt unangetastet, es schliesst sich nach
+  // getaner Arbeit selbst.
+  final boolean schwebt=false;
+  schwebendeEinholen(id);
+  setStatus("Wechsel zu "+ziel);
   try{
    Intent i=new Intent(this,GameWebViewActivity.class);
    i.setData(android.net.Uri.parse("odin://account/"+id));
