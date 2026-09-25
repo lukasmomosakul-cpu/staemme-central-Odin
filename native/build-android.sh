@@ -2605,6 +2605,24 @@ public class GameWebViewActivity extends Activity {
  // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
+ // Seitenwechsel-Sperre (1.81.0): GodBot haelt einen Seitenwechsel an, den
+ // der Nutzer waehrend eines laufenden Vorgangs ausgeloest hat. Statt der
+ // nackten Browser-Rueckfrage ein eigener Dialog mit klaren Knoepfen.
+ // Wegtippen oder Zurueck = hierbleiben.
+ @Override public boolean onJsBeforeUnload(WebView v,String u,String msg,JsResult res){
+  runOnUiThread(()->{
+   try{
+    new android.app.AlertDialog.Builder(GameWebViewActivity.this)
+     .setTitle("GodBot arbeitet gerade")
+     .setMessage((msg==null||msg.trim().isEmpty())?"Ein Seitenwechsel jetzt bricht den laufenden Vorgang ab.":msg)
+     .setPositiveButton("Hierbleiben",(d,w)->res.cancel())
+     .setNegativeButton("Trotzdem wechseln",(d,w)->res.confirm())
+     .setOnCancelListener(d->res.cancel())
+     .show();
+   }catch(Exception e){ res.confirm(); }
+  });
+  return true;
+ }
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
  @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
@@ -3602,6 +3620,20 @@ public class GameWebViewActivity extends Activity {
  }
  @Override public void onBackPressed(){
   if(dimDecke!=null){dimmenAus();return;}
+  // Zurueck ist ein Seitenwechsel wie jeder andere: laeuft gerade ein
+  // Vorgang (Stand der GodBot-Leiste, hoechstens 30 s alt), erst fragen.
+  org.json.JSONObject st=godbotStand;
+  String lauf=st==null?"":st.optString("laeuft","");
+  boolean frisch=st!=null&&System.currentTimeMillis()-st.optLong("at",0)<30000L;
+  if(frisch&&!lauf.isEmpty()&&!"null".equals(lauf)&&webView.canGoBack()){
+   new android.app.AlertDialog.Builder(this)
+    .setTitle("GodBot arbeitet gerade")
+    .setMessage("Ein Seitenwechsel jetzt bricht den laufenden Vorgang ("+lauf+") ab.")
+    .setPositiveButton("Hierbleiben",null)
+    .setNegativeButton("Trotzdem zurück",(d,w)->{ if(webView.canGoBack())webView.goBack(); })
+    .show();
+   return;
+  }
   if(webView.canGoBack())webView.goBack();else super.onBackPressed();
  }
  private void minimizeToApp(){finish();}

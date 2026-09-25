@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      537
+// @version      538
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -418,7 +418,7 @@
             const entered = (input.value || "").trim();
             if (entered && _c2(accountName).includes(entered)) {
                 try { localStorage.setItem(_k1, "1"); } catch (e) { }
-                location.reload();
+                gbNavFreigeben(); location.reload();
             } else {
                 errorEl.textContent = "Code ungültig.";
             }
@@ -22098,7 +22098,7 @@ function captchaAutoOpenGrund() {
                 knopf.onclick = () => {
                     // Der eigene Neustart darf nicht als Abbruch gelten.
                     try { localStorage.setItem("tw_expected_navigation", "1"); } catch (e) { }
-                    location.reload();
+                    gbNavFreigeben(); location.reload();
                 };
             }
             banner.appendChild(knopf);
@@ -22228,7 +22228,7 @@ function captchaAutoOpenGrund() {
                                     "wird EINMAL neu geladen, damit sie erscheinen kann. " +
                                     "Je Sperre geschieht das genau ein einziges Mal.");
                                 try { localStorage.setItem("tw_expected_navigation", "1"); } catch (e) { }
-                                location.reload();
+                                gbNavFreigeben(); location.reload();
                                 return;
                             }
                         }
@@ -23431,7 +23431,7 @@ function captchaAutoOpenGrund() {
                 localStorage.setItem("tw_dim_was_active", "1");
             }
             localStorage.setItem("tw_expected_navigation", "1");
-            window.location.href =
+            gbNavFreigeben(); window.location.href =
                 "/game.php?village=" + pending.villageId +
                 "&screen=overview_villages&mode=units&type=own_home";
         }
@@ -29816,7 +29816,7 @@ function startFarmGodHere(onResultsReady) {
                     console.warn("[TW] Farmen: Hintergrund-Frame nicht bereit - weiche einmalig auf echten Seitenwechsel aus.");
                     localStorage.setItem("tw_dim_was_active", "1");
                     localStorage.setItem("tw_expected_navigation", "1");
-                    window.location.href = "/game.php?village=" + game_data.village.id + "&screen=am_farm";
+                    gbNavFreigeben(); window.location.href = "/game.php?village=" + game_data.village.id + "&screen=am_farm";
                     return;
                 }
                 loadFarmGodScript(onResultsReady);
@@ -29828,7 +29828,7 @@ function startFarmGodHere(onResultsReady) {
     if (tabbenNavigationBlocked("Farmen")) return;
 
     localStorage.setItem("tw_expected_navigation", "1");
-    window.location.href = "/game.php?village=" + game_data.village.id + "&screen=am_farm";
+    gbNavFreigeben(); window.location.href = "/game.php?village=" + game_data.village.id + "&screen=am_farm";
 }
 
 // === Statistik-Zwischenspeicher =====================================
@@ -31976,7 +31976,7 @@ const DEFAULT_SETTINGS = {
                 localStorage.setItem("tw_dim_was_active", "1");
             }
             localStorage.setItem("tw_expected_navigation", "1");
-            window.location.href =
+            gbNavFreigeben(); window.location.href =
                 "/game.php?village=" + villageId + "&screen=place&mode=scavenge";
 
             return "ok";
@@ -35397,7 +35397,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
         }
 
         document.getElementById("tw-settings").remove();
-        location.reload();
+        gbNavFreigeben(); location.reload();
     };
 
     content.querySelector("#tw-cancel").onclick = () => {
@@ -35531,7 +35531,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             localStorage.setItem("tw_dim_was_active", "1");
         }
         localStorage.setItem("tw_expected_navigation", "1");
-        window.location.href = href;
+        gbNavFreigeben(); window.location.href = href;
     });
 
     function bindSectionToggle(toggleId, panelId, title) {
@@ -35954,7 +35954,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                 `${hinweise.length ? " - Einzelheiten im Protokoll" : ""}. ` +
                 `Seite wird neu geladen...`, "ok");
             localStorage.setItem("tw_expected_navigation", "1");
-            setTimeout(() => location.reload(), 900);
+            setTimeout(() => { gbNavFreigeben(); location.reload(); }, 900);
             return;
         }
 
@@ -35973,7 +35973,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
         showToast(`Einstellungen importiert${managerZahl ? " (mit Managerbereich)" : ""} - ` +
             `Seite wird neu geladen...`, "ok");
         localStorage.setItem("tw_expected_navigation", "1");
-        setTimeout(() => location.reload(), 600);
+        setTimeout(() => { gbNavFreigeben(); location.reload(); }, 600);
     };
 
     initAttackPlannerUI(content);
@@ -35991,7 +35991,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             console.log("[TW] Oeffne FarmGod-Einstellungen (kein automatischer Plan-farms-Klick).");
 
             localStorage.setItem("tw_expected_navigation", "1");
-            window.location.href =
+            gbNavFreigeben(); window.location.href =
                 "/game.php?village=" + game_data.village.id + "&screen=am_farm";
         };
     }
@@ -54535,7 +54535,7 @@ function reloadWorkContext(nextFlagKey, onReady) {
 
     if (!frame && !dimActive && !backgroundWanted) {
         localStorage.setItem("tw_expected_navigation", "1");
-        window.location.reload();
+        gbNavFreigeben(); window.location.reload();
         return;
     }
 
@@ -54550,7 +54550,7 @@ function reloadWorkContext(nextFlagKey, onReady) {
                 if (dimActive && !frame) {
                     console.warn("[TW] Farmen: Hintergrund-Frame-Weg fehlgeschlagen - weiche auf echten Reload aus (Vollbild geht dabei verloren).");
                     localStorage.setItem("tw_expected_navigation", "1");
-                    window.location.reload();
+                    gbNavFreigeben(); window.location.reload();
                     return;
                 }
 
@@ -60638,6 +60638,57 @@ if (location.href.includes("mode=scavenge_mass")) {
     // greifen ueber diese Bruecke auf die Schleifen-Schalter zu.
     const TW_AKTIONEN = {};
 
+    // === SEITENWECHSEL-SPERRE WAEHREND EINES VORGANGS (25.09.2026) =========
+    // Wer waehrend eines laufenden Vorgangs (Raubzug abschicken, Farmen,
+    // Rausstellen, ...) im Spiel herumtippt, hat ihn bisher mit dem naechsten
+    // Seitenwechsel abgebrochen. Jetzt fragt die Seite vorher nach
+    // (beforeunload). In der App zeigt Odin daraus einen eigenen Dialog
+    // "Hierbleiben / Trotzdem wechseln", im Browser erscheint die
+    // Rueckfrage des Browsers.
+    //
+    // Gesperrt wird NUR, was der Nutzer ausgeloest hat:
+    //   - ein Vorgang haelt die Prozesssperre (currentProcessOwner)
+    //   - die letzte Beruehrung der Seite ist hoechstens 5 s her
+    //   - und sie galt nicht GodBots eigener Oberflaeche (id "tw-...")
+    // GodBots eigene Seitenwechsel melden sich vorher mit gbNavFreigeben()
+    // ab. Unbeaufsichtigt (nachts) gibt es keine Beruehrung - dort kann die
+    // Sperre nie etwas aufhalten.
+    const GB_SPERRE_BERUEHRUNG_MS = 5000;
+    const GB_VORGANG_NAMEN = {
+        scavenge: "Raubzug", farm: "Farmen", bau: "Bauautomat", resources: "Rohstoff-Fix",
+        attack: "Angriffsplaner", rausstellen: "Rausstellen"
+    };
+    let gbBeruehrung = null;
+
+    function gbNavFreigeben() {
+        try { window.__gbNavFreiBis = Date.now() + 8000; } catch (e) { }
+    }
+
+    function gbSeitenwechselPruefen(ev) {
+        try {
+            if (Date.now() < (window.__gbNavFreiBis || 0)) return;
+            const owner = currentProcessOwner();
+            if (!owner) return;
+            const b = gbBeruehrung;
+            if (!b || b.eigen || Date.now() - b.at > GB_SPERRE_BERUEHRUNG_MS) return;
+            const name = GB_VORGANG_NAMEN[owner] || owner;
+            const text = `GodBot arbeitet gerade (${name}). Ein Seitenwechsel jetzt bricht den Vorgang ab.`;
+            console.warn(`[TW] Seitenwechsel waehrend "${name}" angehalten - Rueckfrage an den Nutzer.`);
+            ev.preventDefault();
+            ev.returnValue = text;
+            return text;
+        } catch (e) { }
+    }
+
+    try {
+        document.addEventListener("pointerdown", (e) => {
+            let eigen = false;
+            try { eigen = !!(e.target && e.target.closest && e.target.closest('[id^="tw-"]')); } catch (x) { }
+            gbBeruehrung = { at: Date.now(), eigen };
+        }, true);
+        window.addEventListener("beforeunload", gbSeitenwechselPruefen);
+    } catch (e) { }
+
     // === STEUERUNG AUS DER APP (25.09.2026) ================================
     // Die App ist die Oberflaeche, GodBot die Arbeit. Bis v535 floss der
     // Abgleich nur nach oben - die App konnte zusehen, aber nichts
@@ -61167,7 +61218,7 @@ if (location.href.includes("mode=scavenge_mass")) {
             localStorage.setItem("tw_dim_was_active", "1");
         }
         localStorage.setItem("tw_expected_navigation", "1");
-        window.location.href = url;
+        gbNavFreigeben(); window.location.href = url;
     }
 
     const HUB_MODULE_NAMES = {
