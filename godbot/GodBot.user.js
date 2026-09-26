@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      543
+// @version      544
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -5974,8 +5974,15 @@ function botMarkerSichtbar() {
     function attackPlannerVerifyConfirmTarget(doc, attack) {
         if (!attack || !attack.toCoord) return { ok: true, reason: null };
 
-        const hx = doc.querySelector('input[name="x"]');
-        const hy = doc.querySelector('input[name="y"]');
+        // v544: im Befehlsformular suchen, nicht im ganzen Dokument. Belegt
+        // gegen echtes Desktop-HTML (de259, 26.09.2026, Karten-Popup): die
+        // Karte hat ein eigenes input[name="x"] (Sprungfeld, 306|547) VOR
+        // dem Formular - der Abgleich las das und brach ab, obwohl das
+        // Formular das richtige Ziel (305|548) trug. Ohne Formular (andere
+        // Seitenfassung) wie bisher das ganze Dokument.
+        const root = doc.querySelector("#command-data-form") || doc;
+        const hx = root.querySelector('input[name="x"]');
+        const hy = root.querySelector('input[name="y"]');
         const x = hx ? String(hx.value).trim() : "";
         const y = hy ? String(hy.value).trim() : "";
 
