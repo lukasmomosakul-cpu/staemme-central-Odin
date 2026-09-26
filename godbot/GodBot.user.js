@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      546
+// @version      547
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -48793,7 +48793,22 @@ function bauUiListeHtml() {
         (rot ? `, <span style="color:${BAU_UI_ROT};">${rot} mit Problem</span>` : "") +
         (gelb ? `, <span style="color:${BAU_UI_GELB};">${gelb} beobachtet</span>` : "");
 
-    return bhBlock + bauUiVerwaltungHtml(vorlagen, kacheln) +
+    const belc = belohnungCfg();
+    const belBlock = `<div style="padding:6px 7px;background:#182234;border-radius:4px;
+                margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <span style="font-weight:bold;color:${BAU_UI_HELL};font-size:11px;">
+                Belohnungen als Schub</span>
+            ${bauUiKnopf("bel-an", "", belc.enabled ? "an" : "aus", belc.enabled)}
+        </div>
+        <div style="color:${BAU_UI_SCHWACH};font-size:9px;margin-top:5px;line-height:1.4;">
+            Fehlen dem nächsten Bauauftrag nur Rohstoffe, holt GodBot Belohnungen aus dem
+            Quest-Reiter „Belohnung“ ab - aber nur, wenn sie die Lücke ganz schließen und
+            kein Rohstoff über den Speicher geht. Sonst bleiben sie liegen.
+        </div>
+    </div>`;
+
+    return bhBlock + belBlock + bauUiVerwaltungHtml(vorlagen, kacheln) +
         `<div style="display:flex;align-items:center;gap:6px;margin:0 0 6px 0;">
             <span style="color:${BAU_UI_HELL};font-size:11px;font-weight:bold;flex:0 0 auto;">Dörfer</span>
             <span style="flex:1 1 auto;height:1px;background:#26334a;"></span>
@@ -49673,6 +49688,16 @@ function bauUiBefehl(cmd, arg, neuZeichnen) {
             break;
         }
 
+        case "bel-an": {
+            const c = belohnungSetzen({ enabled: !belohnungCfg().enabled });
+            if (c.enabled) belohnungStandSpeichern({});
+            bauUiMelde(c.enabled
+                ? "Belohnungen als Schub an - abgeholt wird nur, was den nächsten Bauauftrag bezahlbar macht."
+                : "Belohnungen als Schub aus - GodBot holt keine Belohnungen mehr ab.",
+                c.enabled ? "#8fd4a0" : "#e8c34a");
+            break;
+        }
+
         case "bh-jetzt": {
             let anzahl = 0;
             try { anzahl = bhTauschKandidaten().length; } catch (e) { }
@@ -50364,6 +50389,341 @@ function bauAuftragSenden(win, doc, gebaeude, callback) {
         }));
 }
 
+// BELOHNUNGEN DES QUESTSYSTEMS ALS SCHUB FUER DEN BAUAUTOMATEN (v547)
+// ------------------------------------------------------------------
+// Fuer jede Gebaeudestufe, die zum ersten Mal fertig wird, legt das
+// Questsystem Rohstoffe in den Reiter "Belohnung". Abgeholt werden sie
+// in das Dorf, das bei der Anfrage offen ist (village= in der Adresse,
+// von Fetteruruk am 26.09.2026 bestaetigt).
+//
+// Belegt am 26.09.2026 (de259/de258, Desktop, Mitschnitt):
+//   Liste:   GET  /game.php?village=V&screen=new_quests&ajax=quest_popup&tab=main-tab
+//            -> {"response":{"dialog":"<html>"}}; im Dialog steht
+//            RewardSystem.setRewards(sichtbar[], rewards_all{}, html{}, anzahl)
+//            sichtbar: je Gebaeude die naechste Belohnung
+//              {id, building, building_level, status:"unlocked",
+//               reward:{wood, stone, iron}}
+//            rewards_all: je Gebaeude {ids[], wood, stone, iron, count}
+//   Abholen: POST /game.php?village=V&screen=new_quests&ajax=claim_reward
+//            reward_id=<id>&h=<csrf>
+//            -> {"response":{"rewards":[...], "rewards_all":{...}, ...}}
+//
+// Grundsaetze:
+//   - nur wenn der naechste Bauauftrag allein an Rohstoffen scheitert
+//   - nur wenn die Belohnungen die Luecke GANZ schliessen - sonst
+//     bleiben sie liegen (spaeter sind sie genauso viel wert)
+//   - nie ueber den Speicher: was ueberliefe, waere verloren
+//   - kein Dauerabfragen: nach einem leeren oder unpassenden Ergebnis
+//     Ruhe je Dorf, bei einer unlesbaren Liste Ruhe fuer alle
+const BELOHNUNG_KEY = "tw_belohnung_stand";
+const BELOHNUNG_RUHE_DORF_MS = 30 * 60 * 1000;
+const BELOHNUNG_RUHE_LEER_MS = 60 * 60 * 1000;
+const BELOHNUNG_RUHE_FEHLER_MS = 6 * 60 * 60 * 1000;
+const BELOHNUNG_MAX_JE_LAUF = 20;
+// Doerfer, deren Schritt nach einem erfolglosen Belohnungsversuch ein
+// zweites Mal laeuft - dann ohne erneuten Versuch.
+const belohnungUebergehen = new Set();
+const BELOHNUNG_RES = ["wood", "stone", "iron"];
+
+function belohnungCfg() {
+    let c = null;
+    try { c = (loadSettings() || {}).belohnung; } catch (e) { }
+    return { enabled: !c || c.enabled !== false };
+}
+
+function belohnungSetzen(aenderung) {
+    let s = {};
+    try { s = loadSettings() || {}; } catch (e) { s = {}; }
+    s.belohnung = Object.assign({ enabled: true }, s.belohnung || {}, aenderung || {});
+    saveSettings(s);
+    return belohnungCfg();
+}
+
+function belohnungStandLaden() {
+    try {
+        const s = JSON.parse(localStorage.getItem(BELOHNUNG_KEY) || "{}");
+        return (s && typeof s === "object") ? s : {};
+    } catch (e) { return {}; }
+}
+
+function belohnungStandSpeichern(s) {
+    try { localStorage.setItem(BELOHNUNG_KEY, JSON.stringify(s || {})); } catch (e) { }
+}
+
+function belohnungRuhe(villageId, ms, allgemein) {
+    const s = belohnungStandLaden();
+    const bis = Date.now() + ms;
+    if (allgemein) s.ruheBis = bis;
+    else {
+        s.dorfRuhe = s.dorfRuhe || {};
+        s.dorfRuhe[String(villageId)] = bis;
+        // Alte Eintraege nicht ewig mitschleppen.
+        Object.keys(s.dorfRuhe).forEach(k => { if (s.dorfRuhe[k] < Date.now()) delete s.dorfRuhe[k]; });
+    }
+    belohnungStandSpeichern(s);
+}
+
+function belohnungInRuhe(villageId) {
+    const s = belohnungStandLaden();
+    if (s.ruheBis && s.ruheBis > Date.now()) return true;
+    const d = s.dorfRuhe && s.dorfRuhe[String(villageId)];
+    return !!(d && d > Date.now());
+}
+
+// Liest ab "start" genau einen JSON-Wert ([...] oder {...}) samt
+// Zeichenketten mit Maskierung - die Liste steht als Skript-Aufruf im
+// Dialog, nicht als eigenes JSON.
+function belohnungJsonWertLesen(text, start) {
+    let i = start;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    const auf = text[i];
+    if (auf !== "[" && auf !== "{") return null;
+    let tiefe = 0, inStr = false, esc = false;
+    for (let j = i; j < text.length; j++) {
+        const c = text[j];
+        if (inStr) {
+            if (esc) esc = false;
+            else if (c === "\\") esc = true;
+            else if (c === "\"") inStr = false;
+            continue;
+        }
+        if (c === "\"") { inStr = true; continue; }
+        if (c === "[" || c === "{") tiefe++;
+        else if (c === "]" || c === "}") {
+            tiefe--;
+            if (tiefe === 0) return { roh: text.slice(i, j + 1), ende: j + 1 };
+        }
+    }
+    return null;
+}
+
+function belohnungListeAusDialog(html) {
+    const t = String(html || "");
+    const p = t.indexOf("RewardSystem.setRewards(");
+    if (p < 0) return null;
+    const a = belohnungJsonWertLesen(t, p + "RewardSystem.setRewards(".length);
+    if (!a) return null;
+    let k = a.ende;
+    while (k < t.length && /[\s,]/.test(t[k])) k++;
+    const b = belohnungJsonWertLesen(t, k);
+    if (!b) return null;
+    try {
+        const sichtbar = JSON.parse(a.roh);
+        const alleRoh = JSON.parse(b.roh);
+        if (!Array.isArray(sichtbar)) return null;
+        // Leere Liste kommt als [] statt {} - beides heisst "nichts da".
+        const alle = (alleRoh && !Array.isArray(alleRoh) && typeof alleRoh === "object") ? alleRoh : {};
+        return { sichtbar, alle };
+    } catch (e) {
+        return null;
+    }
+}
+
+function belohnungListeHolen(villageId, cb) {
+    const url = "/game.php?village=" + encodeURIComponent(villageId) +
+        "&screen=new_quests&ajax=quest_popup&tab=main-tab";
+    twCountRequest(url, "auto", "belohnung-liste");
+    fetch(url, { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } })
+        .then(r => r.text().then(txt => ({ status: r.status, txt })))
+        .then(({ status, txt }) => {
+            let j = null;
+            try { j = JSON.parse(txt); } catch (e) { }
+            if (status !== 200 || !j) {
+                let botschutz = false;
+                try {
+                    botschutz = frameDocBlocked(new DOMParser().parseFromString(String(txt), "text/html"),
+                        "belohnung:liste");
+                } catch (e) { }
+                cb({ ok: false, botschutz, grund: botschutz ? "Botschutz" : `HTTP ${status}, kein JSON` });
+                return;
+            }
+            const dialog = j.response && j.response.dialog;
+            const liste = belohnungListeAusDialog(dialog);
+            if (!liste) { cb({ ok: false, grund: "RewardSystem.setRewards nicht im Quest-Fenster gefunden" }); return; }
+            cb({ ok: true, liste });
+        })
+        .catch(err => cb({ ok: false, grund: "Anfrage nicht möglich: " + (err && err.message ? err.message : err) }));
+}
+
+function belohnungAbholen(villageId, csrf, rewardId, cb) {
+    const url = "/game.php?village=" + encodeURIComponent(villageId) +
+        "&screen=new_quests&ajax=claim_reward";
+    twCountRequest(url, "auto", "belohnung-abholen");
+    fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Requested-With": "XMLHttpRequest"
+        },
+        body: "reward_id=" + encodeURIComponent(rewardId) + "&h=" + encodeURIComponent(csrf)
+    })
+        .then(r => r.text().then(txt => ({ status: r.status, txt })))
+        .then(({ status, txt }) => {
+            let j = null;
+            try { j = JSON.parse(txt); } catch (e) { }
+            if (status !== 200 || !j) {
+                let botschutz = false;
+                try {
+                    botschutz = frameDocBlocked(new DOMParser().parseFromString(String(txt), "text/html"),
+                        "belohnung:abholen");
+                } catch (e) { }
+                cb({ ok: false, botschutz, grund: botschutz ? "Botschutz" : `HTTP ${status}, kein JSON` });
+                return;
+            }
+            const r = j.response;
+            if (!r || !Array.isArray(r.rewards)) {
+                const fehler = j.error || (r && (r.error || r.message)) || null;
+                cb({ ok: false, grund: fehler ? String(fehler) : "Antwort ohne Belohnungsliste: " + String(txt).slice(0, 200) });
+                return;
+            }
+            const alle = (r.rewards_all && !Array.isArray(r.rewards_all)) ? r.rewards_all : {};
+            cb({ ok: true, liste: { sichtbar: r.rewards, alle }, gameData: j.game_data || null });
+        })
+        .catch(err => cb({ ok: false, grund: "Anfrage nicht möglich: " + (err && err.message ? err.message : err) }));
+}
+
+// Rechnet, welche Belohnungen (je Gebaeude der Reihe nach) die Luecke
+// schliessen, ohne dass ein Rohstoff ueber den Speicher geht. Bekannt
+// ist je Gebaeude nur die naechste Belohnung genau; fuer die weiteren
+// gilt der Durchschnitt aus rewards_all.
+function belohnungPlan(liste, vorrat, kosten) {
+    const stapel = {};
+    (liste.sichtbar || []).forEach(r => {
+        if (!r || r.status !== "unlocked" || !r.reward || !r.building) return;
+        const alle = liste.alle[r.building] || null;
+        const n = Math.max(1, alle ? parseInt(alle.count, 10) || 1 : 1);
+        const folge = [];
+        const erste = {};
+        BELOHNUNG_RES.forEach(x => { erste[x] = parseInt(r.reward[x], 10) || 0; });
+        folge.push(erste);
+        if (n > 1 && alle) {
+            const rest = {};
+            BELOHNUNG_RES.forEach(x => {
+                rest[x] = Math.floor(Math.max(0, (parseInt(alle[x], 10) || 0) - erste[x]) / (n - 1));
+            });
+            for (let i = 1; i < n; i++) folge.push(rest);
+        }
+        stapel[r.building] = folge;
+    });
+
+    const jetzt = { wood: vorrat.wood, stone: vorrat.stone, iron: vorrat.iron };
+    const luecke = () => BELOHNUNG_RES.reduce((s, x) => s + Math.max(0, kosten[x] - jetzt[x]), 0);
+    const plan = [];
+    while (luecke() > 0 && plan.length < BELOHNUNG_MAX_JE_LAUF) {
+        let best = null;
+        Object.keys(stapel).forEach(geb => {
+            const amt = stapel[geb][0];
+            if (!amt) return;
+            if (BELOHNUNG_RES.some(x => jetzt[x] + amt[x] > vorrat.storageMax)) return;
+            const nutzen = BELOHNUNG_RES.reduce((s, x) =>
+                s + Math.min(amt[x], Math.max(0, kosten[x] - jetzt[x])), 0);
+            if (nutzen <= 0) return;
+            const summe = amt.wood + amt.stone + amt.iron;
+            if (!best || nutzen > best.nutzen || (nutzen === best.nutzen && summe < best.summe)) {
+                best = { geb, amt, nutzen, summe };
+            }
+        });
+        if (!best) break;
+        stapel[best.geb].shift();
+        BELOHNUNG_RES.forEach(x => { jetzt[x] += best.amt[x]; });
+        plan.push(best.geb);
+    }
+    return { plan, geschlossen: luecke() === 0, danach: jetzt };
+}
+
+// Einstieg aus dem Bauautomaten. cb({ geholt, text }) - geholt heisst:
+// die Luecke ist geschlossen, das Dorf soll sofort wieder dran.
+function belohnungFuerBau(win, villageId, kosten, vorrat, zweck, cb) {
+    const dorf = getVillageDisplayName(villageId) || villageId;
+    const ende = (geholt, text) => { try { cb({ geholt: !!geholt, text: text || "" }); } catch (e) { } };
+
+    if (!belohnungCfg().enabled) { ende(false, "aus"); return; }
+    if (!vorrat || !kosten) { ende(false, "Vorrat oder Kosten unbekannt"); return; }
+    if (BELOHNUNG_RES.some(x => (kosten[x] || 0) > vorrat.storageMax)) {
+        ende(false, "Kosten größer als der Speicher");
+        return;
+    }
+    if (belohnungInRuhe(villageId)) { ende(false, "Ruhezeit"); return; }
+    if (isBotProtectionActive()) { ende(false, "Botschutz"); return; }
+    const csrf = win && win.game_data && win.game_data.csrf;
+    if (!csrf) { ende(false, "csrf fehlt"); return; }
+
+    belohnungListeHolen(villageId, (r) => {
+        if (!r.ok) {
+            if (r.botschutz) { haltAllAutomation("belohnung:liste"); ende(false, "Botschutz"); return; }
+            console.warn(`[TW] Belohnungen ${dorf}: Liste nicht lesbar - ${r.grund}. ` +
+                `Nächster Versuch in 6 Std.`);
+            belohnungRuhe(villageId, BELOHNUNG_RUHE_FEHLER_MS, true);
+            ende(false, r.grund);
+            return;
+        }
+        if (!r.liste.sichtbar.length) {
+            belohnungRuhe(villageId, BELOHNUNG_RUHE_LEER_MS, true);
+            ende(false, "keine Belohnung offen");
+            return;
+        }
+        const p = belohnungPlan(r.liste, vorrat, kosten);
+        if (!p.geschlossen) {
+            console.log(`[TW] Belohnungen ${dorf}: ${zweck} - die offenen Belohnungen schließen ` +
+                `die Lücke nicht (ohne Speicherüberlauf). Sie bleiben liegen.`);
+            belohnungRuhe(villageId, BELOHNUNG_RUHE_DORF_MS, false);
+            ende(false, "Lücke nicht schließbar");
+            return;
+        }
+
+        console.log(`[TW] Belohnungen ${dorf}: ${zweck} - hole ${p.plan.length} Belohnung(en) ` +
+            `(${p.plan.join(", ")}), danach ${p.danach.wood}/${p.danach.stone}/${p.danach.iron} ` +
+            `bei Kosten ${kosten.wood}/${kosten.stone}/${kosten.iron}.`);
+
+        let liste = r.liste;
+        let i = 0;
+        const naechste = () => {
+            if (i >= p.plan.length) {
+                console.log(`[TW] Belohnungen ${dorf}: ${p.plan.length} abgeholt - ${zweck} ist bezahlbar.`);
+                ende(true, `${p.plan.length} Belohnung(en) abgeholt`);
+                return;
+            }
+            if (isBotProtectionActive()) { ende(false, "Botschutz"); return; }
+            const geb = p.plan[i];
+            const rw = (liste.sichtbar || []).find(x => x && x.building === geb && x.status === "unlocked");
+            if (!rw) {
+                console.warn(`[TW] Belohnungen ${dorf}: für ${geb} ist keine Belohnung mehr offen - Abbruch nach ${i}.`);
+                belohnungRuhe(villageId, BELOHNUNG_RUHE_DORF_MS, false);
+                ende(false, "Liste hat sich geändert");
+                return;
+            }
+            belohnungAbholen(villageId, csrf, rw.id, (a) => {
+                if (!a.ok) {
+                    if (a.botschutz) { haltAllAutomation("belohnung:abholen"); ende(false, "Botschutz"); return; }
+                    console.warn(`[TW] Belohnungen ${dorf}: Abholen von ${geb} Stufe ${rw.building_level} ` +
+                        `fehlgeschlagen - ${a.grund}.`);
+                    belohnungRuhe(villageId, BELOHNUNG_RUHE_DORF_MS, false);
+                    ende(false, a.grund);
+                    return;
+                }
+                // Gegenprobe: das Spiel schreibt dem OFFENEN Dorf gut. Meldet
+                // die Antwort ein anderes, sofort aufhoeren.
+                const gv = a.gameData && a.gameData.village;
+                if (gv && String(gv.id) !== String(villageId)) {
+                    console.error(`[TW] Belohnungen ${dorf}: Antwort nennt Dorf ${gv.id} statt ${villageId} - ` +
+                        `Abbruch, damit nichts im falschen Dorf landet.`);
+                    belohnungRuhe(villageId, BELOHNUNG_RUHE_FEHLER_MS, true);
+                    ende(false, "falsches Dorf");
+                    return;
+                }
+                console.log(`[TW] Belohnungen ${dorf}: ${geb} Stufe ${rw.building_level} abgeholt ` +
+                    `(+${rw.reward.wood}/${rw.reward.stone}/${rw.reward.iron})` +
+                    (gv ? `, Vorrat jetzt ${Math.floor(gv.wood)}/${Math.floor(gv.stone)}/${Math.floor(gv.iron)}.` : "."));
+                liste = a.liste;
+                i++;
+                setTimeout(naechste, humanDelay(600, 1400));
+            });
+        };
+        naechste();
+    });
+}
+
 function bauSchrittAusfuehren(win, doc, villageId, callback) {
     const fertig = (art, text) => { try { callback(art, text); } catch (e) { } };
     const dorf = getVillageDisplayName(villageId) || villageId;
@@ -50426,6 +50786,34 @@ function bauSchrittAusfuehren(win, doc, villageId, callback) {
             fertig("fehler", grund);
         });
         return;
+    }
+
+    // v547: Fehlen nur Rohstoffe, erst die Belohnungen des Questsystems
+    // fragen. Schliessen sie die Luecke, ist das Dorf sofort wieder dran
+    // und baut beim naechsten Besuch. Sonst derselbe Schritt noch einmal
+    // mit Vermerk - auf derselben Seite, ohne neuen Abruf - und es geht
+    // weiter wie bisher.
+    if (schritt.art === "vormerken" && !schritt.speicherZuKlein) {
+        const vk = String(villageId);
+        const gb = stand.gebaeude && stand.gebaeude[schritt.gebaeude];
+        if (belohnungUebergehen.has(vk)) {
+            belohnungUebergehen.delete(vk);
+        } else if (gb && gb.kosten && stand.vorrat && belohnungCfg().enabled && !belohnungInRuhe(villageId)) {
+            belohnungFuerBau(win, villageId, gb.kosten, stand.vorrat,
+                `${gb.name} Stufe ${schritt.zielStufe}`, (b) => {
+                    if (b.geholt) {
+                        bauTerminLoeschen(villageId);
+                        const text = `${gb.name} Stufe ${schritt.zielStufe}: ${b.text} - ` +
+                            `wird beim nächsten Besuch gebaut.`;
+                        merkeBauErgebnis(villageId, "warten", text, stand, bauSchleifeRestMs(doc), gb.kosten);
+                        fertig("ok", text);
+                        return;
+                    }
+                    belohnungUebergehen.add(vk);
+                    bauSchrittAusfuehren(win, doc, villageId, callback);
+                });
+            return;
+        }
     }
 
     if (schritt.art !== "bauen") {
