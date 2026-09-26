@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      549
+// @version      550
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19728,6 +19728,36 @@ function botMarkerSichtbar() {
             g.coverage = g.idealTotal > 0 ? Math.round((g.actualTotal / g.idealTotal) * 100) : 0;
             onFertig(g);
         };
+        // v550: Gesendete Slots in die abgelegten Slotdaten nachtragen.
+        // Abgelegt wird VOR dem Senden (Seitenstand); die Auffrischung im
+        // Hintergrund liest nur Seite 1. Die Doerfer ab Seite 2 standen
+        // danach bis zum naechsten Lauf als frei und mit vollem Bestand da
+        // (Ares20, 23:55:08) - und zaehlten in die Wartezeit als freie Slots.
+        const slotsNachtragen = (n) => {
+            try {
+                const view = massSlotView || {};
+                const store = JSON.parse(localStorage.getItem("tw_scavenge_slots") || "{}");
+                let nach = 0;
+                Object.keys(view).forEach(vid => {
+                    const vs = view[vid] && view[vid].slots;
+                    const ss = store[vid] && store[vid].slots;
+                    if (!vs || !ss) return;
+                    Object.keys(vs).forEach(sid => {
+                        const a = vs[sid], b = ss[sid];
+                        if (a && a.busy && b && !b.busy) {
+                            ss[sid] = Object.assign({}, b, { busy: true, returnTime: a.returnTime || null });
+                            nach++;
+                        }
+                    });
+                });
+                if (nach) {
+                    localStorage.setItem("tw_scavenge_slots", JSON.stringify(store));
+                    console.log(`[TW] Slotdaten: ${nach} gesendete Slot(s) von Seite ${n + 1} nachgetragen.`);
+                }
+            } catch (e) {
+                console.warn("[TW] Slotdaten: Nachtrag nach dem Senden gescheitert.", e);
+            }
+        };
         const seite = (n) => {
             openWorkFrame(basis + "&page=" + n, "#scavenge_mass_screen", (ok) => {
                 if (!ok) {
@@ -19758,6 +19788,7 @@ function botMarkerSichtbar() {
                 getMassSlotView();
                 runMassScavenge((summary) => {
                     addieren(summary);
+                    slotsNachtragen(n);
                     if (weiter && n + 1 < MAX_SEITEN && !isBotProtectionActive()) {
                         setTimeout(() => seite(n + 1), humanDelay(1500, 3000));
                     } else {
