@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      545
+// @version      546
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -47965,7 +47965,7 @@ function bauSchritteAusAuftraegen(auftraege) {
 // der Browser ohnehin verschickt.
 const AM_MITSCHNITT_KEY = "tw_am_mitschnitt";
 const AM_MITSCHNITT_DATEN = "tw_am_mitschnitt_daten";
-const AM_MITSCHNITT_MAX = 10;
+const AM_MITSCHNITT_MAX = 20;
 
 function amMitschnittAn() {
     return localStorage.getItem(AM_MITSCHNITT_KEY) === "1";
@@ -48017,6 +48017,20 @@ function amMitschnittBetrifft(url) {
         /quest|reward/i.test(u);
 }
 
+// v546: Quest-/Belohnungsanfragen werden in JEDER Methode mitgeschnitten
+// (auch GET), samt laengerer Antwort - die Belohnungsliste kommt
+// vermutlich per GET, das Abholen evtl. als Seitenaufruf. Alles andere
+// bleibt wie gehabt auf POST beschraenkt.
+function amMitschnittQuest(url) {
+    return /quest|reward/i.test(String(url || "")) && !/socket\.io/.test(String(url || ""));
+}
+
+function amMitschnittErfassen(methode, url) {
+    if (!amMitschnittAn()) return false;
+    if (amMitschnittQuest(url)) return true;
+    return String(methode || "").toUpperCase() === "POST" && amMitschnittBetrifft(url);
+}
+
 let amMitschnittEingehaengt = false;
 
 // Einmal eingehaengt, bleibt eingehaengt - aber aufgezeichnet wird nur,
@@ -48038,8 +48052,7 @@ function amMitschnittEinhaengen() {
         };
         XHR.prototype.send = function (body) {
             try {
-                if (amMitschnittAn() && String(this.__twMethode || "").toUpperCase() === "POST" &&
-                    amMitschnittBetrifft(this.__twUrl)) {
+                if (amMitschnittErfassen(this.__twMethode, this.__twUrl)) {
                     amMitschnittMerken("XHR", this.__twUrl,
                         (body instanceof FormData)
                             ? [...body.entries()].map(([k, v]) => `${k}=${v}`).join("&")
@@ -48051,12 +48064,12 @@ function amMitschnittEinhaengen() {
             // war erst an ihr zu sehen, dass der Server ueberhaupt
             // erreicht wurde. Sie wird nur mitgelesen, nicht angefasst.
             try {
-                if (amMitschnittAn() && String(this.__twMethode || "").toUpperCase() === "POST" &&
-                    amMitschnittBetrifft(this.__twUrl)) {
+                if (amMitschnittErfassen(this.__twMethode, this.__twUrl)) {
                     this.addEventListener("load", () => {
                         try {
                             amMitschnittMerken("XHR-Antwort", this.__twUrl,
-                                `HTTP ${this.status} :: ${String(this.responseText || "").slice(0, 2000)}`);
+                                `HTTP ${this.status} :: ${String(this.responseText || "")
+                                    .slice(0, amMitschnittQuest(this.__twUrl) ? 30000 : 2000)}`);
                         } catch (e) { }
                     });
                 }
@@ -48073,8 +48086,7 @@ function amMitschnittEinhaengen() {
         window.fetch = function (eingabe, opt) {
             try {
                 const url = (typeof eingabe === "string") ? eingabe : (eingabe && eingabe.url);
-                if (amMitschnittAn() && opt && String(opt.method || "").toUpperCase() === "POST" &&
-                    amMitschnittBetrifft(url)) {
+                if (amMitschnittErfassen(opt && opt.method, url)) {
                     amMitschnittMerken("fetch", url,
                         (opt.body instanceof FormData)
                             ? [...opt.body.entries()].map(([k, v]) => `${k}=${v}`).join("&")
@@ -48085,14 +48097,14 @@ function amMitschnittEinhaengen() {
             const antwort = fetchAlt.apply(this, arguments);
             try {
                 const url = (typeof eingabe === "string") ? eingabe : (eingabe && eingabe.url);
-                if (amMitschnittAn() && opt && String(opt.method || "").toUpperCase() === "POST" &&
-                    amMitschnittBetrifft(url)) {
+                if (amMitschnittErfassen(opt && opt.method, url)) {
                     // Der Klon wird gelesen, das Original bleibt fuer die
                     // Seite unberuehrt - sonst waere der Rumpf verbraucht.
                     antwort.then(r => {
                         try {
                             r.clone().text().then(t => amMitschnittMerken(
-                                "fetch-Antwort", url, `HTTP ${r.status} :: ${String(t).slice(0, 2000)}`));
+                                "fetch-Antwort", url, `HTTP ${r.status} :: ${String(t)
+                                    .slice(0, amMitschnittQuest(url) ? 30000 : 2000)}`));
                         } catch (e) { }
                     }).catch(() => { });
                 }
@@ -48152,6 +48164,27 @@ function amMitschnittEinhaengen() {
         }, true);
     } catch (e) {
         console.warn("[TW] Mitschnitt: Formulare nicht einhaengbar.", e);
+    }
+
+    // v546: Klicks auf Quest-/Belohnungs-Links (falls das Abholen ein
+    // normaler Seitenaufruf ist, sieht ihn weder XHR noch fetch).
+    try {
+        document.addEventListener("click", (ev) => {
+            try {
+                if (!amMitschnittAn()) return;
+                const el = ev.target && ev.target.closest ? ev.target.closest("a, button, [onclick]") : null;
+                if (!el) return;
+                const href = el.getAttribute("href") || "";
+                const oc = el.getAttribute("onclick") || "";
+                const text = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
+                if (!amMitschnittQuest(href) && !/quest|reward/i.test(oc) &&
+                    !/abholen|belohnung/i.test(text)) return;
+                amMitschnittMerken("Klick", href || location.href,
+                    `text=${text} | onclick=${oc.slice(0, 300)} | html=${(el.outerHTML || "").slice(0, 600)}`);
+            } catch (e) { }
+        }, true);
+    } catch (e) {
+        console.warn("[TW] Mitschnitt: Klicks nicht einhaengbar.", e);
     }
 
     console.log("[TW] Formular-Mitschnitt eingehaengt - es wird nur mitgelesen, nichts gesendet.");
