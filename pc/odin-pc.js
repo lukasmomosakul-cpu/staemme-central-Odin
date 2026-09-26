@@ -277,7 +277,12 @@ function weltNorm(w) {
 async function teamLaden() {
     var s = sitzung();
     var c = jparse(lget(K.team), null);
-    if (c && c.user_id === s.user_id && c.team) return c.team;
+    // 551.2: Teamzuordnung einmal je Tab frisch pruefen - seit den
+    // Einladungscodes (Migration 019) kann ein Odin-Konto das Team wechseln.
+    var geprueft = false;
+    try { geprueft = sessionStorage.getItem('odin_pc_team_geprueft') === s.user_id; } catch (e) { }
+    if (c && c.user_id === s.user_id && c.team && geprueft) return c.team;
+    try { sessionStorage.setItem('odin_pc_team_geprueft', s.user_id); } catch (e) { }
     var r = await rest('GET', 'team_members?select=team_id&user_id=eq.' + encodeURIComponent(s.user_id) + '&limit=1');
     if (!r || !r.length) throw new Error('Dieses Odin-Konto gehört zu keinem Team');
     lset(K.team, JSON.stringify({ user_id: s.user_id, team: r[0].team_id }));
