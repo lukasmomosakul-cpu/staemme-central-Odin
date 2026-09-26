@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      548
+// @version      549
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -31445,6 +31445,12 @@ const DEFAULT_SETTINGS = {
 
     const instanceId = ownInstanceId();
     let lastInstanceWarnAt = 0;
+    // v549 (26.09.2026): Fremdes Lebenszeichen erst melden, wenn es sich
+    // NACH dem eigenen Start erneut meldet. Beendet die App eine Ansicht,
+    // raeumt pagehide das Lebenszeichen nicht weg; die naechste Ansicht
+    // fand es unter 15 s alt und meldete "doppelt" (Ares20, 23:33:04 #a6b3
+    // -> 23:33:17 #8c56, von der alten kam danach nichts mehr).
+    let rivalGesehen = null;
 
     function checkForRivalInstance() {
         // Ohne eigene Kennung (sessionStorage gesperrt) waere jede Aussage
@@ -31469,8 +31475,13 @@ const DEFAULT_SETTINGS = {
                 other = null; // beschaedigt - wird gleich ueberschrieben
             }
 
+            let lebt = false;
             if (other && other.id && other.id !== instanceId &&
                 typeof other.ts === "number" && now - other.ts < INSTANCE_STALE_MS) {
+                lebt = !!(rivalGesehen && rivalGesehen.id === other.id && other.ts > rivalGesehen.ts);
+                rivalGesehen = { id: other.id, ts: other.ts };
+            }
+            if (lebt) {
                 if (now - lastInstanceWarnAt > INSTANCE_WARN_GAP_MS) {
                     lastInstanceWarnAt = now;
                     console.error(
