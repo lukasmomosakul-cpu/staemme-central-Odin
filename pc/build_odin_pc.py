@@ -12,7 +12,7 @@ Schicht erhoehen; bei neuem GodBot wieder auf 1 setzen.
 """
 import io, re, sys, os
 
-PC_REV = 2
+PC_REV = 1
 ANON = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNqcmNvb21odXVhaGF5enR6ZGdjIiwi"
         "cm9sZSI6ImFub24iLCJpYXQiOjE3ODg3NzM4NzIsImV4cCI6MjEwNDM0OTg3Mn0.XvgEyjfhczIM0hKnVcHIOPJ4MSfndoshw0oOuWcmDoM")
 

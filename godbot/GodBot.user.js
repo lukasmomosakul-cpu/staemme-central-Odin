@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      547
+// @version      548
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19678,31 +19678,95 @@ function botMarkerSichtbar() {
 
                 // Erst Gruppe auf "alle Doerfer", DANN Sammelseite laden.
                 ensureAllVillagesGroupActive(() => {
-                openWorkFrame(
-                    "/game.php?village=" + game_data.village.id +
-                    "&screen=place&mode=scavenge_mass&group=0&page=-1",
-                    "#scavenge_mass_screen",
-                    (ok) => {
-                        if (!ok) {
-                            console.warn("[TW] Arbeits-Frame nicht bereit - Raubzug diesmal uebersprungen.");
-                            closeWorkFrame();
-                            clearScavengeRunStarted();
-                            releaseProcessLock("scavenge");
-                            return;
-                        }
-
-                        massSlotView = null;
-                        getMassSlotView();
-
-                        runMassScavenge((summary) => {
-                            handleMassRunFinished(summary);
-                            closeWorkFrame();
-                        });
+                massRaubzugAlleSeiten(
+                    (summary) => {
+                        handleMassRunFinished(summary);
+                        closeWorkFrame();
+                    },
+                    () => {
+                        console.warn("[TW] Arbeits-Frame nicht bereit - Raubzug diesmal uebersprungen.");
+                        closeWorkFrame();
+                        clearScavengeRunStarted();
+                        releaseProcessLock("scavenge");
                     }
                 );
                 });
             }, { skipGroupRestore: true });
         }
+    }
+
+    // v548 (26.09.2026): DIE SAMMELSEITE BLAETTERT.
+    //
+    // Belegt an Ares20/de256 (62 Doerfer, Seitenquellen 23:23/23:24):
+    // ScavengeMassScreen bekommt je Seite hoechstens 50 Doerfer
+    // (Seite 1: 50, Seite 2: 12), weiter geht es ueber
+    // a.paged-nav-item[rel="next"] -> &page=1. "page=-1" (bei den
+    // Uebersichten "alle") liefert hier nur Seite 1. Die Doerfer ab Nr. 51
+    // bekamen deshalb nie einen Raubzug.
+    //
+    // Jede Seite ist ein eigener Durchgang von runMassScavenge (Sendungen
+    // gehen ohnehin nur an Doerfer der geladenen Seite); die Zusammen-
+    // fassung wird addiert und EINMAL an den Abschluss gegeben.
+    function massRaubzugAlleSeiten(onFertig, onFehler) {
+        const basis = "/game.php?village=" + game_data.village.id +
+            "&screen=place&mode=scavenge_mass&group=0";
+        const MAX_SEITEN = 10;
+        let gesamt = null;
+        const addieren = (s) => {
+            if (!s) return;
+            if (!gesamt) { gesamt = Object.assign({}, s); return; }
+            ["sent", "waves", "blocked", "rejected", "idealTotal", "actualTotal",
+                "plannedSlots", "sentSlots"].forEach(k => {
+                    gesamt[k] = (gesamt[k] || 0) + (s[k] || 0);
+                });
+        };
+        const abschluss = () => {
+            const g = gesamt || {
+                sent: 0, waves: 0, blocked: 0, rejected: 0,
+                idealTotal: 0, actualTotal: 0, plannedSlots: 0, sentSlots: 0
+            };
+            g.coverage = g.idealTotal > 0 ? Math.round((g.actualTotal / g.idealTotal) * 100) : 0;
+            onFertig(g);
+        };
+        const seite = (n) => {
+            openWorkFrame(basis + "&page=" + n, "#scavenge_mass_screen", (ok) => {
+                if (!ok) {
+                    if (n === 0) { onFehler(); return; }
+                    console.warn(`[TW] Massen-Raubzug: Seite ${n + 1} nicht geladen - ` +
+                        `der Lauf endet mit den bisherigen Seiten.`);
+                    abschluss();
+                    return;
+                }
+                let weiter = false;
+                try {
+                    const d = workDoc();
+                    weiter = !!(d && d.querySelector('a.paged-nav-item[rel="next"]'));
+                    // Truppenbestand der Doerfer DIESER Seite frisch ablegen -
+                    // die Profile lesen ihn aus den Slotdaten.
+                    if (n > 0) {
+                        const res = parseScavengeMassDoc(d);
+                        if (res) storeScavengeSlots(res, "Seite " + (n + 1));
+                    }
+                } catch (e) {
+                    console.warn("[TW] Massen-Raubzug: Seitennavigation nicht lesbar.", e);
+                }
+                if (weiter || n > 0) {
+                    console.log(`[TW] Massen-Raubzug: Seite ${n + 1}` +
+                        `${weiter ? " - weitere Seiten folgen" : " (letzte)"}.`);
+                }
+                massSlotView = null;
+                getMassSlotView();
+                runMassScavenge((summary) => {
+                    addieren(summary);
+                    if (weiter && n + 1 < MAX_SEITEN && !isBotProtectionActive()) {
+                        setTimeout(() => seite(n + 1), humanDelay(1500, 3000));
+                    } else {
+                        abschluss();
+                    }
+                });
+            });
+        };
+        seite(0);
     }
 
     function handleMassRunFinished(summary) {
@@ -32665,25 +32729,17 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                 // Von Hand heisst von Hand: kein Dorf wird ausgelassen.
                 setForeignScavengeSkip([]);
                 ensureAllVillagesGroupActive(() => {
-                openWorkFrame(
-                    "/game.php?village=" + game_data.village.id +
-                    "&screen=place&mode=scavenge_mass&group=0&page=-1",
-                    "#scavenge_mass_screen",
-                    (ok) => {
-                        if (!ok) {
-                            showToast("Sammelseite konnte nicht geladen werden.", "error");
-                            closeWorkFrame();
-                            releaseProcessLock("scavenge");
-                            clearLoopActive("Frame nicht bereit");
-                            updateStartButtonUI();
-                            return;
-                        }
-                        massSlotView = null;
-                        getMassSlotView();
-                        runMassScavenge((summary) => {
-                            handleMassRunFinished(summary);
-                            closeWorkFrame();
-                        });
+                massRaubzugAlleSeiten(
+                    (summary) => {
+                        handleMassRunFinished(summary);
+                        closeWorkFrame();
+                    },
+                    () => {
+                        showToast("Sammelseite konnte nicht geladen werden.", "error");
+                        closeWorkFrame();
+                        releaseProcessLock("scavenge");
+                        clearLoopActive("Frame nicht bereit");
+                        updateStartButtonUI();
                     }
                 );
                 });
@@ -52235,7 +52291,10 @@ function runMassScavenge(onFinished) {
             return;
         }
 
-        if (totalVillages > 0 && rowCount > 0 && rowCount < totalVillages) {
+        // v548: Bei mehreren Seiten ist "weniger Zeilen als Doerfer" normal -
+        // die uebrigen kommen auf den Folgeseiten (massRaubzugAlleSeiten).
+        const geblaettert = !!workDoc().querySelector("a.paged-nav-item");
+        if (!geblaettert && totalVillages > 0 && rowCount > 0 && rowCount < totalVillages) {
             console.warn(`[TW] Massen-Raubzug: Sammelseite zeigt nur ${rowCount} von ${totalVillages} Dörfern (Gruppe "${activeGroup === null ? "unbekannt" : activeGroup}") - fehlende Dörfer haben evtl. keinen freigeschalteten Raubzug.`);
         }
     }
