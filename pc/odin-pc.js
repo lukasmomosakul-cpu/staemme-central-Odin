@@ -668,6 +668,15 @@ async function starten(uebernahme) {
             Z.serverStand = stand;
             var eigene = [];
             for (var i = 0; i < LS.length; i++) { var kk = LS.key(i); if (kk && /^(tw_|godbot_|gb_)/.test(kk)) eigene.push(kk); }
+            // 26.09.2026 (547.2): Leeres Odin-Konto, aber eigener Stand im
+            // Browser -> alles hochladen. Vorher kam dann keine Frage und es
+            // ging nur hoch, was GodBot danach neu schrieb; unveraenderte
+            // Einstellungen (tw_settings, Vorlagen, Plaene) kamen nie an
+            // (Ares20/de256: 10 Laufzeitwerte in Odin, keine Einstellungen).
+            if (eigene.length && !Object.keys(stand).length) {
+                Z.hochladenErzwingen = true;
+                status('Abgleich: Odin-Konto leer - PC-Stand wird hochgeladen', 'WICHTIG');
+            }
             if (eigene.length && Object.keys(stand).length) {
                 var wahl = await warteAuf('abgleich');
                 Z.modus = '';
@@ -683,6 +692,25 @@ async function starten(uebernahme) {
                     status('Abgleich: PC-Stand gewählt, wird nach Odin hochgeladen', 'WICHTIG');
                 }
             }
+        }
+        // 547.2: Einmal je Tab nachholen, was es nur hier gibt - Schluessel,
+        // die in Odin GANZ fehlen. Holt den Stand von Geraeten nach, die vor
+        // 547.2 eingerichtet wurden. Was Odin schon hat, bleibt unberuehrt.
+        else {
+            try {
+                if (!sessionStorage.getItem('odin_pc_fehlende_geprueft')) {
+                    sessionStorage.setItem('odin_pc_fehlende_geprueft', '1');
+                    var rk = await rest('GET', 'godbot_settings?select=skey&account_id=eq.' + encodeURIComponent(Z.konto.id));
+                    var da = {};
+                    (rk || []).forEach(function (o) { da[o.skey] = 1; });
+                    var fehl = [];
+                    for (var j = 0; j < LS.length; j++) {
+                        var kf = LS.key(j);
+                        if (kf && /^(tw_|godbot_|gb_)/.test(kf) && !da[kf]) fehl.push(kf);
+                    }
+                    if (fehl.length) Z.hochladenFehlend = fehl;
+                }
+            } catch (e) { }
         }
         Z.godbot = 'start'; Z.modus = 'laeuft'; Z.hinweis = Z.konto.name + ' · ' + Z.konto.world;
         tabAktivMelden(uebernahme);
@@ -713,6 +741,21 @@ function loaderAusfuehren() {
 }
 
 function odinPcHochladenErzwingen() {
+    if (Z.hochladenFehlend && Z.hochladenFehlend.length) {
+        var f = Z.hochladenFehlend; Z.hochladenFehlend = null;
+        var m = 0;
+        f.forEach(function (k) {
+            try {
+                var w = RAW_GET.call(LS, k);
+                if (w === null) return;
+                // Merkwert des letzten Hochladens weg - sonst gilt der Wert
+                // als "unveraendert" und geht wieder nicht hoch.
+                ldel('odin_lh_' + k);
+                LS.setItem(k, w); m++;
+            } catch (e) { }
+        });
+        if (m) status('Abgleich: ' + m + ' Werte nachgereicht, die Odin noch nicht hatte');
+    }
     if (!Z.hochladenErzwingen) return;
     Z.hochladenErzwingen = false;
     var n = 0;
