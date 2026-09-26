@@ -2861,12 +2861,16 @@ public class GameWebViewActivity extends Activity {
    c.setSingleLine(true); c.setPadding(26,11,26,11);
    c.setBackground(godbotChipGrund(0xFF2A3342,0xFF3A4556));
    LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.rightMargin=12; c.setLayoutParams(lp);
-   c.setOnClickListener(x->godbotJs("GodBotSteuerung.oeffnen('"+key+"')&&''",null));
+   // 1.94.7: Antwort auswerten. Vorher lief ein Tippen ins Leere, wenn
+   // GodBot hier gar nicht lief (Geraete-Sperre bei einem anderen Geraet)
+   // oder das Oeffnen scheiterte - die Knoepfe wirkten tot.
+   c.setOnClickListener(x->godbotJs("(function(){var r=GodBotSteuerung.oeffnen('"+key+"');return (r&&r.ok)?'':('nicht geöffnet: '+((r&&r.text)||'?'))})()",
+    r->godbotAntwort(r)));
    c.setOnLongClickListener(x->{
     if(!godbotSchaltbar(key))return false;
     x.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
     godbotJs("(function(){var r=GodBotSteuerung.umschalten('"+key+"');return (r&&r.ok?'':'nicht geschaltet: ')+((r&&r.text)||'')})()",
-     r->{ try{ Object o=new org.json.JSONTokener(r).nextValue(); if(o instanceof String)setStatus("GodBot: "+o); }catch(Exception ignored){} });
+     r->godbotAntwort(r));
     return true;
    });
    godbotChips.put(key,c); row.addView(c);
@@ -2877,6 +2881,19 @@ public class GameWebViewActivity extends Activity {
   sc.setVisibility(android.view.View.GONE);
   godbotLeiste=sc;
   return sc;
+ }
+ // null = window.GodBotSteuerung fehlt: GodBot laeuft in dieser Ansicht nicht.
+ private void godbotAntwort(String r){
+  try{
+   if(r==null||"null".equals(r)){
+    boolean fremd=leaseKnopf!=null&&leaseKnopf.getVisibility()==android.view.View.VISIBLE;
+    setStatus(fremd?"GodBot läuft auf einem anderen Gerät - „Übernehmen“ holt ihn hierher"
+     :"GodBot ist in dieser Ansicht nicht aktiv - Seite neu laden");
+    return;
+   }
+   Object o=new org.json.JSONTokener(r).nextValue();
+   if(o instanceof String&&!((String)o).isEmpty())setStatus("GodBot: "+o);
+  }catch(Exception ignored){}
  }
  private void godbotJs(String ausdruck,ValueCallback<String> cb){
   final WebView w=webView; if(w==null)return;
@@ -3875,6 +3892,10 @@ public class GameWebViewActivity extends Activity {
  void leaseGesperrtAnzeigen(String halter){
   runOnUiThread(()->{
    if(leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
+   // 1.94.7: Leiste weg, solange GodBot hier nicht laeuft. Sie blieb mit dem
+   // letzten Stand stehen und nahm Tipps an, die nichts bewirken konnten.
+   godbotStand=null;
+   if(godbotLeiste!=null)godbotLeiste.setVisibility(android.view.View.GONE);
    setStatus("GodBot pausiert - läuft auf "+halter+". „Übernehmen“ holt ihn hierher.");
   });
  }
