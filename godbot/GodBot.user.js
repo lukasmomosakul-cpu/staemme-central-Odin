@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      544
+// @version      545
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -48010,7 +48010,11 @@ function amMitschnittBetrifft(url) {
     return /screen=am_/.test(u) || /action=save_queue/.test(u) ||
         /action=village_mass/.test(u) || /mode=queue/.test(u) ||
         /screen=(barracks|stable|garage)/.test(u) ||
-        /action=train/.test(u) || /ajaxaction=train/.test(u);
+        /action=train/.test(u) || /ajaxaction=train/.test(u) ||
+        // v545: Belohnungen des Questsystems (Reiter "Belohnungen",
+        // Abholen). Adresse und Felder sind noch unbekannt - deshalb
+        // bewusst weit gefasst, bis ein echter Abholvorgang belegt ist.
+        /quest|reward/i.test(u);
 }
 
 let amMitschnittEingehaengt = false;
