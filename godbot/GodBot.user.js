@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      550
+// @version      551
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -48112,7 +48112,10 @@ function amMitschnittBetrifft(url) {
         // v545: Belohnungen des Questsystems (Reiter "Belohnungen",
         // Abholen). Adresse und Felder sind noch unbekannt - deshalb
         // bewusst weit gefasst, bis ein echter Abholvorgang belegt ist.
-        /quest|reward/i.test(u);
+        /quest|reward/i.test(u) ||
+        // v551: Sendeanfrage des Massen-Raubzugs (fuer Versand mit
+        // Mengen je Dorf statt gebuendelter Wellen - Format belegen).
+        /scavenge_api/.test(u);
 }
 
 // v546: Quest-/Belohnungsanfragen werden in JEDER Methode mitgeschnitten
@@ -52342,7 +52345,10 @@ function runMassScavenge(onFinished) {
     }
 
     const settings = Object.assign({}, DEFAULT_SETTINGS, loadSettings());
-    const waveCount = Math.max(1, Math.min(6, settings.massMode?.waves || 4));
+    // v551: die eingestellte Wellenzahl gilt (Oberflaeche erlaubt 1-20,
+    // Vorgabe 8). Bisher wurde hier still auf 6 gekappt - Ares20 hatte 10
+    // eingestellt, gelaufen sind 6, Buendelungsverlust 14-23 %.
+    const waveCount = Math.max(1, Math.min(20, parseInt(settings.massMode?.waves, 10) || 8));
 
     const slotStatus = getMassSlotView();
     if (!slotStatus || !Object.keys(slotStatus).length) {
