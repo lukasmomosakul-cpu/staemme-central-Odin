@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      542
+// @version      543
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33034,23 +33034,9 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
         }
 
         const minToggleEl = btn("–", () => {
-            // Wegklappen mitten in einem laufenden Vorgang war der
-            // haeufigste Weg, sich selbst die Sicht zu nehmen. Es geht
-            // weiter - aber nicht aus Versehen.
-            if (!minimized) {
-                let owner = null;
-                try { owner = currentProcessOwner(); } catch (e) { }
-                if (owner && !confirm(
-                    `ACHTUNG: GodBot arbeitet gerade (${owner}).\n\n` +
-                    `Der Vorgang läuft im Zugeklappten weiter, aber die ` +
-                    `Sperrschicht fällt weg: Seitenwechsel oder Klicks im ` +
-                    `Spiel können ihn dann abbrechen. Dass er noch läuft, ` +
-                    `zeigt nur noch die gelb umrandete Kurzmeldung unten ` +
-                    `rechts.\n\n` +
-                    `Trotzdem zuklappen?`)) {
-                    return;
-                }
-            }
+            // v543: keine Rueckfrage mehr beim Zuklappen. Sie warnte vor dem
+            // Wegfall der Sperrschicht - die gibt es nicht mehr; der Schutz
+            // (Seitenwechsel-Sperre) gilt auf- wie zugeklappt gleich.
             minimized = !minimized;
             localStorage.setItem("tw_overlay_minimized", minimized ? "1" : "0");
             applyMinimizedState();
@@ -34534,13 +34520,11 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             <div style="margin-top:16px;padding-top:10px;border-top:1px solid #333;">
                 <div style="display:flex;align-items:center;color:#8fa8c7;font-size:11px;margin-bottom:6px;">
                     <span>Anstehende Vorgänge</span>
-                    ${infoIcon("Solange GodBot arbeitet - und ab dem eingestellten Vorlauf davor - wird die Spielseite unscharf gezeichnet UND gesperrt: was unscharf ist, lässt sich nicht anklicken. Damit sind Fehlklicks mitten in einen laufenden Vorgang ausgeschlossen. GodBot selbst bleibt bedienbar, ebenso alles, was du selbst geöffnet hast. Fenster gehen NICHT mehr von selbst auf (geändert am 31.08.2026). Klappst du GodBot zu, verschwindet die Schicht ganz - die Seite ist dann frei, der Vorgang läuft aber weiter und kann durch Klicks abbrechen; das meldet die gelb umrandete Kurzmeldung unten rechts. Es wird nichts nachgeladen und keine Seite gewechselt.")}
+                    ${infoIcon("Der Vorlauf bestimmt, wie früh vor einem anstehenden Rausstellen bzw. Angriff GodBot andere Läufe zurückhält und die Vorbereitung beginnt. Die Spielseite wird seit v543 NICHT mehr abgeblendet oder gesperrt: Seitenwechsel während eines laufenden Vorgangs fängt die Seitenwechsel-Sperre ab (in Odin mit eigenem Dialog „Hierbleiben / Trotzdem wechseln“, im PC-Browser mit der Rückfrage des Browsers).")}
                 </div>
 
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
-                    <input type="checkbox" id="tw-prewarn-enabled" class="tw-checkbox" ${prewarnUi.enabled ? "checked" : ""} />
-                    <span>Hintergrund abblenden und sperren, während GodBot arbeitet</span>
-                </label>
+                <!-- v543: Abblenden entfallen; Schalter unsichtbar, Wert bleibt erhalten -->
+                <input type="checkbox" id="tw-prewarn-enabled" style="display:none;" ${prewarnUi.enabled ? "checked" : ""} />
 
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
                     <span style="font-size:11px;color:#8fa8c7;">Vorlauf</span>
@@ -59682,12 +59666,14 @@ if (location.href.includes("mode=scavenge_mass")) {
         // wer gerade tippt, liest sie nicht.
         prewarnRemoveBar();
 
-        // Zugeklappt: keine Schicht, weder unscharf noch sperrend.
-        if (godbotZugeklappt()) { godbotBlurAus(); return; }
-
-        const grund = godbotAktivePhase();
-        if (grund) godbotBlurAn(grund);
-        else godbotBlurAus();
+        // v543 (26.09.2026): KEINE Abblend-/Sperrschicht mehr. Fehlklicks
+        // waehrend eines Vorgangs faengt jetzt die Seitenwechsel-Sperre ab
+        // (gbSeitenwechselPruefen, in der App mit Odins eigenem Dialog).
+        // Die Schicht war dafuer sogar hinderlich: ein Tippen auf sie zaehlte
+        // als Beruehrung von GodBots eigener Oberflaeche (id "tw-..."), die
+        // Sperre griff dann nie. Hier wird nur noch eine eventuell noch
+        // stehende Schicht (aus v542 im selben Tab) entfernt.
+        godbotBlurAus();
     }
 
     function startPrewarnTicker() {
