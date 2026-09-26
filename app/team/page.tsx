@@ -6,7 +6,9 @@ import { supabase } from '../../lib/supabase';
 type Role = 'Owner' | 'Admin' | 'Player' | 'Observer';
 type Member = { id: string; user_id: string; name: string; contact: string; role: Role; status: string; accounts: string[] };
 type Account = { id: string; name: string; world: string };
-type Einladung = { id: string; code: string; rolle: Role; gueltig_bis: string; erstellt_at: string };
+type Einladung = { id: string; code: string; rolle: Role; gueltig_bis: string | null; erstellt_at: string };
+// gueltig_bis NULL = laeuft nie ab (Migration 020).
+const gueltigText = (bis: string | null) => bis ? 'gültig bis ' + new Date(bis).toLocaleString('de-DE') : 'unbegrenzt gültig';
 
 // 27.09.2026: Odin-Konten verknuepfen (Migration 019). Code erzeugen
 // (Owner/Admin), Code einloesen (jedes Odin-Konto).
@@ -100,7 +102,7 @@ export default function Team() {
     if (!supabase) return;
     const { data } = await supabase.from('team_einladungen').select('id, code, rolle, gueltig_bis, erstellt_at')
       .eq('team_id', teamId).is('eingeloest_at', null).is('zurueckgezogen_at', null)
-      .gt('gueltig_bis', new Date().toISOString()).order('erstellt_at', { ascending: false });
+      .or('gueltig_bis.is.null,gueltig_bis.gt.' + new Date().toISOString()).order('erstellt_at', { ascending: false });
     setEinladungen((data ?? []) as Einladung[]);
   };
 
@@ -131,7 +133,7 @@ export default function Team() {
     if (error) { flash(`Einladung nicht erstellt: ${error.message}`); return; }
     const row = (Array.isArray(data) ? data[0] : data) as any;
     if (!row) { flash('Einladung nicht erstellt'); return; }
-    const neu: Einladung = { id: row.id, code: row.code, rolle: inviteRole, gueltig_bis: row.gueltig_bis, erstellt_at: new Date().toISOString() };
+    const neu: Einladung = { id: row.id, code: row.code, rolle: inviteRole, gueltig_bis: row.gueltig_bis ?? null, erstellt_at: new Date().toISOString() };
     setNeuerCode(neu); setEinladungen(all => [neu, ...all]);
   };
   const kopieren = async (text: string) => { try { await navigator.clipboard.writeText(text); flash('Kopiert'); } catch { flash('Kopieren nicht möglich'); } };
@@ -146,13 +148,13 @@ export default function Team() {
         <div className="permissionNote" style={{marginBottom:16}}>{roleInfo[member.role]}</div><h3>Account-Zugriff</h3><div className="permissionNote">Dieses Mitglied hat Zugriff auf alle {accounts.length} Team-Accounts. Individuelle Account-Freigaben sind deaktiviert.</div>{accounts.length > 0 && <div className="checkList" style={{marginTop:12}}>{accounts.map(a => <label key={a.id}><span>{a.name}<small style={{display:'block'}}>{a.world}</small></span><span className="pill">Freigegeben</span></label>)}</div>}
       </section></div>
     {canManage && <section className="card" style={{marginTop:16}}><div className="sectionhead"><div><h2>Offene Einladungen ({einladungen.length})</h2><div className="muted">Wer einen Code einlöst, wird Mitglied dieses Teams.</div></div></div>
-      {einladungen.length === 0 ? <p className="muted">Keine offenen Einladungen.</p> : <div className="checkList">{einladungen.map(x => <label key={x.id}><span><strong style={{fontFamily:'monospace',letterSpacing:1}}>{x.code}</strong><small style={{display:'block'}}>{x.rolle} · gültig bis {new Date(x.gueltig_bis).toLocaleString('de-DE')}</small></span><span style={{display:'flex',gap:6}}><button type="button" className="button secondary" onClick={() => kopieren(einladungsLink(x.code))}>Link</button><button type="button" className="button secondary" onClick={() => zurueckziehen(x.id)}>Zurückziehen</button></span></label>)}</div>}
+      {einladungen.length === 0 ? <p className="muted">Keine offenen Einladungen.</p> : <div className="checkList">{einladungen.map(x => <label key={x.id}><span><strong style={{fontFamily:'monospace',letterSpacing:1}}>{x.code}</strong><small style={{display:'block'}}>{x.rolle} · {gueltigText(x.gueltig_bis)}</small></span><span style={{display:'flex',gap:6}}><button type="button" className="button secondary" onClick={() => kopieren(einladungsLink(x.code))}>Link</button><button type="button" className="button secondary" onClick={() => zurueckziehen(x.id)}>Zurückziehen</button></span></label>)}</div>}
     </section>}
     <Einloesen onFertig={load} />
     {open && <div className="modalBackdrop" onMouseDown={() => setOpen(false)}><div className="modal" role="dialog" aria-modal="true" onMouseDown={e=>e.stopPropagation()}><div className="modalHead"><div><div className="eyebrow">Teamzentrale Odin</div><h2>Mitglied einladen</h2></div><button className="iconButton" onClick={()=>{setOpen(false);setNeuerCode(null);}}>×</button></div>
       {neuerCode ? <div><p className="muted">Code an das andere Odin-Konto geben. Dort unter Team → „Einladungscode einlösen“ eingeben oder den Link öffnen.</p>
         <div style={{fontFamily:'monospace',fontSize:28,letterSpacing:3,textAlign:'center',padding:'12px 0'}}>{neuerCode.code}</div>
-        <div className="muted" style={{textAlign:'center'}}>{neuerCode.rolle} · gültig bis {new Date(neuerCode.gueltig_bis).toLocaleString('de-DE')}</div>
+        <div className="muted" style={{textAlign:'center'}}>{neuerCode.rolle} · {gueltigText(neuerCode.gueltig_bis)}</div>
         <div className="modalActions"><button type="button" className="button secondary" onClick={()=>kopieren(neuerCode.code)}>Code kopieren</button><button type="button" className="button" onClick={()=>kopieren(einladungsLink(neuerCode.code))}>Link kopieren</button></div></div>
-      : <form onSubmit={invite}><label className="field">Rolle<select value={inviteRole} onChange={e=>setInviteRole(e.target.value as Role)}><option>Player</option><option>Admin</option><option>Observer</option></select></label><label className="field">Gültig für<select value={inviteStunden} onChange={e=>setInviteStunden(parseInt(e.target.value,10))}><option value={24}>24 Stunden</option><option value={48}>48 Stunden</option><option value={168}>7 Tage</option></select></label><div className="modalActions"><button type="button" className="button secondary" onClick={()=>setOpen(false)}>Abbrechen</button><button className="button" disabled={saving}>Code erzeugen</button></div></form>}</div></div>}</main>;
+      : <form onSubmit={invite}><label className="field">Rolle<select value={inviteRole} onChange={e=>setInviteRole(e.target.value as Role)}><option>Player</option><option>Admin</option><option>Observer</option></select></label><label className="field">Gültig für<select value={inviteStunden} onChange={e=>setInviteStunden(parseInt(e.target.value,10))}><option value={24}>24 Stunden</option><option value={48}>48 Stunden</option><option value={168}>7 Tage</option><option value={0}>Nie (bis zum Einlösen oder Zurückziehen)</option></select></label><div className="modalActions"><button type="button" className="button secondary" onClick={()=>setOpen(false)}>Abbrechen</button><button className="button" disabled={saving}>Code erzeugen</button></div></form>}</div></div>}</main>;
 }
