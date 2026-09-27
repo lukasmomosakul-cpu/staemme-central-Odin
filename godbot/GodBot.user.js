@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      553
+// @version      554
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -30425,13 +30425,13 @@ function twFormularExport(cfg, callback) {
                 mobil = [...doc.querySelectorAll('link[rel="stylesheet"]')]
                     .some(l => /\/merged\/mobile\./.test(l.getAttribute("href") || ""));
             } catch (e) { }
-            if (mobil) {
-                beenden(null, "Der Export geht nur in der Desktop-Version des Spiels - " +
-                    "die mobile Ansicht hat die nötigen Knöpfe nicht. Unten auf der Spielseite " +
-                    "„Desktop-Version“ antippen, dann erneut exportieren.");
-                return;
-            }
-            beenden(null, `Kein passendes Formular auf Stufe ${schritt} - Einzelheiten im Protokoll.`);
+            // v554: v553 behauptete hier, mobil gehe der Export nicht. Belegt
+            // ist nur, dass der DESKTOP-Weg mobil fehlt; der mobile Weg ist
+            // ein anderer (ReportExport.js) und wird erst aufgezeichnet.
+            beenden(null, mobil
+                ? `Mobile Spielansicht: der Export-Weg dort ist noch nicht eingebaut (Stufe ${schritt}). ` +
+                  "Bitte einmal von Hand exportieren, während die Aufzeichnung läuft."
+                : `Kein passendes Formular auf Stufe ${schritt} - Einzelheiten im Protokoll.`);
             return;
         }
 
@@ -48132,6 +48132,8 @@ function amMitschnittBetrifft(url) {
         // Abholen). Adresse und Felder sind noch unbekannt - deshalb
         // bewusst weit gefasst, bis ein echter Abholvorgang belegt ist.
         /quest|reward/i.test(u) ||
+        // v554: Export von Berichten/Angriffen (mobiler Weg unbekannt).
+        /screen=report|mode=incomings|screen=reqdef|forward|publish/i.test(u) ||
         // v551: Sendeanfrage des Massen-Raubzugs (fuer Versand mit
         // Mengen je Dorf statt gebuendelter Wellen - Format belegen).
         /scavenge_api/.test(u);
@@ -48142,7 +48144,11 @@ function amMitschnittBetrifft(url) {
 // vermutlich per GET, das Abholen evtl. als Seitenaufruf. Alles andere
 // bleibt wie gehabt auf POST beschraenkt.
 function amMitschnittQuest(url) {
-    return /quest|reward/i.test(String(url || "")) && !/socket\.io/.test(String(url || ""));
+    const u = String(url || "");
+    if (/socket\.io/.test(u)) return false;
+    // v554: auch Export-Anfragen jeder Methode (Berichte, Eintreffende).
+    return /quest|reward/i.test(u) ||
+        /screen=report.*(forward|publish|export)|forward.*screen=report|screen=reqdef|ajax\w*=.*(export|forward|publish)/i.test(u);
 }
 
 function amMitschnittErfassen(methode, url) {
@@ -48292,12 +48298,16 @@ function amMitschnittEinhaengen() {
         document.addEventListener("click", (ev) => {
             try {
                 if (!amMitschnittAn()) return;
-                const el = ev.target && ev.target.closest ? ev.target.closest("a, button, [onclick]") : null;
+                const el = ev.target && ev.target.closest
+                    ? ev.target.closest("a, button, input[type=submit], input[type=button], [onclick]") : null;
                 if (!el) return;
                 const href = el.getAttribute("href") || "";
                 const oc = el.getAttribute("onclick") || "";
-                const text = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
-                if (!amMitschnittQuest(href) && !/quest|reward/i.test(oc) &&
+                const text = ((el.textContent || "") + " " + (el.value || "")).replace(/\s+/g, " ").trim().slice(0, 80);
+                // v554: auf Berichts- und Eintreffend-Seiten JEDEN Klick
+                // aufzeichnen - dort wird der mobile Export-Weg gesucht.
+                const exportSeite = /screen=(report|reqdef)|mode=incomings/.test(location.href);
+                if (!exportSeite && !amMitschnittQuest(href) && !/quest|reward/i.test(oc) &&
                     !/abholen|belohnung/i.test(text)) return;
                 amMitschnittMerken("Klick", href || location.href,
                     `text=${text} | onclick=${oc.slice(0, 300)} | html=${(el.outerHTML || "").slice(0, 600)}`);
