@@ -2725,6 +2725,32 @@ public class GameWebViewActivity extends Activity {
  // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
+ // 1.94.15: window.open aus der Spielansicht (Export -> twforge.net) im
+ // Browser oeffnen. Mit setSupportMultipleWindows(true), aber ohne
+ // onCreateWindow ging window.open still ins Leere - die Importseite
+ // oeffnete sich in der App nie.
+ @Override public boolean onCreateWindow(WebView v,boolean dialog,boolean user,android.os.Message msg){
+  try{
+   WebView t=new WebView(v.getContext());
+   t.setWebViewClient(new WebViewClient(){
+    boolean weg=false;
+    void raus(WebView w,String u){
+     if(weg||u==null||u.isEmpty()||"about:blank".equals(u))return;
+     weg=true;
+     try{
+      startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      OdinService.protokoll(GameWebViewActivity.this,"info","app","extern geöffnet: "+u);
+     }catch(Exception e){ OdinService.protokoll(GameWebViewActivity.this,"FEHLER","app","extern öffnen gescheitert: "+u); }
+     try{ w.stopLoading(); w.destroy(); }catch(Exception e){}
+    }
+    @Override public boolean shouldOverrideUrlLoading(WebView w,WebResourceRequest r){ raus(w,r.getUrl().toString()); return true; }
+    @Override public void onPageStarted(WebView w,String u,android.graphics.Bitmap f){ raus(w,u); }
+   });
+   ((WebView.WebViewTransport)msg.obj).setWebView(t);
+   msg.sendToTarget();
+   return true;
+  }catch(Exception e){ return false; }
+ }
  // Seitenwechsel-Sperre (1.81.0): GodBot haelt einen Seitenwechsel an, den
  // der Nutzer waehrend eines laufenden Vorgangs ausgeloest hat. Statt der
  // nackten Browser-Rueckfrage ein eigener Dialog mit klaren Knoepfen.

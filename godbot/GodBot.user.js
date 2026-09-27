@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      551
+// @version      552
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -30272,8 +30272,13 @@ function twExportKurzZeile() {
 function twOeffneImportSeite(url) {
     if (!url) return false;
     let fenster = null;
+    // v552: ohne "noopener" - damit liefert window.open laut Standard
+    // IMMER null, auch wenn der Tab aufgeht; GodBot meldete dann
+    // faelschlich "geblockt". Die Verbindung zur Spielseite wird danach
+    // von Hand getrennt.
     try {
-        fenster = window.open(url, "_blank", "noopener");
+        fenster = window.open(url, "_blank");
+        if (fenster) { try { fenster.opener = null; } catch (e) { } }
     } catch (e) {
         console.warn("[TW] Importseite liess sich nicht oeffnen.", e);
     }
