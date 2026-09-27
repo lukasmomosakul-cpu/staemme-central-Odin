@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      552
+// @version      553
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -30417,6 +30417,20 @@ function twFormularExport(cfg, callback) {
 
         if (!stufe) {
             twProtokolliereSeite(cfg, doc, schritt);
+            // v553: Die mobile Ansicht hat die noetigen Knoepfe nicht
+            // (Berichtsliste nur "Loeschen", Eintreffend-Seite ohne
+            // Auswahlformular) - belegt 27.09. de259 und 06.09. de256.
+            let mobil = false;
+            try {
+                mobil = [...doc.querySelectorAll('link[rel="stylesheet"]')]
+                    .some(l => /\/merged\/mobile\./.test(l.getAttribute("href") || ""));
+            } catch (e) { }
+            if (mobil) {
+                beenden(null, "Der Export geht nur in der Desktop-Version des Spiels - " +
+                    "die mobile Ansicht hat die nötigen Knöpfe nicht. Unten auf der Spielseite " +
+                    "„Desktop-Version“ antippen, dann erneut exportieren.");
+                return;
+            }
             beenden(null, `Kein passendes Formular auf Stufe ${schritt} - Einzelheiten im Protokoll.`);
             return;
         }
