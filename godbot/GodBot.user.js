@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      554
+// @version      555
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -30413,6 +30413,12 @@ function twFormularExport(cfg, callback) {
             const f = doc.querySelector(kandidat.formular);
             const k = f && f.querySelector(kandidat.knopf);
             if (f && k) { stufe = kandidat; form = f; knopf = k; benutzt.add(i); break; }
+            // v555: mobile Ansicht - das Formular ist da, der Knopf nicht
+            // (Berichtsliste mobil: nur "Loeschen"). Dann wird das Feld,
+            // das der Desktop-Knopf mitschickt, von Hand gesetzt.
+            if (f && !k && kandidat.mobilFeld) {
+                stufe = kandidat; form = f; knopf = null; benutzt.add(i); break;
+            }
         }
 
         if (!stufe) {
@@ -30451,7 +30457,26 @@ function twFormularExport(cfg, callback) {
         }
 
         twCountRequest(String(form.action || cfg.url), "manuell", cfg.zaehler);
-        knopf.click();
+        if (knopf) {
+            knopf.click();
+            return;
+        }
+        // v555: ohne Knopf (mobil) - Feld setzen und das Formular selbst
+        // absenden. Nie mit "del": ein Loeschknopf wird nicht beruehrt.
+        try {
+            const feld = doc.createElement("input");
+            feld.type = "hidden";
+            feld.name = stufe.mobilFeld.name;
+            feld.value = stufe.mobilFeld.value;
+            form.appendChild(feld);
+            console.log(`[TW] ${cfg.name}: Stufe ${schritt} - mobile Ansicht, ` +
+                `sende mit "${stufe.mobilFeld.name}" (ohne Knopf).`);
+            const fw = doc.defaultView || window;
+            (fw.HTMLFormElement || HTMLFormElement).prototype.submit.call(form);
+        } catch (e) {
+            console.warn(`[TW] ${cfg.name}: mobiles Absenden gescheitert.`, e);
+            beenden(null, "Mobiles Absenden gescheitert - Einzelheiten im Protokoll.");
+        }
         return;
         const n = (text.match(cfg.zaehlMuster) || []).length;
         console.log(`[TW] ${cfg.name}: ${n} Eintrag/Eintraege, ${text.length} Zeichen.`);
@@ -30524,7 +30549,12 @@ function exportReportsBB(callback) {
             {
                 formular: 'form[action*="mode=process_reports"]',
                 kaesten: 'input[type="checkbox"][name^="id_"]',
-                knopf: 'input[type="submit"][name="forward"]'
+                knopf: 'input[type="submit"][name="forward"]',
+                // v555: mobil fehlt der Knopf; belegt 27.09. de259 - die
+                // Liste fuehrt ueber process_reports auf dieselbe
+                // Zwischenseite (publish_and_forward_many) und von dort auf
+                // mail&mode=new mit [report]-Codes im Feld #message.
+                mobilFeld: { name: "forward", value: "Weiterleiten" }
             },
             // Zwischenseite "Berichte veroeffentlichen": die Auswahl steht
             // als ids[] schon drin, der Knopf "Weiterleiten" traegt keinen
