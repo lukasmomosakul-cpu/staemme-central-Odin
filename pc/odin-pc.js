@@ -317,6 +317,20 @@ function kontoMerken(a, welt, pid, pname) {
 // Geraete-Sperre (account_leases, Migration 017) - wie OdinService in
 // der App: gehalten, solange sich das Geraet mindestens alle 3 Min meldet.
 // ===================================================================
+// 558.2: oeffentliche IP dieses PCs an die gehaltenen Sperren (Migration
+// 024), hoechstens alle 10 Min. Scheitert der Abruf (Netz, Seitenregeln),
+// bleibt die Anzeige einfach leer.
+var ipZuletzt = 0;
+function ipMelden() {
+    if (Date.now() - ipZuletzt < 600000) return;
+    ipZuletzt = Date.now();
+    fetch('https://api.ipify.org', { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : ''; })
+        .then(function (ip) {
+            ip = String(ip || '').trim();
+            if (!/^[0-9a-fA-F:.]{3,45}$/.test(ip)) return;
+            return rpc('lease_ip_melden', { p_geraet: geraetId, p_ip: ip });
+        }).catch(function () { });
+}
 async function leaseHolen(erzwingen) {
     var r = await rpc('lease_holen', { p_account: Z.konto.id, p_geraet: geraetId, p_name: geraetName, p_erzwingen: !!erzwingen });
     var o = r && r[0];
@@ -324,7 +338,7 @@ async function leaseHolen(erzwingen) {
     var e = { erhalten: !!o.erhalten, halter: o.geraet_name || 'anderes Gerät', at: Date.now() };
     var alt = jparse(sget(SK.lease), null);
     sset(SK.lease, JSON.stringify(e));
-    if (e.erhalten) ldel(K.fremd); else lset(K.fremd, JSON.stringify({ halter: e.halter, at: Date.now() }));
+    if (e.erhalten) { ldel(K.fremd); ipMelden(); } else lset(K.fremd, JSON.stringify({ halter: e.halter, at: Date.now() }));
     if (!alt || alt.erhalten !== e.erhalten)
         status(e.erhalten ? (erzwingen ? 'Geräte-Sperre: Konto auf diesen PC geholt' : 'Geräte-Sperre: Konto diesem PC zugewiesen')
             : 'Geräte-Sperre: Konto ist ' + e.halter + ' zugewiesen - GodBot pausiert hier', e.erhalten ? 'info' : 'WICHTIG');

@@ -627,6 +627,34 @@ public class OdinService extends Service {
   if(System.currentTimeMillis()-(Long)e[2]>240_000L)return null;
   return (String)e[1];
  }
+ // 1.95.5: oeffentliche IP dieses Geraets an die gehaltenen Sperren
+ // (account_leases.ip, Migration 024) - im Dashboard je Geraet sichtbar.
+ // Hoechstens alle 10 Min ein Abruf (api.ipify.org, nur IPv4-Text).
+ static volatile String letzteIp=""; private static long ipAt=0L;
+ static String oeffentlicheIp(){
+  java.net.HttpURLConnection h=null;
+  try{
+   h=(java.net.HttpURLConnection)new java.net.URL("https://api.ipify.org").openConnection();
+   h.setConnectTimeout(5000); h.setReadTimeout(5000);
+   if(h.getResponseCode()!=200)return null;
+   java.io.BufferedReader r=new java.io.BufferedReader(new java.io.InputStreamReader(h.getInputStream()));
+   String z=r.readLine(); r.close();
+   return z==null?null:z.trim();
+  }catch(Exception e){ return null; }
+  finally{ if(h!=null)h.disconnect(); }
+ }
+ private void ipMelden(){
+  long j=System.currentTimeMillis();
+  if(j-ipAt<600_000L)return;
+  ipAt=j;
+  try{
+   String ip=oeffentlicheIp();
+   if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return;
+   boolean neu=!ip.equals(letzteIp); letzteIp=ip;
+   rpc(this,"lease_ip_melden",new JSONObject().put("p_geraet",geraetId(this)).put("p_ip",ip).toString());
+   if(neu)OdinLog.schreib(this,"-","info","Öffentliche IP dieses Geräts: "+ip);
+  }catch(Exception ignored){}
+ }
  private long letztePflege=0L;
  // Jede Minute: gehaltene Sperren verlaengern, wartende Ansichten erneut
  // versuchen lassen, Sperren geschlossener Ansichten freigeben.
@@ -648,6 +676,9 @@ public class OdinService extends Service {
    Object[] e=LEASE.get(k);
    if(e!=null&&(Boolean)e[0]&&!offen.contains(k))leaseFreigeben(this,k);
   }
+  boolean haeltEine=false;
+  for(Object[] e:LEASE.values())if(e!=null&&(Boolean)e[0]){ haeltEine=true; break; }
+  if(haeltEine)ipMelden();
   // Fremde Sperren des Teams lesen (nur lesen, nichts nehmen). Damit weiss
   // der Wecker, dass er ein Konto, das ein anderes Geraet fuehrt, NICHT
   // wecken soll - sonst holten beide Geraete ihre Ansicht nach vorn.

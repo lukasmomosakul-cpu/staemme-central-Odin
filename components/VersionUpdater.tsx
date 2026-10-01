@@ -14,8 +14,9 @@ export default function VersionUpdater() {
 
     const android = (window as any).Android;
 
+    // 02.10.2026: ausserhalb der App (PC-Browser) direkt die neueste APK.
     if (!android || typeof android.updateApk !== 'function') {
-      alert('Updater ist in dieser App-Version nicht verfügbar.');
+      window.open('https://github.com/lukasmomosakul-cpu/staemme-central-Odin/releases/latest/download/odin-latest.apk', '_blank');
       return;
     }
 
@@ -36,8 +37,8 @@ export default function VersionUpdater() {
       type="button"
       onClick={update}
       disabled={busy}
-      title="Odin aktualisieren"
-      aria-label="Odin aktualisieren"
+      title={`Neueste Odin-APK laden (installiert: v${APP_VERSION})`}
+      aria-label="Neueste Odin-APK laden"
       style={{
         border: 0,
         background: 'transparent',
@@ -52,7 +53,7 @@ export default function VersionUpdater() {
         opacity: busy ? 0.65 : 1,
       }}
     >
-      v{APP_VERSION}
+      ⬇ APK
     </button>
   );
 }
