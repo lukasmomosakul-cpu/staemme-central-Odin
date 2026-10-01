@@ -31,29 +31,35 @@ export default function VersionUpdater() {
     }
   };
 
+  // 02.10.2026: EINMAL die Versionsnummer, als kleiner Knopf - Antippen laedt
+  // die neueste APK. (Vorher stand sie doppelt, danach nur "APK".)
   return (
     <button
       id="odin-version-updater-button"
       type="button"
       onClick={update}
       disabled={busy}
-      title={`Neueste Odin-APK laden (installiert: v${APP_VERSION})`}
-      aria-label="Neueste Odin-APK laden"
+      title="Neueste Odin-APK laden"
+      aria-label={`Odin v${APP_VERSION} - neueste APK laden`}
       style={{
-        border: 0,
-        background: 'transparent',
-        padding: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        border: '1px solid rgba(184,137,63,.35)',
+        background: 'rgba(184,137,63,.10)',
+        color: '#7a5a24',
+        borderRadius: 999,
+        padding: '4px 10px',
         margin: 0,
-        color: '#64748b',
-        font: '700 12px inherit',
+        font: '700 11px/1 inherit',
+        letterSpacing: '.02em',
         cursor: busy ? 'wait' : 'pointer',
-        textDecoration: 'underline',
-        textUnderlineOffset: 3,
         whiteSpace: 'nowrap',
+        flexShrink: 0,
         opacity: busy ? 0.65 : 1,
       }}
     >
-      ⬇ APK
+      v{APP_VERSION}<span aria-hidden="true" style={{ fontSize: 12, lineHeight: 1 }}>⤓</span>
     </button>
   );
 }
