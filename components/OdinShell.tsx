@@ -76,10 +76,13 @@ export default function OdinShell({
               display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
             }}
           >
-            <h1 className="title" style={{ whiteSpace: 'nowrap', margin: 0 }}>
+            <h1 className="title" style={{ whiteSpace: 'nowrap', margin: 0, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               <span className="titleBrand">⚔ Odin</span>{titel}
             </h1>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {/* 02.10.2026: darf schrumpfen - die Konto-Auswahl der GodBot-Seite
+                machte die Kopfzeile breiter als den Bildschirm, das Handy zoomte
+                die Seite heraus und die Fusszeile sah anders aus. */}
+            <div className="topRechts" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexShrink: 1 }}>
               {rechts}
               <VersionUpdater />
             </div>

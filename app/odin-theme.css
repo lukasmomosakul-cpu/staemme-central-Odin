@@ -40,3 +40,11 @@
 @keyframes mehrHoch{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
 @media(max-width:900px){.mobileNav{display:none!important}.titleBrand{display:inline}.top{padding-top:max(10px,env(safe-area-inset-top));padding-bottom:10px}}
 @media(min-width:901px){.bottomNav,.mehrBackdrop{display:none!important}}
+
+/* 02.10.2026 - Seite nie breiter als der Bildschirm (sonst zoomt das Handy
+   heraus und die Fusszeile wirkt veraendert, belegt auf der GodBot-Seite). */
+html,body{overflow-x:hidden;max-width:100%}
+.shell{max-width:100vw}
+.top{min-width:0}
+.topRechts select{min-width:0;max-width:42vw;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;border:1px solid var(--odin-border);border-radius:10px;padding:7px 8px;background:#fff;color:#334155;font-weight:700;font-size:12px}
+@media(max-width:600px){.topRechts{gap:6px!important}.topRechts select{max-width:38vw}}
