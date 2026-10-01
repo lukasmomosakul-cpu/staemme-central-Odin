@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      557
+// @version      558
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -53281,12 +53281,18 @@ function fetchVillageTroopsForGroupNow(groupId, unitConfig, callback) {
 // keinem Takt folgen.
 let massWavesUntilBreak = 4 + Math.floor(Math.random() * 3);
 
+// v558 (01.10.2026): gestreckt. Alle drei Botschutz-Faelle auf de256
+// (27.09. 23:57, 28.09. 06:21, 29.09. 21:51) lagen mitten in einem
+// Raubzug-Lauf mit 32-43 Sendungen in wenigen Minuten - seit die
+// Wellenzahl von 6 auf 10 stieg (v551). Ursache nicht bewiesen, aber
+// 3 von 3. Abdeckung und Wellenzahl bleiben, nur der Takt wird ruhiger:
+// 2-4,5 s statt 0,8-1,8 s je Welle, Innehalten 6-15 s statt 3-8 s.
 function massWavePauseMs() {
-    let ms = humanDelay(800, 1800);
+    let ms = humanDelay(2000, 4500);
 
     massWavesUntilBreak--;
     if (massWavesUntilBreak <= 0) {
-        const pause = humanDelay(3000, 8000);
+        const pause = humanDelay(6000, 15000);
         massWavesUntilBreak = 4 + Math.floor(Math.random() * 3);
         console.log(`[TW] Raubzug: kurze Pause von ${Math.round((ms + pause) / 1000)} s eingelegt.`);
         ms += pause;
