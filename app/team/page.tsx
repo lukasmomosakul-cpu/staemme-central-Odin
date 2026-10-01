@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import OdinShell from '../../components/OdinShell';
 
 type Role = 'Owner' | 'Admin' | 'Player' | 'Observer';
 type Member = { id: string; user_id: string; name: string; contact: string; role: Role; status: string; accounts: string[] };
@@ -138,10 +139,10 @@ export default function Team() {
   };
   const kopieren = async (text: string) => { try { await navigator.clipboard.writeText(text); flash('Kopiert'); } catch { flash('Kopieren nicht möglich'); } };
 
-  if (loading) return <main className="main"><div className="eyebrow">Organisation / Team</div><h1 className="title">Team</h1><div className="card"><p className="muted">Teammitglieder werden geladen…</p></div></main>;
-  if (!member) return <main className="main"><div className="eyebrow">Organisation / Team</div><h1 className="title">Team</h1><div className="card"><strong>Kein Team gefunden</strong><p className="muted">Melde dich an oder prüfe die Teamzuordnung.</p></div><Einloesen onFertig={load} /></main>;
+  if (loading) return <OdinShell titel="Team" aktiv="Team"><div className="card"><p className="muted">Teammitglieder werden geladen…</p></div></OdinShell>;
+  if (!member) return <OdinShell titel="Team" aktiv="Team"><div className="card"><strong>Kein Team gefunden</strong><p className="muted">Melde dich an oder prüfe die Teamzuordnung.</p></div><Einloesen onFertig={load} /></OdinShell>;
 
-  return <main className="main"><div className="eyebrow">Organisation / Team</div><h1 className="title">Team</h1><p className="muted">Alle Teammitglieder haben Zugriff auf alle Team-Accounts.</p>{notice && <div className="toast">✓ {notice}</div>}
+  return <OdinShell titel="Team" aktiv="Team"><p className="muted">Alle Teammitglieder haben Zugriff auf alle Team-Accounts.</p>{notice && <div className="toast">✓ {notice}</div>}
     <div className="teamLayout"><section className="card"><div className="sectionhead"><div><h2>Mitglieder ({members.length})</h2><div className="muted">Deine Rolle: {myRole}</div></div>{canManage && <button className="button" onClick={() => setOpen(true)}>+ Einladen</button>}</div><div className="memberList">{members.map((m,i)=><button key={m.id} className={'memberItem '+(i===selected?'selected':'')} onClick={() => setSelected(i)}><span><strong>{m.name}</strong><small>{m.contact}</small></span><span className="pill">{m.role}</span></button>)}</div></section>
       <section className="card"><div className="sectionhead"><div><h2>{member.name}</h2><div className="muted">{member.contact}</div></div><span className="pill">{member.status}</span></div>
         <label className="field">Rolle<select value={member.role} disabled={!canManage || member.role === 'Owner' || saving} onChange={e => changeRole(e.target.value as Role)}><option value="Owner">Owner</option><option value="Admin">Admin</option><option value="Player">Player</option><option value="Observer">Observer</option></select></label>
@@ -156,5 +157,5 @@ export default function Team() {
         <div style={{fontFamily:'monospace',fontSize:28,letterSpacing:3,textAlign:'center',padding:'12px 0'}}>{neuerCode.code}</div>
         <div className="muted" style={{textAlign:'center'}}>{neuerCode.rolle} · {gueltigText(neuerCode.gueltig_bis)}</div>
         <div className="modalActions"><button type="button" className="button secondary" onClick={()=>kopieren(neuerCode.code)}>Code kopieren</button><button type="button" className="button" onClick={()=>kopieren(einladungsLink(neuerCode.code))}>Link kopieren</button></div></div>
-      : <form onSubmit={invite}><label className="field">Rolle<select value={inviteRole} onChange={e=>setInviteRole(e.target.value as Role)}><option>Player</option><option>Admin</option><option>Observer</option></select></label><label className="field">Gültig für<select value={inviteStunden} onChange={e=>setInviteStunden(parseInt(e.target.value,10))}><option value={24}>24 Stunden</option><option value={48}>48 Stunden</option><option value={168}>7 Tage</option><option value={0}>Nie (bis zum Einlösen oder Zurückziehen)</option></select></label><div className="modalActions"><button type="button" className="button secondary" onClick={()=>setOpen(false)}>Abbrechen</button><button className="button" disabled={saving}>Code erzeugen</button></div></form>}</div></div>}</main>;
+      : <form onSubmit={invite}><label className="field">Rolle<select value={inviteRole} onChange={e=>setInviteRole(e.target.value as Role)}><option>Player</option><option>Admin</option><option>Observer</option></select></label><label className="field">Gültig für<select value={inviteStunden} onChange={e=>setInviteStunden(parseInt(e.target.value,10))}><option value={24}>24 Stunden</option><option value={48}>48 Stunden</option><option value={168}>7 Tage</option><option value={0}>Nie (bis zum Einlösen oder Zurückziehen)</option></select></label><div className="modalActions"><button type="button" className="button secondary" onClick={()=>setOpen(false)}>Abbrechen</button><button className="button" disabled={saving}>Code erzeugen</button></div></form>}</div></div>}</OdinShell>;
 }

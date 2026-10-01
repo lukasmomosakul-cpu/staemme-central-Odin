@@ -2856,7 +2856,7 @@ public class GameWebViewActivity extends Activity {
    }).start();
   });
   bar.addView(leaseKnopf,kopfKnopfLp());
-  Button min=kopfKnopf("▁ Ablegen");
+  Button min=kopfKnopf("▁ Minimieren");
   min.setOnClickListener(x->{
    if(!OdinBubble.allowed(this)){
     setStatus("Bitte 'Über anderen Apps anzeigen' erlauben");

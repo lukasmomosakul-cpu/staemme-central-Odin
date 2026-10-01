@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import OdinShell from '../../components/OdinShell';
 
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || 'dev';
 const STORAGE_KEY = 'odin-script-library';
@@ -101,10 +102,9 @@ export default function ScriptsPage(){
     }catch(error:any){setMessage(error?.message||'Bitte eine gültige HTTPS-URL verwenden.');}
   };
 
-  if(!ready)return <main style={{minHeight:'100vh',padding:'clamp(10px,3vw,18px)',background:'var(--bg,#0b1020)',color:'var(--text,#f5f7fb)'}}><div style={{maxWidth:900,margin:'0 auto'}}><div className="eyebrow">TEAMZENTRALE ODIN</div><p className="muted">Scripts werden geladen…</p></div></main>;
-  return <main style={{minHeight:'100vh',padding:'clamp(10px,3vw,18px)',background:'var(--bg,#0b1020)',color:'var(--text,#f5f7fb)'}}><div style={{maxWidth:900,margin:'0 auto'}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><a href="/" className="muted">← Zur Teamzentrale</a><span className="muted">Odin v{APP_VERSION}</span></div>
-    <div className="eyebrow" style={{marginTop:18}}>TEAMZENTRALE ODIN</div>
+  if(!ready)return <OdinShell titel="Scripts" aktiv="Scripts"><div className="card"><p className="muted">Scripts werden geladen…</p></div></OdinShell>;
+  return <OdinShell titel="Scripts" aktiv="Scripts"><div style={{maxWidth:900,width:'100%'}}>
+    <div className="muted" style={{textAlign:'right'}}>Odin v{APP_VERSION}</div>
     <section className="card section" style={{marginTop:14}}><div className="sectionhead"><div><h1 style={{margin:0}}>🧩 Scripts</h1><div className="muted">Scripts werden teamweit in Supabase gespeichert und beim Öffnen des Spiels an die native WebView übergeben.</div></div><a href="/game" className="button secondary">🎮 Spiel</a></div>
       <div className="event" style={{marginTop:14}}><span>🟢</span><div><strong>GodBot {gbVersion?'v'+gbVersion:''} – fest eingebaut</strong><div className="muted">{gbVersion?'GodBot ist Teil dieser App-Fassung und kommt mit jedem App-Update.':'GodBot ist Teil der Odin-App. Die Fassung wird nur in der App angezeigt.'}</div></div></div>
       <div className="event" style={{marginTop:10}}><span>🧩</span><div><strong>Zusatzskripte</strong><div className="muted">Tampermonkey-Skripte laufen nach GodBot. @match, @include, @exclude und @require werden beachtet – ein Skript läuft nur auf den Seiten, für die es gedacht ist.</div></div></div>
@@ -117,5 +117,5 @@ export default function ScriptsPage(){
       <div className="muted">Neue Einträge sind zunächst aus. Nach dem Aktivieren im Spiel neu laden, damit sie greifen.</div>
       {message&&<div className="muted">{message}</div>}</div>
     </section>
-  </div></main>;
+  </div></OdinShell>;
 }
