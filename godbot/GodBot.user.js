@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      556
+// @version      557
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -30422,6 +30422,14 @@ function twFormularExport(cfg, callback) {
         }
 
         if (!stufe) {
+            // v557: Ohne Eintraege zeigt die Eintreffend-Seite gar kein
+            // Formular (de256 mobil, 06.09.: leer; mit Angriffen dagegen
+            // #incomings_form samt "reqdef" - Projektdatei de256 mobil).
+            // Das ist kein Fehler, sondern "nichts da".
+            if (schritt === 1 && cfg.leerOhneFormular && cfg.leerOhneFormular(doc)) {
+                beenden("", cfg.leerText);
+                return;
+            }
             twProtokolliereSeite(cfg, doc, schritt);
             // v553: Die mobile Ansicht hat die noetigen Knoepfe nicht
             // (Berichtsliste nur "Loeschen", Eintreffend-Seite ohne
@@ -30521,6 +30529,9 @@ function exportIncomingAttacksBB(callback) {
             }
         ],
         muster: /\[command\]/,
+        leerOhneFormular: (d) => !d.querySelector("#incomings_form") &&
+            /mode=incomings/.test(String((d.location && d.location.href) || "")) ||
+            (!d.querySelector("#incomings_form") && !!d.querySelector("#incomings_table, .overview_filters, #paged_view_content")),
         zaehlMuster: /\[command\]attack\[\/command\]/g,
         zaehler: "angriffs-export",
         leerText: "Keine eintreffenden Angriffe.",
