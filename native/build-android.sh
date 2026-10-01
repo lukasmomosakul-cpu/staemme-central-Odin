@@ -62,6 +62,7 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
@@ -159,8 +160,26 @@ public class MainActivity extends Activity {
  // weiterarbeiten. Dieselbe Bauart wie der Riegel in GameWebViewActivity.
  private static MainActivity offen=null;
  private final String instanz=Integer.toHexString(System.identityHashCode(this));
+ // 1.94.19: Ist Odin akku-optimiert, beendet Android den Dienst (Wachhund
+ // 27.09.: 12 Neustarts in 3 Std., danach 9 Std. Stille). Hoechstens einmal
+ // am Tag um die Ausnahme bitten - die Entscheidung bleibt beim Nutzer.
+ private void akkuAusnahmeErbitten(){
+  try{
+   android.os.PowerManager pm=(android.os.PowerManager)getSystemService(android.content.Context.POWER_SERVICE);
+   if(pm.isIgnoringBatteryOptimizations(getPackageName()))return;
+   android.content.SharedPreferences sp=getSharedPreferences("odin_akku",MODE_PRIVATE);
+   long zuletzt=sp.getLong("gefragt",0L);
+   if(System.currentTimeMillis()-zuletzt<24L*3600L*1000L)return;
+   sp.edit().putLong("gefragt",System.currentTimeMillis()).apply();
+   OdinLog.schreib(this,"-","WICHTIG","Akku-Optimierung aktiv - frage nach Ausnahme");
+   Intent i=new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+   i.setData(android.net.Uri.parse("package:"+getPackageName()));
+   startActivity(i);
+  }catch(Exception ignored){}
+ }
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){
   super.onCreate(b); Fullscreen.apply(this);
+  akkuAusnahmeErbitten();
   MainActivity vorhanden=offen;
   if(vorhanden!=null&&vorhanden!=this&&!vorhanden.isFinishing()){
    OdinLog.schreib(this,"-","WICHTIG",
@@ -2023,8 +2042,13 @@ public class OdinAlarmReceiver extends BroadcastReceiver {
    // oeffnen, kein Bildschirm an.
    OdinAlarm.wachhund(c);
    if(warTot){
-    OdinLog.schreib(c,"-","WICHTIG","Wachhund: Dienst war beendet - nachgestartet");
-    OdinService.protokoll(c,"WICHTIG","wachhund","Dienst war beendet - nachgestartet");
+    // 1.94.19: dazu, ob Android Odin beim Akku einschraenkt - der haeufigste
+    // Grund, warum der Dienst beendet wird (27.09.: 12x in 3 Std.).
+    String akku="?";
+    try{ android.os.PowerManager pm=(android.os.PowerManager)c.getSystemService(Context.POWER_SERVICE);
+     akku=pm.isIgnoringBatteryOptimizations(c.getPackageName())?"Akku: uneingeschränkt":"Akku: OPTIMIERT (Android darf beenden)"; }catch(Exception ig){}
+    OdinLog.schreib(c,"-","WICHTIG","Wachhund: Dienst war beendet - nachgestartet · "+akku);
+    OdinService.protokoll(c,"WICHTIG","wachhund","Dienst war beendet - nachgestartet · "+akku);
    }
    return;
   }
@@ -3077,7 +3101,9 @@ public class GameWebViewActivity extends Activity {
    // "zurueck im Vordergrund" derselben Instanz #aebf, die andere Welt
    // kam nie nach vorn. NEW_DOCUMENT passt zu documentLaunchMode=intoExisting:
    // offene Aufgabe mit derselben Daten-URI nach vorn, sonst eine neue.
-   i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+   // 1.94.19: MULTIPLE_TASK dazu - offen ist die Zielwelt hier nicht (oben
+   // geprueft), also immer eine eigene Aufgabe, nie diese Ansicht.
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
    wechselZiel=ziel; wechselAt=System.currentTimeMillis();
    startActivity(i);
   }catch(Exception e){
@@ -3759,7 +3785,29 @@ public class GameWebViewActivity extends Activity {
   if(!OdinService.team.isEmpty())supaTeam=OdinService.team;
  }
  @Override protected void onNewIntent(Intent in){
-  super.onNewIntent(in); setIntent(in);
+  super.onNewIntent(in);
+  // 1.94.19 - KEIN UMETIKETTIEREN. Lieferte Android einen Start fuer ein
+  // ANDERES Konto an diese Ansicht (26.09., 10:50: #d12e de258 -> de257),
+  // wurde bisher nur gameAccountId umgestellt; die WebView zeigte weiter
+  // die alte Welt, und deren Einstellungen gingen unter dem neuen Konto
+  // hoch (Bauplan von de257 in de258/de259). Jetzt: die richtige Ansicht
+  // nach vorn holen oder eine eigene starten - diese bleibt, was sie ist.
+  String a0=nz(in.getStringExtra("accountId"));
+  if(!a0.isEmpty()&&!gameAccountId.isEmpty()&&!a0.equals(gameAccountId)){
+   OdinService.protokoll(this,"WICHTIG","app","Start für anderes Konto ("+a0.substring(0,Math.min(8,a0.length()))
+     +") an diese Ansicht geliefert - eigene Ansicht statt Umetikettieren");
+   GameWebViewActivity da; synchronized(OFFEN){ da=OFFEN.get(a0); }
+   if(da!=null&&da!=this&&!da.isFinishing()&&!da.isDestroyed()&&aufgabeNachVorn(this,da.getTaskId()))return;
+   try{
+    Intent i=new Intent(in);
+    i.setComponent(new android.content.ComponentName(this,GameWebViewActivity.class));
+    if(i.getData()==null)i.setData(android.net.Uri.parse("odin://account/"+a0));
+    i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+    startActivity(i);
+   }catch(Exception e){ setStatus("Wechsel fehlgeschlagen: "+e.getMessage()); }
+   return;
+  }
+  setIntent(in);
   // Nur die Sitzungsdaten auffrischen - die WebView bleibt unberuehrt,
   // sonst ginge die Anmeldung bei jedem Wechsel verloren.
   String u=nz(in.getStringExtra("supaUrl")), k=nz(in.getStringExtra("supaKey"));

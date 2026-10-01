@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      555
+// @version      556
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -41332,10 +41332,38 @@ const BAUPLAN_KEY = "tw_build_plans";
 // deshalb ist Nichtstun hier die richtige Voreinstellung.
 const BAU_MAX_ZUSATZ_PROZENT = 0;
 
+// v556 (28.09.2026): Bauplaene fuer Doerfer, die nicht zu diesem Konto
+// gehoeren, einmal je Seitenaufruf entfernen. Ursache: der Kontowechsel-
+// Fehler der App (bis 1.94.18) lud Einstellungen einer Welt unter einem
+// anderen Konto hoch - der Plan von de257 (Dorf 63252) stand danach in
+// de258 und de259. Entfernt wird NUR, wenn die eigene Dorfliste
+// vollstaendig bekannt ist (Produktionsuebersicht kennt genau so viele
+// Doerfer, wie game_data meldet) - sonst bleibt alles stehen.
+let bauPlanFremdGeprueft = false;
+function bauPlaeneFremdeEntfernen(d) {
+    try {
+        const soll = parseInt(game_data && game_data.player && game_data.player.villages, 10) || 0;
+        const pc = JSON.parse(localStorage.getItem("tw_production_cache") || "{}");
+        const eigene = Object.keys((pc && pc.stock) || {});
+        if (!soll || eigene.length !== soll) return d;
+        const fremd = Object.keys(d).filter(k => eigene.indexOf(String(k)) < 0);
+        if (!fremd.length) return d;
+        fremd.forEach(k => { delete d[k]; });
+        localStorage.setItem(BAUPLAN_KEY, JSON.stringify(d));
+        console.warn(`[TW] Bauplaene: ${fremd.length} Plan/Plaene fuer fremde Doerfer entfernt ` +
+            `(${fremd.join(", ")}) - gehoeren nicht zu diesem Konto.`);
+    } catch (e) {
+        console.warn("[TW] Bauplaene: Pruefung auf fremde Doerfer gescheitert.", e);
+    }
+    return d;
+}
+
 function ladeBauPlaene() {
     try {
-        const d = JSON.parse(localStorage.getItem(BAUPLAN_KEY) || "{}");
-        return (d && typeof d === "object") ? d : {};
+        let d = JSON.parse(localStorage.getItem(BAUPLAN_KEY) || "{}");
+        if (!d || typeof d !== "object") return {};
+        if (!bauPlanFremdGeprueft) { bauPlanFremdGeprueft = true; d = bauPlaeneFremdeEntfernen(d); }
+        return d;
     } catch (e) {
         console.warn("[TW] Bauplaene nicht lesbar - gelten als leer.", e);
         return {};
