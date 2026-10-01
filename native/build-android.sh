@@ -2803,15 +2803,20 @@ public class GameWebViewActivity extends Activity {
               : (lastGame.contains("die-staemme.de") ? lastGame : "https://www.die-staemme.de/");
   webView.loadUrl(ziel);}
  private android.view.View buildHeader(String activeName){
+  // 1.95.0 - NEUES LAYOUT: dunkler Kopf im Stil der GodBot-Leiste,
+  // flache runde Knoepfe statt grauer Systemknoepfe, Abstaende in dp.
   LinearLayout bar=new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL);
-  bar.setBackgroundColor(0xFF2B2B2B); bar.setPadding(24,18,12,18); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+  bar.setBackgroundColor(UI_KOPF); bar.setPadding(dp(14),dp(8),dp(8),dp(8)); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
   LinearLayout col=new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
   final TextView t=new TextView(this);
   t.setText((activeName.isEmpty()?"Die Stämme":activeName)+" ⌄");
-  t.setTextColor(0xFFFFFFFF); t.setTextSize(16f); t.setSingleLine(true);
+  t.setTextColor(0xFFFFFFFF); t.setTextSize(15f); t.setSingleLine(true);
+  t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+  t.setEllipsize(android.text.TextUtils.TruncateAt.END);
   col.addView(t);
   statusView=new TextView(this); statusView.setText("APK "+apkVersion()+" · GodBot: wartet"); statusView.setTextColor(0xFFBBBBBB);
-  statusView.setTextSize(11f); statusView.setSingleLine(true);
+  statusView.setTextSize(11f); statusView.setSingleLine(true); statusView.setTextColor(UI_SCHWACH);
+  statusView.setEllipsize(android.text.TextUtils.TruncateAt.END);
   // Tippen kopiert das komplette Protokoll in die Zwischenablage.
   statusView.setOnClickListener(x->protokollZeigen());
   statusView.setOnLongClickListener(x->{copyStatusLog();return true;});
@@ -2825,7 +2830,7 @@ public class GameWebViewActivity extends Activity {
    getSharedPreferences("odin",MODE_PRIVATE).edit().putBoolean("statusOffen",!sichtbar).apply();
   });
   bar.addView(col,new LinearLayout.LayoutParams(0,-2,1f));
-  Button back=new Button(this); back.setText("Dashboard"); back.setTextSize(12f); back.setAllCaps(false);
+  Button back=kopfKnopf("⌂ Übersicht");
   // Frueher finish(): damit war die Spielansicht weg und das Spiel startete
   // beim Zurueckkehren von vorn. Jetzt bleibt sie im Stapel bestehen.
   back.setOnClickListener(x->{
@@ -2833,13 +2838,13 @@ public class GameWebViewActivity extends Activity {
    i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
    startActivity(i);
   });
-  bar.addView(back,new LinearLayout.LayoutParams(-2,-2));
+  bar.addView(back,kopfKnopfLp());
   // Testalarm-Knopf (⏱) entfernt - der Wecker ist erprobt.
-  Button dim=new Button(this); dim.setText("🌙"); dim.setTextSize(12f); dim.setAllCaps(false);
-  dim.setPadding(10,0,10,0);
+  Button dim=kopfKnopf("🌙");
   dim.setOnClickListener(x->dimmenAn());
-  bar.addView(dim,new LinearLayout.LayoutParams(-2,-2));
-  leaseKnopf=new Button(this); leaseKnopf.setText("Übernehmen"); leaseKnopf.setTextSize(12f); leaseKnopf.setAllCaps(false);
+  bar.addView(dim,kopfKnopfLp());
+  leaseKnopf=kopfKnopf("Übernehmen");
+  leaseKnopf.setBackground(knopfGrund(0xFF5A3A12,0xFFE0A030)); leaseKnopf.setTextColor(0xFFFFE2A8);
   leaseKnopf.setVisibility(android.view.View.GONE);
   leaseKnopf.setOnClickListener(x->{
    final String k=gameAccountId; final Context app=getApplicationContext();
@@ -2850,8 +2855,8 @@ public class GameWebViewActivity extends Activity {
     else setStatus("Übernehmen fehlgeschlagen - keine Verbindung?");
    }).start();
   });
-  bar.addView(leaseKnopf,new LinearLayout.LayoutParams(-2,-2));
-  Button min=new Button(this); min.setText("Minimieren"); min.setTextSize(12f); min.setAllCaps(false);
+  bar.addView(leaseKnopf,kopfKnopfLp());
+  Button min=kopfKnopf("▁ Ablegen");
   min.setOnClickListener(x->{
    if(!OdinBubble.allowed(this)){
     setStatus("Bitte 'Über anderen Apps anzeigen' erlauben");
@@ -2870,7 +2875,7 @@ public class GameWebViewActivity extends Activity {
     moveTaskToBack(true);
    }
   });
-  bar.addView(min,new LinearLayout.LayoutParams(-2,-2));
+  bar.addView(min,kopfKnopfLp());
   // Kopf = Titelleiste + GodBot-Leiste. Als EIN Kind der Wurzel, damit die
   // WebView weiter an Position 1 steht (holeAusFenster setzt sie dort ein).
   LinearLayout kopf=new LinearLayout(this); kopf.setOrientation(LinearLayout.VERTICAL);
@@ -2902,7 +2907,7 @@ public class GameWebViewActivity extends Activity {
  }
  private android.view.View buildGodBotLeiste(){
   HorizontalScrollView sc=new HorizontalScrollView(this);
-  sc.setHorizontalScrollBarEnabled(false); sc.setBackgroundColor(0xFF1E2430);
+  sc.setHorizontalScrollBarEnabled(false); sc.setBackgroundColor(UI_LEISTE);
   LinearLayout row=new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL);
   row.setPadding(18,10,18,10); row.setGravity(android.view.Gravity.CENTER_VERTICAL);
   for(String[] b:GODBOT_BEREICHE){
@@ -3001,41 +3006,88 @@ public class GameWebViewActivity extends Activity {
    c.setAlpha(frisch?1f:0.6f);
   }
  }
+ // 1.95.0 - FARBEN UND BAUSTEINE DES NEUEN LAYOUTS.
+ static final int UI_KOPF=0xFF141B27, UI_LEISTE=0xFF1A2230, UI_FUSS=0xFF121821;
+ static final int UI_KARTE=0xFF222C3D, UI_KARTE_RAND=0xFF334058, UI_AKZENT=0xFF4C9BE8;
+ static final int UI_SCHWACH=0xFF8E9AB0, UI_HELL=0xFFE6ECF5, UI_GRUEN=0xFF4CC38A;
+ private int dp(int v){ return Math.round(v*getResources().getDisplayMetrics().density); }
+ private android.graphics.drawable.GradientDrawable knopfGrund(int farbe,int rand){
+  android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
+  g.setCornerRadius(dp(10)); g.setColor(farbe); g.setStroke(dp(1),rand); return g;
+ }
+ private Button kopfKnopf(String text){
+  Button b=new Button(this); b.setText(text); b.setTextSize(12f); b.setAllCaps(false);
+  b.setTextColor(UI_HELL); b.setBackground(knopfGrund(UI_KARTE,UI_KARTE_RAND));
+  b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(dp(36));
+  b.setPadding(dp(10),0,dp(10),0); b.setStateListAnimator(null);
+  return b;
+ }
+ private LinearLayout.LayoutParams kopfKnopfLp(){
+  LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,dp(36)); lp.leftMargin=dp(6); return lp;
+ }
+ // Fusszeile = die Welten. Jede Welt eine Karte: Welt gross, Name klein,
+ // gruener Punkt = Ansicht offen (GodBot laeuft dort). Die aktive Welt ist
+ // blau umrandet. Die Liste wird bei jedem Zurueckkehren neu gezeichnet,
+ // damit neue oder geloeschte Konten ohne Neustart erscheinen.
+ static volatile String LETZTE_KONTEN="";
+ private HorizontalScrollView fussleiste;
+ private String fussAktiv="";
  private android.view.View buildFooter(String accountsJson,String activeName){
-  HorizontalScrollView sc=new HorizontalScrollView(this); sc.setBackgroundColor(0xFFF2F2F2);
-  LinearLayout row=new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL); row.setPadding(12,10,12,10);
+  if(accountsJson!=null&&accountsJson.length()>2)LETZTE_KONTEN=accountsJson;
+  fussAktiv=activeName==null?"":activeName;
+  fussleiste=new HorizontalScrollView(this);
+  fussleiste.setHorizontalScrollBarEnabled(false); fussleiste.setBackgroundColor(UI_FUSS);
+  fussleisteFuellen();
+  return fussleiste;
+ }
+ private void fussleisteFuellen(){
+  if(fussleiste==null)return;
+  String accountsJson=LETZTE_KONTEN.isEmpty()?"[]":LETZTE_KONTEN;
+  LinearLayout row=new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL);
+  row.setPadding(dp(10),dp(8),dp(10),dp(8)); row.setGravity(android.view.Gravity.CENTER_VERTICAL);
   try{
    org.json.JSONArray arr=new org.json.JSONArray(accountsJson);
-   if(arr.length()==0){TextView e=new TextView(this);e.setText("Keine Accounts hinterlegt");e.setTextColor(0xFF777777);e.setTextSize(12f);e.setPadding(12,6,12,6);row.addView(e);}
+   if(arr.length()==0){ TextView e=new TextView(this); e.setText("Keine Konten hinterlegt - im Dashboard anlegen");
+    e.setTextColor(UI_SCHWACH); e.setTextSize(12f); e.setPadding(dp(6),dp(8),dp(6),dp(8)); row.addView(e); }
    for(int i=0;i<arr.length();i++){
     org.json.JSONObject o=arr.optJSONObject(i); if(o==null)continue;
     String nm=o.optString("name",""); if(nm.isEmpty())continue;
     String welt=o.optString("world","");
-    // 1.87.0: ueber die Konto-ID, nicht den Namen - zwei Welten desselben
-    // Spielers heissen gleich (FetterOrk de257/de259) und waren beide
-    // "aktiv" markiert. Ohne ID (altes Dashboard) bleibt der Namensvergleich.
     final String kid=o.optString("id","");
-    boolean active=kid.isEmpty()?nm.equals(activeName):kid.equals(gameAccountId);
-    TextView c=new TextView(this);
-    c.setText(welt.isEmpty()?nm:(nm+"  ·  "+welt));
-    // 1.87.0: Tippen wechselt in diese Welt.
+    boolean active=kid.isEmpty()?nm.equals(fussAktiv):kid.equals(gameAccountId);
+    boolean offen=false;
+    if(!kid.isEmpty()){ GameWebViewActivity a; synchronized(OFFEN){ a=OFFEN.get(kid); }
+     offen=a!=null&&!a.isFinishing()&&!a.isDestroyed(); }
+    LinearLayout karte=new LinearLayout(this); karte.setOrientation(LinearLayout.VERTICAL);
+    karte.setPadding(dp(12),dp(6),dp(12),dp(6)); karte.setMinimumHeight(dp(44));
+    karte.setGravity(android.view.Gravity.CENTER_VERTICAL);
+    karte.setBackground(knopfGrund(active?0xFF1D3350:UI_KARTE,active?UI_AKZENT:UI_KARTE_RAND));
+    TextView w=new TextView(this);
+    android.text.SpannableStringBuilder sb=new android.text.SpannableStringBuilder();
+    sb.append(offen?"● ":"○ ");
+    sb.setSpan(new android.text.style.ForegroundColorSpan(offen?UI_GRUEN:0xFF5B6678),0,1,0);
+    sb.append(welt.isEmpty()?nm:welt);
+    w.setText(sb); w.setTextSize(13f); w.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+    w.setTextColor(active?0xFFFFFFFF:UI_HELL); w.setSingleLine(true);
+    karte.addView(w);
+    if(!welt.isEmpty()){
+     TextView n=new TextView(this); n.setText(nm); n.setTextSize(10.5f); n.setSingleLine(true);
+     n.setEllipsize(android.text.TextUtils.TruncateAt.END); n.setMaxWidth(dp(130));
+     n.setTextColor(active?0xFFB9D6F5:UI_SCHWACH); karte.addView(n);
+    }
     if(!active){
      final String fNm=nm, fWelt=welt, fUser=o.optString("username",""), fAlle=accountsJson;
-     c.setOnClickListener(x->{
+     karte.setOnClickListener(x->{
       if(kid.isEmpty()){ setStatus("Wechsel nicht möglich - Spiel einmal über das Dashboard neu öffnen"); return; }
       kontoWechseln(kid,fNm,fUser,fWelt,fAlle);
      });
     }
-    c.setTextSize(12f); c.setPadding(22,10,22,10);
-    c.setTextColor(active?0xFFFFFFFF:0xFF333333);
-    android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
-    g.setCornerRadius(18f); g.setColor(active?0xFF2B2B2B:0xFFFFFFFF); g.setStroke(1,0xFFCCCCCC);
-    c.setBackground(g);
-    LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.rightMargin=12; c.setLayoutParams(lp);
-    row.addView(c);
+    karte.setContentDescription((welt.isEmpty()?"":welt+" ")+nm+(active?" (aktiv)":"")+(offen?" - offen":""));
+    LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.rightMargin=dp(8);
+    row.addView(karte,lp);
    }
   }catch(Exception e){Log.e("ODIN","footer",e);}
-  sc.addView(row); return sc;
+  fussleiste.removeAllViews(); fussleiste.addView(row);
  }
  // 1.87.0 - WELTEN WECHSELN UEBER DIE FUSSLEISTE.
  // Die verlassene Welt wandert vorher in ein kleines schwebendes Fenster
@@ -3808,6 +3860,7 @@ public class GameWebViewActivity extends Activity {
    return;
   }
   setIntent(in);
+  try{ String kj=in.getStringExtra("accountsJson"); if(kj!=null&&kj.length()>2)LETZTE_KONTEN=kj; }catch(Exception ig){}
   // Nur die Sitzungsdaten auffrischen - die WebView bleibt unberuehrt,
   // sonst ginge die Anmeldung bei jedem Wechsel verloren.
   String u=nz(in.getStringExtra("supaUrl")), k=nz(in.getStringExtra("supaKey"));
@@ -3832,6 +3885,7 @@ public class GameWebViewActivity extends Activity {
   sitzungNachladen();
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
   OdinBubble.hide(); restoreFromFloat();
+  try{ fussleisteFuellen(); }catch(Exception ig){}
   // 1.88.0: Kommt diese Ansicht binnen 5 s nach einem Wechsel selbst wieder
   // nach vorn, hat der Wechsel nicht gegriffen - sagen statt schweigen.
   if(wechselAt>0L&&System.currentTimeMillis()-wechselAt<5000L)
@@ -4102,6 +4156,22 @@ public class GameWebViewActivity extends Activity {
     // Meldung kommt aus dem Bootstrap inklusive Schluesselnamen.
     return true;
    }catch(Exception e){ setStatus("Abgleich schreiben fehlgeschlagen: "+e.getMessage()); return false; }
+  }
+  // 1.95.0 - ABLAGE IN SUPABASE: Protokoll, Seitenquellen, Mitschnitte.
+  // Im Hintergrund - der Aufruf kommt aus dem JS-Faden der Spielseite und
+  // darf ihn nicht mit Netzwartezeit blockieren.
+  @JavascriptInterface public boolean ablageSchreiben(final String art,final String titel,final String inhalt){
+   if(!syncReady())return false;
+   final String konto=gameAccountId;
+   new Thread(()->{
+    try{
+     org.json.JSONObject b=new org.json.JSONObject();
+     b.put("p_account",konto); b.put("p_art",art); b.put("p_titel",titel==null?"":titel);
+     b.put("p_inhalt",inhalt==null?"":inhalt); b.put("p_geraet",android.os.Build.MODEL);
+     supaRequest("POST","rpc/ablage_schreiben",b.toString());
+    }catch(Exception e){ android.util.Log.w("ODIN_ABLAGE","schreiben",e); }
+   }).start();
+   return true;
   }
   // Steuerzentrale (1.79.0): Befehle der App an GodBot. Nur offene Zeilen
   // dieses Kontos, aelteste zuerst. Erledigt wird ueber eine RPC, weil

@@ -438,6 +438,13 @@ var OdinNative = {
         if (!OdinNative.syncReady()) return false;
         try { settingsSchreiben(JSON.parse(json), 0); return true; } catch (e) { return false; }
     },
+    // 1.95.0: Ablage (Protokoll, Seitenquellen, Mitschnitte) -> godbot_ablage.
+    ablageSchreiben: function (art, titel, inhalt) {
+        if (!OdinNative.syncReady()) return false;
+        rpc('ablage_schreiben', { p_account: Z.konto.id, p_art: String(art), p_titel: String(titel || ''), p_inhalt: String(inhalt || ''), p_geraet: 'PC ' + geraetId })
+            .catch(function (e) { status('Ablage fehlgeschlagen: ' + e.message); });
+        return true;
+    },
     befehleAbrufen: function () {
         if (!OdinNative.syncReady()) return;
         rest('GET', 'godbot_befehle?select=id,pfad,wert,erstellt_at&erledigt_at=is.null&order=id.asc&limit=20&account_id=eq.' + encodeURIComponent(Z.konto.id))

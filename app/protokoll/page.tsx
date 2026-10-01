@@ -29,6 +29,9 @@ export default function ProtokollSeite() {
   const [laedt, setLaedt] = useState(true);
   const [auto, setAuto] = useState(true);
   const [stand, setStand] = useState('');
+  // 01.10.2026: zweite Quelle - das GodBot-Protokoll aus godbot_ablage
+  // (Migration 021), das die Geraete minuetlich hochladen.
+  const [quelle, setQuelle] = useState<'app' | 'godbot'>('app');
 
   const laden = useCallback(async () => {
     if (!supabase) { setLaedt(false); return; }
@@ -37,16 +40,34 @@ export default function ProtokollSeite() {
     try {
       const { data: accs } = await supabase.from('game_accounts').select('id,name');
       setNamen(Object.fromEntries(((accs ?? []) as { id: string; name: string }[]).map((a) => [a.id, a.name])));
-      const { data } = await supabase
-        .from('app_events')
-        .select('id,level,bereich,message,device,app_version,created_at,account_id')
-        .order('created_at', { ascending: false })
-        .limit(GRENZE);
-      setEintraege((data ?? []) as Ereignis[]);
+      if (quelle === 'godbot') {
+        const { data } = await supabase
+          .from('godbot_ablage')
+          .select('id,account_id,inhalt,geraet,erstellt_at')
+          .eq('art', 'protokoll')
+          .order('erstellt_at', { ascending: false })
+          .limit(40);
+        const zeilen: Ereignis[] = [];
+        ((data ?? []) as { id: number; account_id: string; inhalt: string; geraet: string; erstellt_at: string }[]).forEach((r) => {
+          r.inhalt.split('\n').reverse().forEach((z, i) => {
+            if (!z.trim()) return;
+            const lv = /\[(FEHLER|ERROR)\]/.test(z) ? 'FEHLER' : /\[(WARN|WARNUNG)\]/.test(z) ? 'WICHTIG' : 'info';
+            zeilen.push({ id: r.id + '-' + i, level: lv, bereich: 'godbot', message: z, device: r.geraet || '', app_version: '', created_at: r.erstellt_at, account_id: r.account_id });
+          });
+        });
+        setEintraege(zeilen.slice(0, GRENZE * 3));
+      } else {
+        const { data } = await supabase
+          .from('app_events')
+          .select('id,level,bereich,message,device,app_version,created_at,account_id')
+          .order('created_at', { ascending: false })
+          .limit(GRENZE);
+        setEintraege((data ?? []) as Ereignis[]);
+      }
       setStand(new Date().toLocaleTimeString('de-DE'));
     } catch { /* Abrufe duerfen die Seite nicht blockieren */ }
     setLaedt(false);
-  }, []);
+  }, [quelle]);
 
   useEffect(() => { laden(); }, [laden]);
   useEffect(() => {
@@ -98,6 +119,10 @@ export default function ProtokollSeite() {
       rechts={fehler > 0 ? <span style={{ color: FARBE.FEHLER, fontSize: 13 }}>{fehler} Fehler</span> : null}
     >
       <section className="section card">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <button type="button" className={quelle === 'app' ? 'button' : 'button secondary'} onClick={() => setQuelle('app')}>App-Ereignisse</button>
+          <button type="button" className={quelle === 'godbot' ? 'button' : 'button secondary'} onClick={() => setQuelle('godbot')}>GodBot-Protokoll</button>
+        </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <select value={stufe} onChange={(e) => setStufe(e.target.value)} aria-label="Stufe">
             <option value="alle">alle Stufen</option>

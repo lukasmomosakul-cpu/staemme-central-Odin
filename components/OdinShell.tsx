@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import VersionUpdater from './VersionUpdater';
 
 // Gemeinsames Geruest fuer alle Seiten. Vorher hatte jede Seite ihr eigenes
@@ -16,11 +16,19 @@ const SEITEN: [string, string][] = [
   ['Einstellungen', '/einstellungen/'],
 ];
 
+// 01.10.2026: Fuenf feste Plaetze, der fuenfte oeffnet "Mehr". Vorher waren
+// es fuenf Eintraege in einem 4er-Raster (der letzte rutschte in eine zweite
+// Zeile), und Team, Accounts und Scripts waren am Handy nicht erreichbar.
 const FUSS: [string, string, string][] = [
   ['⌂', 'Dashboard', '/'],
   ['⚔', 'GodBot', '/godbot/'],
   ['📊', 'Statistik', '/statistik/'],
   ['📋', 'Protokoll', '/protokoll/'],
+];
+const MEHR: [string, string, string][] = [
+  ['👥', 'Accounts', '/#accounts'],
+  ['🤝', 'Team', '/team/'],
+  ['🧩', 'Scripts', '/scripts/'],
   ['⚙', 'Einstellungen', '/einstellungen/'],
 ];
 
@@ -39,6 +47,9 @@ export default function OdinShell({
   // Tokenpaar in der App bei jedem Zugriff direkt aus der Bruecke. Die
   // fruehere Hin-und-Her-Uebergabe (5-Minuten-Takt, setSession) konnte selbst
   // erneuern und war Teil des Problems.
+
+  const [mehrOffen, setMehrOffen] = useState(false);
+  const mehrAktiv = MEHR.some(([, label]) => label === aktiv);
 
   return (
     <div className="shell">
@@ -65,7 +76,9 @@ export default function OdinShell({
               display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
             }}
           >
-            <h1 className="title" style={{ whiteSpace: 'nowrap', margin: 0 }}>{titel}</h1>
+            <h1 className="title" style={{ whiteSpace: 'nowrap', margin: 0 }}>
+              <span className="titleBrand">⚔ Odin</span>{titel}
+            </h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {rechts}
               <VersionUpdater />
@@ -75,13 +88,30 @@ export default function OdinShell({
           {children}
         </main>
 
+        {mehrOffen && (
+          <div className="mehrBackdrop" onClick={() => setMehrOffen(false)}>
+            <div className="mehrSheet" onClick={e => e.stopPropagation()} role="dialog" aria-label="Weitere Seiten">
+              <div className="mehrGriff" />
+              {MEHR.map(([icon, label, href]) => (
+                <a href={href} key={label} className={label === aktiv ? 'active' : ''} onClick={() => setMehrOffen(false)}>
+                  <span>{icon}</span>{label}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         <nav className="bottomNav" aria-label="Mobile Navigation">
           {FUSS.map(([icon, label, href]) => (
-            <a href={href} key={label} className={label === aktiv ? 'active' : ''}>
+            <a href={href} key={label} className={label === aktiv ? 'active' : ''} aria-current={label === aktiv ? 'page' : undefined}>
               <span>{icon}</span>
-              <small>{label}</small>
+              <small>{label === 'Dashboard' ? 'Übersicht' : label}</small>
             </a>
           ))}
+          <button type="button" className={mehrAktiv || mehrOffen ? 'active' : ''} onClick={() => setMehrOffen(o => !o)} aria-expanded={mehrOffen}>
+            <span>☰</span>
+            <small>Mehr</small>
+          </button>
         </nav>
       </div>
     </div>

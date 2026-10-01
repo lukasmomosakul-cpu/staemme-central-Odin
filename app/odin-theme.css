@@ -18,3 +18,25 @@
 @supports(padding:max(0px)){.mobileNav{padding-top:max(14px,env(safe-area-inset-top));padding-bottom:14px}.authPage{padding-bottom:max(18px,env(safe-area-inset-bottom))}}
 
 /* Temporary empty footer space reserved for future useful controls. */
+
+
+/* 01.10.2026 - Navigation und Kopf am Handy ueberarbeitet. */
+.titleBrand{display:none;font-size:.62em;font-weight:800;letter-spacing:.06em;color:#8b672f;margin-right:10px;vertical-align:middle}
+.bottomNav{grid-template-columns:repeat(5,1fr)!important;gap:2px;padding:6px 6px max(6px,env(safe-area-inset-bottom))}
+.bottomNav a,.bottomNav button{display:grid;justify-items:center;align-content:center;gap:3px;min-height:52px;padding:6px 2px;border-radius:12px;color:#66758a;text-decoration:none;background:transparent;border:0;font:inherit;cursor:pointer;position:relative;-webkit-tap-highlight-color:transparent}
+.bottomNav span{font-size:19px;line-height:20px}
+.bottomNav small{font-size:10.5px;font-weight:700;letter-spacing:.01em}
+.bottomNav a.active,.bottomNav button.active{color:#7a5a24;background:rgba(184,137,63,.13)}
+.bottomNav a.active:before,.bottomNav button.active:before{content:"";position:absolute;top:0;left:30%;right:30%;height:3px;border-radius:0 0 3px 3px;background:#b8893f}
+.bottomNav a:active,.bottomNav button:active{transform:scale(.96)}
+.mehrBackdrop{position:fixed;inset:0;z-index:40;background:rgba(24,34,48,.32);display:flex;align-items:flex-end;animation:mehrFade .16s ease}
+.mehrSheet{width:100%;background:#fff;border-radius:18px 18px 0 0;padding:8px 12px calc(76px + env(safe-area-inset-bottom));box-shadow:0 -12px 30px rgba(24,34,48,.18);display:grid;gap:4px;animation:mehrHoch .2s ease}
+.mehrGriff{width:40px;height:4px;border-radius:4px;background:#d5dde7;margin:4px auto 10px}
+.mehrSheet a{display:flex;align-items:center;gap:14px;min-height:50px;padding:0 14px;border-radius:12px;color:#182230;font-weight:700;text-decoration:none}
+.mehrSheet a span{font-size:20px;width:26px;text-align:center}
+.mehrSheet a.active{background:rgba(184,137,63,.12);color:#7a5a24}
+.mehrSheet a:active{background:#f1f4f8}
+@keyframes mehrFade{from{opacity:0}to{opacity:1}}
+@keyframes mehrHoch{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
+@media(max-width:900px){.mobileNav{display:none!important}.titleBrand{display:inline}.top{padding-top:max(10px,env(safe-area-inset-top));padding-bottom:10px}}
+@media(min-width:901px){.bottomNav,.mehrBackdrop{display:none!important}}

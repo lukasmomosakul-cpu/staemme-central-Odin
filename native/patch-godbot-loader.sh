@@ -320,6 +320,47 @@ js = r"""
     if(!timer)timer=setTimeout(flush,4000);   // laeuft ab dem ERSTEN Eintrag
    } }catch(e){}
   };
+  // 1.95.0 (01.10.2026) - ALLES NACH SUPABASE (godbot_ablage).
+  // Protokoll, Seitenquellen und Anfrage-Mitschnitte lagen nur auf dem
+  // Geraet und kamen per Diagnosepaket. Jetzt geht jede Minute hoch, was
+  // seit dem letzten Mal dazukam. Merker odin_abl_*: letzte Protokollzeile,
+  // Zeitstempel der letzten Seite bzw. des letzten Mitschnitts.
+  (function(){
+   if(typeof OdinNative==='undefined'||!OdinNative.ablageSchreiben)return;
+   var ROHG=Storage.prototype.getItem;
+   function lies(k){ try{ return ROHG.call(localStorage,k); }catch(e){ return null; } }
+   function merk(k,v){ try{ rohSetzen(k,v); }catch(e){} }
+   function protokoll(){
+    var log=lies('tw_console_log')||''; if(!log)return;
+    var z=log.split('\n').filter(function(x){ return x.trim(); });
+    var marke=lies('odin_abl_log')||'', ab=Math.max(0,z.length-400);
+    if(marke){ var i=z.lastIndexOf(marke); if(i>=0)ab=i+1; }
+    var neu=z.slice(ab); if(!neu.length)return;
+    var text=neu.join('\n'); if(text.length>400000)text=text.slice(-400000);
+    if(OdinNative.ablageSchreiben('protokoll',neu.length+' Zeilen',text)===true)merk('odin_abl_log',neu[neu.length-1]);
+   }
+   function liste(key,merker,art,titel,inhalt){
+    var raw=lies(key); if(!raw)return;
+    var l=[]; try{ l=JSON.parse(raw)||[]; }catch(e){ return; }
+    if(!Array.isArray(l))return;
+    var bis=parseInt(lies(merker)||'0',10)||0, max=bis;
+    l.forEach(function(c){ var at=c&&(c.at||c.zeit||c.ts); if(!at||at<=bis)return;
+     try{ if(OdinNative.ablageSchreiben(art,titel(c),inhalt(c))===true&&at>max)max=at; }catch(e){} });
+    if(max>bis)merk(merker,String(max));
+   }
+   function lauf(){
+    try{ if(!OdinNative.syncReady())return; }catch(e){ return; }
+    try{ protokoll(); }catch(e){}
+    try{ liste('tw_page_capture_store','odin_abl_seite','seite',
+     function(c){ return [c.kind||'seite',c.url||'',c.layout||'',c.notiz||''].join(' | '); },
+     function(c){ return String(c.html||''); }); }catch(e){}
+    try{ liste('tw_am_mitschnitt_daten','odin_abl_mit','mitschnitt',
+     function(c){ return [c.art||'',c.url||''].join(' | '); },
+     function(c){ return JSON.stringify(c); }); }catch(e){}
+   }
+   setTimeout(lauf,15000); setInterval(lauf,60000);
+   window.addEventListener('pagehide',function(){ try{ lauf(); }catch(e){} });
+  })();
   // 25.09.2026 (1.86.0) - LOESCHEN WIRD MITGESCHICKT.
   // Bisher gingen nur Schreibzugriffe hoch. Ein von GodBot geloeschter
   // Schluessel blieb in godbot_settings stehen - belegt am 25.09.:
