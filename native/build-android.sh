@@ -1688,6 +1688,7 @@ public class ParallelTestActivity extends Activity {
      androidx.webkit.WebViewCompat.setProfile(v,profil);
     }
    }catch(Exception e){ profil="Fehler: "+e.getMessage(); }
+   GameWebViewActivity.wieMobilerBrowser(v);
    WebSettings s=v.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
    CookieManager.getInstance().setAcceptCookie(true);
    CookieManager.getInstance().setAcceptThirdPartyCookies(v,true);
@@ -2776,7 +2777,7 @@ public class GameWebViewActivity extends Activity {
   rootLayout=root;
   dimRahmen=new FrameLayout(this);
   dimRahmen.addView(root,new FrameLayout.LayoutParams(-1,-1));
-  setContentView(dimRahmen);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
+  setContentView(dimRahmen);wieMobilerBrowser(webView);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
  // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
@@ -3269,6 +3270,37 @@ public class GameWebViewActivity extends Activity {
   if(x.matches("[0-9]+"))return "de"+x;          // 256   -> de256
   if(x.matches("[a-z]{2,3}[0-9]+"))return x;     // de256 -> de256
   return x;
+ }
+ // 1.95.7 - AM SPIELSERVER WIE EIN NORMALER HANDY-BROWSER.
+ // Die WebView meldet sich sonst als eingebettete Ansicht: "; wv" und
+ // "Version/4.0" im User-Agent, in den Client Hints die Marke "Android
+ // WebView" und je nach Version der Header X-Requested-With mit dem
+ // Paketnamen. Hier wird alles auf das gebracht, was Chrome fuer Android
+ // sendet: reduzierter User-Agent (Chrome schickt seit 2023 ebenfalls nur
+ // "Android 10; K" und "Chrome/NNN.0.0.0"), Client-Hint-Marken wie Chrome,
+ // kein X-Requested-With. Die Chrome-Hauptversion kommt aus der WebView
+ // selbst, passt also immer zur tatsaechlichen Engine.
+ static void wieMobilerBrowser(WebView v){
+  try{
+   WebSettings s=v.getSettings();
+   String ua=s.getUserAgentString();
+   java.util.regex.Matcher m=java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(ua==null?"":ua);
+   String major=m.find()?m.group(1):"130";
+   s.setUserAgentString("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/"
+     +major+".0.0.0 Mobile Safari/537.36");
+   if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST))
+    androidx.webkit.WebSettingsCompat.setRequestedWithHeaderOriginAllowList(s,java.util.Collections.<String>emptySet());
+   if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.USER_AGENT_METADATA)){
+    java.util.List<androidx.webkit.UserAgentMetadata.BrandVersion> marken=new java.util.ArrayList<>();
+    marken.add(new androidx.webkit.UserAgentMetadata.BrandVersion.Builder().setBrand("Chromium").setMajorVersion(major).setFullVersion(major+".0.0.0").build());
+    marken.add(new androidx.webkit.UserAgentMetadata.BrandVersion.Builder().setBrand("Google Chrome").setMajorVersion(major).setFullVersion(major+".0.0.0").build());
+    marken.add(new androidx.webkit.UserAgentMetadata.BrandVersion.Builder().setBrand("Not?A_Brand").setMajorVersion("99").setFullVersion("99.0.0.0").build());
+    androidx.webkit.UserAgentMetadata md=new androidx.webkit.UserAgentMetadata.Builder()
+      .setBrandVersionList(marken).setFullVersion(major+".0.0.0").setPlatform("Android")
+      .setPlatformVersion(android.os.Build.VERSION.RELEASE).setModel(android.os.Build.MODEL).setMobile(true).build();
+    androidx.webkit.WebSettingsCompat.setUserAgentMetadata(s,md);
+   }
+  }catch(Throwable t){ android.util.Log.w("ODIN_UA","wieMobilerBrowser",t); }
  }
  // Trennt Cookies und Speicher je Spielaccount. Ohne das teilen sich alle
  // Ansichten eine Sitzung: Anmeldung mit Konto B oeffnete das Spiel von A.
