@@ -3202,7 +3202,7 @@ public class GameWebViewActivity extends Activity {
  }
  // Ganz verdeckt = der Wechsel hat gegriffen. onPause reicht dafuer nicht:
  // auch ein gescheiterter Wechsel pausiert die Ansicht kurz.
- @Override protected void onStop(){ super.onStop(); wechselAt=0L; }
+ @Override protected void onStop(){ super.onStop(); wechselAt=0L; wechselIndikatorWeg(); }
  private void kontoWechseln(String id,String nm,String user,String welt,String alle){
   if(id==null||id.isEmpty()||id.equals(gameAccountId))return;
   final String ziel=nm+(welt.isEmpty()?"":" · "+welt);
@@ -3215,7 +3215,9 @@ public class GameWebViewActivity extends Activity {
   // sichtbar machen, den Rest per dimRahmen.post() EINEN Frame spaeter.
   setStatus("Wechsel zu "+ziel);
   wechselIndikatorZeigen(ziel);
-  if(dimRahmen!=null) dimRahmen.post(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel));
+  // 50 ms statt post(): gibt dem Zeichnen sicher einen Frame, bevor der
+  // UI-Thread am Laden der Zielwelt haengt. Fuer den Nutzer nicht spuerbar.
+  if(dimRahmen!=null) dimRahmen.postDelayed(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel),50L);
   else kontoWechselnJetzt(id,nm,user,welt,alle,ziel);
  }
  private void kontoWechselnJetzt(String id,String nm,String user,String welt,String alle,String ziel){
@@ -4028,9 +4030,11 @@ public class GameWebViewActivity extends Activity {
   super.onPause();
   if(imVordergrund)OdinService.vorn(gameAccountId);
   imVordergrund=false;
-  // Hat der Wechsel gegriffen, uebernimmt die Zielwelt und diese Ansicht geht
-  // in den Hintergrund - der Indikator hat seinen Zweck erfuellt.
-  wechselIndikatorWeg();
+  // 1.95.12: Indikator hier NICHT entfernen. onPause kommt sofort beim
+  // startActivity der Zielwelt - die laedt aber noch Sekunden, und diese
+  // Ansicht bleibt derweil sichtbar. Wurde der Indikator hier entfernt, war
+  // er nie zu sehen: pausierte, tote Leiste ohne Schicht. Entfernt wird er
+  // in onStop (Ansicht wirklich verdeckt) bzw. onResume (Wechsel gescheitert).
   if(dimDecke!=null){
    try{
     android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
