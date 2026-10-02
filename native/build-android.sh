@@ -3135,6 +3135,48 @@ public class GameWebViewActivity extends Activity {
  // documentLaunchMode=intoExisting holt eine offene Ansicht nach vorn
  // (Anmeldung bleibt), sonst entsteht eine neue.
  private String wechselZiel=""; private long wechselAt=0L;
+ // 1.95.9: Ein Kontowechsel laedt die Zielwelt neu - das dauert, und bis sie
+ // vorn ist, reagiert die alte Ansicht nicht. Statt scheinbar eingefroren
+ // zeigt eine Schicht mit Spinner "Wechsle zu ...", damit klar ist, dass
+ // etwas passiert. Sie blockiert bewusst Klicks, bis der Wechsel greift oder
+ // scheitert.
+ private android.widget.FrameLayout wechselSchicht;
+ private void wechselIndikatorZeigen(String ziel){
+  try{
+   if(dimRahmen==null)return;
+   wechselIndikatorWeg();
+   android.widget.FrameLayout o=new android.widget.FrameLayout(this);
+   o.setClickable(true); o.setFocusable(true);
+   o.setBackgroundColor(0xE60B1020);
+   android.widget.LinearLayout box=new android.widget.LinearLayout(this);
+   box.setOrientation(android.widget.LinearLayout.VERTICAL);
+   box.setGravity(android.view.Gravity.CENTER);
+   android.widget.ProgressBar sp=new android.widget.ProgressBar(this);
+   try{ sp.getIndeterminateDrawable().setColorFilter(0xFFB8893F,android.graphics.PorterDuff.Mode.SRC_IN); }catch(Exception ig){}
+   android.widget.TextView t=new android.widget.TextView(this);
+   t.setText("Wechsle zu "+ziel+" …"); t.setTextColor(0xFFEAD7B0); t.setTextSize(15f);
+   t.setGravity(android.view.Gravity.CENTER);
+   android.widget.LinearLayout.LayoutParams lp=new android.widget.LinearLayout.LayoutParams(-2,-2);
+   lp.topMargin=28; t.setLayoutParams(lp);
+   android.widget.TextView t2=new android.widget.TextView(this);
+   t2.setText("Die Welt wird geladen, einen Moment."); t2.setTextColor(0xFF9FB0C8); t2.setTextSize(12f);
+   t2.setGravity(android.view.Gravity.CENTER);
+   android.widget.LinearLayout.LayoutParams lp2=new android.widget.LinearLayout.LayoutParams(-2,-2);
+   lp2.topMargin=8; t2.setLayoutParams(lp2);
+   box.addView(sp); box.addView(t); box.addView(t2);
+   android.widget.FrameLayout.LayoutParams blp=new android.widget.FrameLayout.LayoutParams(-2,-2,android.view.Gravity.CENTER);
+   o.addView(box,blp);
+   dimRahmen.addView(o,new android.widget.FrameLayout.LayoutParams(-1,-1));
+   wechselSchicht=o;
+   // Sicherheitsnetz: nach 12 s von selbst weg, falls kein onPause/onResume
+   // kommt (z. B. Wechsel scheitert lautlos) - dann nicht dauerhaft sperren.
+   o.postDelayed(this::wechselIndikatorWeg,12000L);
+  }catch(Exception ig){}
+ }
+ private void wechselIndikatorWeg(){
+  try{ if(wechselSchicht!=null&&dimRahmen!=null)dimRahmen.removeView(wechselSchicht); }catch(Exception ig){}
+  wechselSchicht=null;
+ }
  // Holt alle Welten ausser 'ausser' aus ihren grossen Schwebesymbolen zurueck
  // in die eigene Ansicht (ohne sie nach vorn zu holen). Die kleinen Fenster
  // des leisen Weckens bleiben - sie arbeiten gerade einen Termin ab.
@@ -3167,6 +3209,7 @@ public class GameWebViewActivity extends Activity {
   final boolean schwebt=false;
   schwebendeEinholen(id);
   setStatus("Wechsel zu "+ziel);
+  wechselIndikatorZeigen(ziel);
   // 1.91.0: Laeuft die Zielwelt schon, ihre Aufgabe direkt nach vorn holen
   // statt ein Intent zu schicken, das Android womoeglich als neue Ansicht
   // anlegt.
@@ -3958,11 +4001,17 @@ public class GameWebViewActivity extends Activity {
   if(wechselAt>0L&&System.currentTimeMillis()-wechselAt<5000L)
    setStatus("Achtung: Wechsel zu "+wechselZiel+" hat nicht gegriffen");
   wechselAt=0L;
+  // Diese Ansicht ist (wieder) vorn - der Indikator gehoerte zur verlassenen
+  // Ansicht; falls er hier noch steht, weg damit.
+  wechselIndikatorWeg();
  }
  @Override protected void onPause(){
   super.onPause();
   if(imVordergrund)OdinService.vorn(gameAccountId);
   imVordergrund=false;
+  // Hat der Wechsel gegriffen, uebernimmt die Zielwelt und diese Ansicht geht
+  // in den Hintergrund - der Indikator hat seinen Zweck erfuellt.
+  wechselIndikatorWeg();
   if(dimDecke!=null){
    try{
     android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
