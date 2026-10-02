@@ -3206,6 +3206,19 @@ public class GameWebViewActivity extends Activity {
  private void kontoWechseln(String id,String nm,String user,String welt,String alle){
   if(id==null||id.isEmpty()||id.equals(gameAccountId))return;
   final String ziel=nm+(welt.isEmpty()?"":" · "+welt);
+  // 1.95.11 - DER INDIKATOR MUSS ZUERST GEZEICHNET WERDEN.
+  // Das Starten der Zielwelt blockiert den UI-Thread fuer Sekunden (neue
+  // WebView, Profil, Laden). Lief der schwere Teil direkt hier, kam der
+  // Choreographer nie dazu, den Spinner zu zeichnen: die nativen Leisten
+  // waren tot, die WebView (eigener Renderthread) blieb beruehrbar, und der
+  // Indikator erschien erst, wenn alles vorbei war. Deshalb: Indikator jetzt
+  // sichtbar machen, den Rest per dimRahmen.post() EINEN Frame spaeter.
+  setStatus("Wechsel zu "+ziel);
+  wechselIndikatorZeigen(ziel);
+  if(dimRahmen!=null) dimRahmen.post(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel));
+  else kontoWechselnJetzt(id,nm,user,welt,alle,ziel);
+ }
+ private void kontoWechselnJetzt(String id,String nm,String user,String welt,String alle,String ziel){
   // 1.90.0 - NUR DIE ANGETIPPTE WELT IST ZU SEHEN (Nutzerwunsch 25.09.).
   // Kein Schwebesymbol mehr fuer die verlassene Welt, und Symbole, die von
   // frueheren Wechseln oder "Minimieren" noch stehen, werden eingeholt.
@@ -3216,8 +3229,6 @@ public class GameWebViewActivity extends Activity {
   // getaner Arbeit selbst.
   final boolean schwebt=false;
   schwebendeEinholen(id);
-  setStatus("Wechsel zu "+ziel);
-  wechselIndikatorZeigen(ziel);
   // 1.91.0: Laeuft die Zielwelt schon, ihre Aufgabe direkt nach vorn holen
   // statt ein Intent zu schicken, das Android womoeglich als neue Ansicht
   // anlegt.
