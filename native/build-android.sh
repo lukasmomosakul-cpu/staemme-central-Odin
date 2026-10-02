@@ -3142,6 +3142,11 @@ public class GameWebViewActivity extends Activity {
  // scheitert.
  private android.widget.FrameLayout wechselSchicht;
  private void wechselIndikatorZeigen(String ziel){
+  // Immer auf dem UI-Thread und nie doppelt. Ohne das blieb bei manchen
+  // Wechsel-Pfaden gar nichts sichtbar.
+  runOnUiThread(()->wechselIndikatorZeigenIntern(ziel));
+ }
+ private void wechselIndikatorZeigenIntern(String ziel){
   try{
    if(dimRahmen==null)return;
    wechselIndikatorWeg();
@@ -3167,6 +3172,7 @@ public class GameWebViewActivity extends Activity {
    android.widget.FrameLayout.LayoutParams blp=new android.widget.FrameLayout.LayoutParams(-2,-2,android.view.Gravity.CENTER);
    o.addView(box,blp);
    dimRahmen.addView(o,new android.widget.FrameLayout.LayoutParams(-1,-1));
+   o.bringToFront(); o.setElevation(1000f); dimRahmen.invalidate();
    wechselSchicht=o;
    // Sicherheitsnetz: nach 12 s von selbst weg, falls kein onPause/onResume
    // kommt (z. B. Wechsel scheitert lautlos) - dann nicht dauerhaft sperren.
@@ -3174,8 +3180,10 @@ public class GameWebViewActivity extends Activity {
   }catch(Exception ig){}
  }
  private void wechselIndikatorWeg(){
-  try{ if(wechselSchicht!=null&&dimRahmen!=null)dimRahmen.removeView(wechselSchicht); }catch(Exception ig){}
-  wechselSchicht=null;
+  runOnUiThread(()->{
+   try{ if(wechselSchicht!=null&&dimRahmen!=null)dimRahmen.removeView(wechselSchicht); }catch(Exception ig){}
+   wechselSchicht=null;
+  });
  }
  // Holt alle Welten ausser 'ausser' aus ihren grossen Schwebesymbolen zurueck
  // in die eigene Ansicht (ohne sie nach vorn zu holen). Die kleinen Fenster
