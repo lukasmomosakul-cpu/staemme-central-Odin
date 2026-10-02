@@ -80,16 +80,18 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
              sich gegenseitig den Anmeldestatus. -->
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
-        <!-- 1.95.13: Jede Welt braucht fuer den Parallelbetrieb eine eigene,
-             dauerhaft lebende Ansicht (documentLaunchMode). excludeFromRecents
-             haelt diese Ansichten aber AUS dem App-Umschalter heraus - sonst
-             erschien je Welt eine eigene Karte (bei 3 Welten "Odin 4x offen").
-             Der Wechsel laeuft ueber die Fussleiste (moveTaskToFront per
-             Task-ID), das funktioniert auch ohne Recents-Karte. Im Umschalter
-             bleibt nur das Dashboard. -->
+        <!-- 1.95.17: EINE gemeinsame Task fuer alle Welten statt je Welt eine
+             eigene Dokument-Task. documentLaunchMode=intoExisting +
+             excludeFromRecents fuehrte dazu, dass die Zielwelt in einer eigenen
+             Hintergrund-Task startete und erst nach vorn kam, wenn man die App
+             minimierte. Mit singleTask und gemeinsamer Affinitaet liegen alle
+             Welt-Ansichten in EINER Task (eine Karte im Umschalter), und die
+             Zielwelt kommt beim Wechsel normal in den Vordergrund. Die
+             Ansichten bleiben als Instanzen in OFFEN; der Wechsel holt sie per
+             REORDER_TO_FRONT nach vorn. Hoechstens 2 Welten bleiben aktiv
+             (onCreate schliesst die aelteste) - das begrenzt Speicher und Last. -->
         <activity android:name=".GameWebViewActivity" android:exported="false"
-            android:documentLaunchMode="intoExisting" android:launchMode="singleTop"
-            android:excludeFromRecents="true"
+            android:taskAffinity=".game"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <activity android:name=".ParallelTestActivity" android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
@@ -620,6 +622,13 @@ public class OdinService extends Service {
  // entscheidet der letzte Stand: ein fremder Halter, der sich vor weniger
  // als 3 Minuten gemeldet hat, sperrt weiter; sonst darf dieses Geraet
  // laufen - ein einzelnes Geraet soll nicht an einem Funkloch haengen.
+ // 1.95.17: Haelt DIESES Geraet das Konto gerade (frische eigene Sperre)?
+ // Rein lokal, kein Netz - fuer die Entscheidung, welche Welt bei "max 2
+ // aktiv" geschlossen werden darf, ohne einen laufenden Vorgang zu kappen.
+ static boolean haeltLease(String konto){
+  Object[] e=LEASE.get(konto==null?"":konto);
+  return e!=null&&(Boolean)e[0]&&System.currentTimeMillis()-(Long)e[2]<120_000L;
+ }
  static boolean darfLaufen(Context c,String konto){
   long jetzt=System.currentTimeMillis();
   Object[] e=LEASE.get(konto==null?"":konto);
@@ -2575,7 +2584,10 @@ public class GameWebViewActivity extends Activity {
  private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
  private LinearLayout rootLayout;
  // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
- private static final java.util.Map<String,GameWebViewActivity> OFFEN=new java.util.HashMap<>();
+ // 1.95.17: LinkedHashMap haelt die Einfuegereihenfolge - so laesst sich beim
+ // Oeffnen die AELTESTE Welt schliessen, wenn mehr als 2 aktiv waeren.
+ private static final java.util.Map<String,GameWebViewActivity> OFFEN=new java.util.LinkedHashMap<>();
+ private static final int MAX_AKTIVE_WELTEN=2;
  private FrameLayout dimRahmen;
  private android.view.View dimDecke;
  // Nur wenn die Ansicht auch WIRKLICH vorn liegt, wird die WebView gerendert.
@@ -2773,7 +2785,24 @@ public class GameWebViewActivity extends Activity {
    OdinLog.schreib(this,wer,"WICHTIG","Ansicht ersetzt: #"+vorher.instanz
      +" -> #"+instanz+" (alte beendet sich: "+vorher.isFinishing()+")");
   }
-  OFFEN.put(wer,this);
+  synchronized(OFFEN){
+   OFFEN.remove(wer); OFFEN.put(wer,this); // ans Ende (juengste)
+   // 1.95.17: hoechstens MAX_AKTIVE_WELTEN gleichzeitig. Darueber die
+   // aeltesten (vorne) schliessen - nicht die gerade geoeffnete (hinten) und
+   // nicht die, die gerade ein Konto fuehrt (Lease), damit kein laufender
+   // Vorgang abgeschnitten wird.
+   while(OFFEN.size()>MAX_AKTIVE_WELTEN){
+    String opfer=null;
+    for(String k:OFFEN.keySet()){ if(!k.equals(wer)&&!OdinService.haeltLease(k)){ opfer=k; break; } }
+    if(opfer==null){ for(String k:OFFEN.keySet()){ if(!k.equals(wer)){ opfer=k; break; } } }
+    if(opfer==null)break;
+    GameWebViewActivity alt=OFFEN.remove(opfer);
+    if(alt!=null&&alt!=this){
+     OdinLog.schreib(this,opfer,"info","Aelteste Welt geschlossen (max "+MAX_AKTIVE_WELTEN+" aktiv): #"+alt.instanz);
+     final GameWebViewActivity a=alt; try{ a.runOnUiThread(()->{ try{ a.finish(); }catch(Exception ig){} }); }catch(Exception ig){}
+    }
+   }
+  }
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
   supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
   // Vom Wecker gestartet traegt das Intent keine Sitzung - dann aus der
@@ -3259,15 +3288,11 @@ public class GameWebViewActivity extends Activity {
    i.putExtra("world",welt); i.putExtra("accountsJson",alle==null?"[]":alle);
    i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
    i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
-   // 1.88.0 - KEIN REORDER_TO_FRONT HIER. Das Flag sucht die Zielklasse in
-   // der EIGENEN Aufgabe - und fand dort genau diese Ansicht. Ergebnis im
-   // Protokoll vom 25.09., 11:41: "Wechsel zu FetterOrk" und sofort
-   // "zurueck im Vordergrund" derselben Instanz #aebf, die andere Welt
-   // kam nie nach vorn. NEW_DOCUMENT passt zu documentLaunchMode=intoExisting:
-   // offene Aufgabe mit derselben Daten-URI nach vorn, sonst eine neue.
-   // 1.94.19: MULTIPLE_TASK dazu - offen ist die Zielwelt hier nicht (oben
-   // geprueft), also immer eine eigene Aufgabe, nie diese Ansicht.
-   i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+   // 1.95.17: Eine gemeinsame Task (singleTask). REORDER_TO_FRONT holt eine
+   // vorhandene Instanz der Zielwelt nach vorn; ist keine da, legt singleTask
+   // genau eine an. Kein NEW_DOCUMENT/MULTIPLE_TASK mehr - das erzeugte die
+   // Hintergrund-Tasks, die erst beim Minimieren hochkamen.
+   i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
    wechselZiel=ziel; wechselAt=System.currentTimeMillis();
    startActivity(i);
   }catch(Exception e){
@@ -3997,7 +4022,7 @@ public class GameWebViewActivity extends Activity {
     Intent i=new Intent(in);
     i.setComponent(new android.content.ComponentName(this,GameWebViewActivity.class));
     if(i.getData()==null)i.setData(android.net.Uri.parse("odin://account/"+a0));
-    i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+    i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
     startActivity(i);
    }catch(Exception e){ setStatus("Wechsel fehlgeschlagen: "+e.getMessage()); }
    return;
