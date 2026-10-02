@@ -3166,10 +3166,10 @@ public class GameWebViewActivity extends Activity {
  private android.widget.FrameLayout wechselSchicht;
  private android.widget.TextView ladeTextView;
  private void ladeSchichtZeigen(String welt){
+  final String w=normWelt(welt==null?"":welt);
   runOnUiThread(()->{
    try{
     if(dimRahmen==null||wechselSchicht!=null)return;
-    welt=normWelt(welt==null?"":welt);
     android.widget.FrameLayout o=new android.widget.FrameLayout(this);
     o.setClickable(true); o.setFocusable(true);
     o.setBackgroundColor(0xF20B1020);
@@ -3179,7 +3179,7 @@ public class GameWebViewActivity extends Activity {
     android.widget.ProgressBar sp=new android.widget.ProgressBar(this);
     try{ sp.getIndeterminateDrawable().setColorFilter(0xFFB8893F,android.graphics.PorterDuff.Mode.SRC_IN); }catch(Exception ig){}
     android.widget.TextView t=new android.widget.TextView(this);
-    t.setText(welt.isEmpty()?"Welt wird geladen …":("Lädt "+welt+" …")); t.setTextColor(0xFFEAD7B0); t.setTextSize(16f);
+    t.setText(w.isEmpty()?"Welt wird geladen …":("Lädt "+w+" …")); t.setTextColor(0xFFEAD7B0); t.setTextSize(16f);
     t.setGravity(android.view.Gravity.CENTER);
     android.widget.LinearLayout.LayoutParams lp=new android.widget.LinearLayout.LayoutParams(-2,-2);
     lp.topMargin=30; t.setLayoutParams(lp); ladeTextView=t;
