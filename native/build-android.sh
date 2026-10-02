@@ -3184,7 +3184,9 @@ public class GameWebViewActivity extends Activity {
    wechselSchicht=o;
    // Sicherheitsnetz: nach 12 s von selbst weg, falls kein onPause/onResume
    // kommt (z. B. Wechsel scheitert lautlos) - dann nicht dauerhaft sperren.
-   o.postDelayed(this::wechselIndikatorWeg,12000L);
+   // Die Zielwelt laedt im selben Prozess und braucht erfahrungsgemaess bis
+   // ~24 s, bis sie nach vorn kommt (onStop raeumt dann auf). Netz darueber.
+   o.postDelayed(this::wechselIndikatorWeg,30000L);
   }catch(Exception ig){}
  }
  private void wechselIndikatorWeg(){
@@ -3223,10 +3225,27 @@ public class GameWebViewActivity extends Activity {
   // sichtbar machen, den Rest per dimRahmen.post() EINEN Frame spaeter.
   setStatus("Wechsel zu "+ziel);
   wechselIndikatorZeigen(ziel);
-  // 50 ms statt post(): gibt dem Zeichnen sicher einen Frame, bevor der
-  // UI-Thread am Laden der Zielwelt haengt. Fuer den Nutzer nicht spuerbar.
-  if(dimRahmen!=null) dimRahmen.postDelayed(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel),50L);
-  else kontoWechselnJetzt(id,nm,user,welt,alle,ziel);
+  // 1.95.14: Den schweren Teil (Zielwelt starten, blockiert den UI-Thread ~24 s)
+  // erst ausfuehren, NACHDEM der Indikator wirklich einmal gezeichnet wurde.
+  // postDelayed allein reichte nicht sicher - der erste Frame konnte hinter
+  // den Start rutschen und der Spinner blieb unsichtbar. OnPreDrawListener
+  // feuert garantiert beim ersten Zeichnen.
+  if(wechselSchicht!=null){
+   final android.view.View o=wechselSchicht;
+   o.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener(){
+    public boolean onPreDraw(){
+     try{ o.getViewTreeObserver().removeOnPreDrawListener(this); }catch(Exception ig){}
+     // Noch einen Tick warten, damit dieser Frame fertig gezeichnet wird,
+     // bevor der UI-Thread blockiert.
+     o.postDelayed(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel),16L);
+     return true;
+    }
+   });
+  } else if(dimRahmen!=null){
+   dimRahmen.postDelayed(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel),50L);
+  } else {
+   kontoWechselnJetzt(id,nm,user,welt,alle,ziel);
+  }
  }
  private void kontoWechselnJetzt(String id,String nm,String user,String welt,String alle,String ziel){
   // 1.90.0 - NUR DIE ANGETIPPTE WELT IST ZU SEHEN (Nutzerwunsch 25.09.).
@@ -4025,14 +4044,21 @@ public class GameWebViewActivity extends Activity {
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
   OdinBubble.hide(); restoreFromFloat();
   try{ fussleisteFuellen(); }catch(Exception ig){}
-  // 1.88.0: Kommt diese Ansicht binnen 5 s nach einem Wechsel selbst wieder
-  // nach vorn, hat der Wechsel nicht gegriffen - sagen statt schweigen.
-  if(wechselAt>0L&&System.currentTimeMillis()-wechselAt<5000L)
+  // 1.95.14: onResume laeuft beim Wechsel SOFORT wieder (die Zielwelt laedt
+  // ~24 s im selben Prozess und kommt erst dann nach vorn). Frueher wurde die
+  // "hat nicht gegriffen"-Fehlmeldung dann faelschlich gezeigt UND der gerade
+  // aufgebaute Indikator sofort wieder entfernt - deshalb war nie einer zu
+  // sehen. Jetzt: Steht der Indikator noch (Wechsel laeuft), bleibt er, und
+  // die Fehlmeldung unterbleibt. onStop (Zielwelt verdeckt diese Ansicht) und
+  // das 30-s-Netz raeumen ihn auf.
+  if(wechselSchicht!=null){
+   // Wechsel laeuft noch - Ansicht nur kurz resumed, nicht als Fehlschlag werten.
+  } else if(wechselAt>0L&&System.currentTimeMillis()-wechselAt<5000L){
    setStatus("Achtung: Wechsel zu "+wechselZiel+" hat nicht gegriffen");
-  wechselAt=0L;
-  // Diese Ansicht ist (wieder) vorn - der Indikator gehoerte zur verlassenen
-  // Ansicht; falls er hier noch steht, weg damit.
-  wechselIndikatorWeg();
+   wechselAt=0L;
+  } else {
+   wechselAt=0L;
+  }
  }
  @Override protected void onPause(){
   super.onPause();
