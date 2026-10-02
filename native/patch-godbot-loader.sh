@@ -29,7 +29,17 @@ p = Path(sys.argv[1]); version = sys.argv[2]; s = p.read_text()
 
 js = r"""
 (function(){try{
- if(window.__odinGodBot)return 'already'; window.__odinGodBot=1;
+ // 1.95.8 - KEINE festen Namen auf der Spielseite.
+ //  - Die native Bruecke heisst zufaellig (__BRIDGE__), von der App gesetzt.
+ //    N ist die Bruecke; alle frueheren OdinNative.* laufen darueber.
+ //  - unsafeWindow, GM_*, __odin* und die App-Schnittstelle liegen im
+ //    versteckten Fach window[Symbol.for('tw:k')] (dasselbe, das GodBot
+ //    nutzt), nicht mehr offen am window.
+ var N=window['__BRIDGE__'];
+ if(!N){ try{console.warn('Odin: Bruecke fehlt');}catch(e){} return 'no-bridge'; }
+ var HK=Symbol.for('tw:k'); var H=window[HK];
+ if(!H){ H={}; try{Object.defineProperty(window,HK,{value:H,enumerable:false,configurable:false,writable:false});}catch(e){ window[HK]=H; } }
+ if(H.__boot)return 'already'; H.__boot=1;
  var p='odin_gm_';
  function g(k,d){try{var x=localStorage.getItem(p+k);return x===null?d:JSON.parse(x)}catch(e){return d}}
  function st(k,v){try{localStorage.setItem(p+k,JSON.stringify(v))}catch(e){}}
@@ -41,29 +51,29 @@ js = r"""
  window.GM_listValues=window.GM_listValues||function(){var a=[];try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&k.indexOf(p)===0)a.push(k.slice(p.length))}}catch(e){}return a};
  window.GM_addStyle=window.GM_addStyle||function(c){var x=document.createElement('style');x.textContent=c;(document.head||document.documentElement).appendChild(x);return x};
  window.GM_registerMenuCommand=window.GM_registerMenuCommand||function(){};
- window.GM_xmlhttpRequest=window.GM_xmlhttpRequest||function(o){try{var z={status:200,responseText:OdinNative.httpGet(String(o.url)),response:''};z.response=z.responseText;if(o.onload)o.onload(z);return z}catch(e){if(o.onerror)o.onerror({status:0,error:e});return{abort:function(){}}}};
+ window.GM_xmlhttpRequest=window.GM_xmlhttpRequest||function(o){try{var z={status:200,responseText:N.httpGet(String(o.url)),response:''};z.response=z.responseText;if(o.onload)o.onload(z);return z}catch(e){if(o.onerror)o.onerror({status:0,error:e});return{abort:function(){}}}};
  // Ein Fehler beim Auswerten von GodBot wuerde sonst nur in der Konsole landen.
  // Ersten Fehler festhalten. Frueher wurde die Meldung von der spaeteren
  // Statuspruefung ueberschrieben - genau die Information ging dabei verloren.
- window.addEventListener('error',function(ev){try{if(window.__odinErrMsg)return;
+ window.addEventListener('error',function(ev){try{if(H.err)return;
   var m=(ev.error&&ev.error.message)||ev.message||'?';
   var w=(ev.filename||'')+':'+(ev.lineno||0);
-  window.__odinErrMsg='JS-Fehler: '+m+' @'+w;
-  OdinNative.status(window.__odinErrMsg);}catch(e){}},true);
- window.addEventListener('unhandledrejection',function(ev){try{if(window.__odinErrMsg)return;
-  window.__odinErrMsg='Promise-Fehler: '+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason);
-  OdinNative.status(window.__odinErrMsg);}catch(e){}});
+  H.err='JS-Fehler: '+m+' @'+w;
+  N.status(H.err);}catch(e){}},true);
+ window.addEventListener('unhandledrejection',function(ev){try{if(H.err)return;
+  H.err='Promise-Fehler: '+(ev.reason&&ev.reason.message?ev.reason.message:ev.reason);
+  N.status(H.err);}catch(e){}});
  // --- Odin-Schnittstelle fuer GodBot ---------------------------------------
  // GodBot meldet sich ausdruecklich (godbot/GodBot.user.js, "Odin-Anbindung").
  // Die fruehere Umlenkung von Object.defineProperty fuer GodBots Sandbox-
  // Bruecken ist entfallen: GodBot baut seit v529 keine mehr, und die Umlenkung
  // veraenderte eine Kernfunktion fuer die ganze Spielseite.
- window.Odin={istApp:true,version:'__VERSION__',
-  termin:function(schluessel,art,ms){try{OdinNative.termin(String(schluessel),String(art),String(Math.round(Number(ms)||0)));}catch(e){}},
-  lebt:function(){try{OdinNative.lebt();}catch(e){}},
-  protokoll:function(t){try{OdinNative.status(String(t));}catch(e){}},
+ H.odin={istApp:true,version:'__VERSION__',
+  termin:function(schluessel,art,ms){try{N.termin(String(schluessel),String(art),String(Math.round(Number(ms)||0)));}catch(e){}},
+  lebt:function(){try{N.lebt();}catch(e){}},
+  protokoll:function(t){try{N.status(String(t));}catch(e){}},
   // GodBot-Leiste der Spielansicht (nativ). Nur oertlich, keine Netzanfrage.
-  stand:function(j){try{OdinNative.steuerstand(String(j));}catch(e){}}};
+  stand:function(j){try{N.steuerstand(String(j));}catch(e){}}};
  // --- Downloads ------------------------------------------------------------
  // GodBot speichert Protokolle ueber einen Blob und einen <a download>-Klick.
  // In Firefox geht das, in einer WebView passiert nichts: blob:-Adressen
@@ -78,9 +88,9 @@ js = r"""
     e.preventDefault(); e.stopPropagation();
     var name=a.getAttribute('download')||'odin.txt';
     fetch(a.href).then(function(r){return r.text();}).then(function(t){
-     OdinNative.saveText(String(name),String(t));
+     N.saveText(String(name),String(t));
     }).catch(function(err){
-     try{ OdinNative.status('Download fehlgeschlagen: '+err); }catch(_){}
+     try{ N.status('Download fehlgeschlagen: '+err); }catch(_){}
     });
    }catch(err){}
   },true);
@@ -91,8 +101,8 @@ js = r"""
  // aussen nicht erreichbar - deshalb wird die ausgehende Anfrage abgefangen und
  // zusaetzlich als Odin-Meldung an alle Geraete verteilt. Discord selbst bleibt
  // unberuehrt, wer es weiter nutzen will, kann es eingetragen lassen.
- window.odinNotify=function(title,body,level){
-  try{ return OdinNative.notify(String(title||'Odin'),String(body||''),String(level||'info')); }
+ H.notify=function(title,body,level){
+  try{ return N.notify(String(title||'Odin'),String(body||''),String(level||'info')); }
   catch(e){ return false; }
  };
  (function(){
@@ -118,7 +128,7 @@ js = r"""
     if(/entwarnung|gelöst|geloest|eingestellt/i.test(String(title||''))) lvl='info';
     else if(/botschutz|captcha|gesperrt|sperre|ag-alarm|rückruf|rueckruf|entscheidung nötig|abgebrochen|übernommen|fehler|abbruch/i.test(z)) lvl='warn';
     else if(/gestoppt/i.test(String(title||''))&&!/manuell/i.test(String(desc||''))) lvl='warn';
-    window.odinNotify(title,desc,lvl);
+    H.notify(title,desc,lvl);
    }catch(err){}
   }
   var of=window.fetch;
@@ -188,7 +198,7 @@ js = r"""
    try{ rohSetzen('odin_vol_'+k,'1'); }catch(e){}
    // Einmal je Schluessel melden, nicht bei jedem Schreibzugriff.
    if(!schonGemeldet[k]){ schonGemeldet[k]=1;
-    try{ OdinNative.status('nicht abgeglichen (Laufzeitwert): '+k); }catch(e){} }
+    try{ N.status('nicht abgeglichen (Laufzeitwert): '+k); }catch(e){} }
    return true;
   }
   return false;
@@ -232,8 +242,8 @@ js = r"""
  var WELT=/^[a-z]+[0-9]+[.]die-staemme[.]de$/i.test(location.hostname);
  try{
   if(!WELT){
-   OdinNative.status('Abgleich übersprungen - keine Spielwelt ('+location.hostname+')');
-  }else if(OdinNative.syncReady()){
+   N.status('Abgleich übersprungen - keine Spielwelt ('+location.hostname+')');
+  }else if(N.syncReady()){
    // NUR EINMAL je Profil. Bei jedem Seitenaufruf zu hydrieren erzeugt eine
    // Rueckkopplung: GodBot loescht bestimmte Schluessel absichtlich als
    // Erledigt-Markierung, wir schreiben sie aus der Datenbank zurueck, GodBot
@@ -241,9 +251,9 @@ js = r"""
    // "Abgleich: 1 ergaenzt" bei JEDEM Aufruf aus, dazu ein Seitenaufruf pro
    // Minute - die Dauerschleife des Managers.
    if(localStorage.getItem('odin_hydriert')){
-    OdinNative.status('Abgleich: bereits eingerichtet, nur Hochladen');
+    N.status('Abgleich: bereits eingerichtet, nur Hochladen');
    }else{
-   var loaded=JSON.parse(OdinNative.settingsLoad()||'{}');
+   var loaded=JSON.parse(N.settingsLoad()||'{}');
    var applied=0, behalten=0;
    for(var k in loaded){ if(!sollRunter(k))continue;
     try{
@@ -265,12 +275,12 @@ js = r"""
     }catch(e){}
    }
    rohSetzen('odin_hydriert',Date.now());
-   OdinNative.status('Erstabgleich: '+applied+' ergaenzt, '+behalten+' oertlich behalten');
+   N.status('Erstabgleich: '+applied+' ergaenzt, '+behalten+' oertlich behalten');
    }
   }else{
-   OdinNative.status('Abgleich inaktiv (keine Sitzung)');
+   N.status('Abgleich inaktiv (keine Sitzung)');
   }
- }catch(e){ try{OdinNative.status('Abgleich-Fehler: '+e.message)}catch(_){} }
+ }catch(e){ try{N.status('Abgleich-Fehler: '+e.message)}catch(_){} }
 
  // Schreibzugriffe sammeln und gebuendelt zurueckschreiben, damit nicht jede
  // Einzelaenderung eine eigene Anfrage ausloest.
@@ -292,16 +302,16 @@ js = r"""
     hashes[bk]=hz;
    }catch(eh){} }
    if(!Object.keys(batch).length)return;
-   try{ if(OdinNative.syncReady()){
+   try{ if(N.syncReady()){
      // Namen statt blosser Anzahl melden - sonst sieht man im Protokoll nicht,
      // WAS gesichert wurde, und kann Rauschen nicht von Nutzlast trennen.
      // Erst nach erfolgreichem Schreiben merken - sonst ginge ein Wert, der
      // bei einem Fehler verworfen wurde, nie mehr hoch.
      // 1.93.1: "gesichert" nur nach Erfolg - vorher stand es auch vor
      // "Abgleich schreiben fehlgeschlagen" (25.09. 09:53:30).
-     if(OdinNative.settingsSave(JSON.stringify(batch))===true){
+     if(N.settingsSave(JSON.stringify(batch))===true){
       for(var hk in hashes){ try{ rohSetzen('odin_lh_'+hk,hashes[hk]); }catch(eh2){} }
-      OdinNative.status('gesichert: '+Object.keys(batch).join(', ').slice(0,120));
+      N.status('gesichert: '+Object.keys(batch).join(', ').slice(0,120));
      }
    } }catch(e){}
   }
@@ -314,7 +324,7 @@ js = r"""
    // Lebenszeichen an die App: solange GodBot arbeitet, schreibt es staendig
    // in den localStorage. Hoert das auf, ist der Durchlauf fertig und das
    // Weckfenster kann schliessen. Auf einmal je Sekunde begrenzt.
-   try{ if(SYNC_PREFIX.test(k)){ var n=Date.now(); if(n-letzterPuls>1000){letzterPuls=n;OdinNative.puls();} } }catch(e){}
+   try{ if(SYNC_PREFIX.test(k)){ var n=Date.now(); if(n-letzterPuls>1000){letzterPuls=n;N.puls();} } }catch(e){}
    try{ if(sollHoch(k)){ pending[k]=String(v);
     try{ rohSetzen('odin_lw_'+k,Date.now()); }catch(e2){}
     if(!timer)timer=setTimeout(flush,4000);   // laeuft ab dem ERSTEN Eintrag
@@ -326,7 +336,7 @@ js = r"""
   // seit dem letzten Mal dazukam. Merker odin_abl_*: letzte Protokollzeile,
   // Zeitstempel der letzten Seite bzw. des letzten Mitschnitts.
   (function(){
-   if(typeof OdinNative==='undefined'||!OdinNative.ablageSchreiben)return;
+   if(typeof OdinNative==='undefined'||!N.ablageSchreiben)return;
    var ROHG=Storage.prototype.getItem;
    function lies(k){ try{ return ROHG.call(localStorage,k); }catch(e){ return null; } }
    function merk(k,v){ try{ rohSetzen(k,v); }catch(e){} }
@@ -337,7 +347,7 @@ js = r"""
     if(marke){ var i=z.lastIndexOf(marke); if(i>=0)ab=i+1; }
     var neu=z.slice(ab); if(!neu.length)return;
     var text=neu.join('\n'); if(text.length>400000)text=text.slice(-400000);
-    if(OdinNative.ablageSchreiben('protokoll',neu.length+' Zeilen',text)===true)merk('odin_abl_log',neu[neu.length-1]);
+    if(N.ablageSchreiben('protokoll',neu.length+' Zeilen',text)===true)merk('odin_abl_log',neu[neu.length-1]);
    }
    function liste(key,merker,art,titel,inhalt){
     var raw=lies(key); if(!raw)return;
@@ -345,11 +355,11 @@ js = r"""
     if(!Array.isArray(l))return;
     var bis=parseInt(lies(merker)||'0',10)||0, max=bis;
     l.forEach(function(c){ var at=c&&(c.at||c.zeit||c.ts); if(!at||at<=bis)return;
-     try{ if(OdinNative.ablageSchreiben(art,titel(c),inhalt(c))===true&&at>max)max=at; }catch(e){} });
+     try{ if(N.ablageSchreiben(art,titel(c),inhalt(c))===true&&at>max)max=at; }catch(e){} });
     if(max>bis)merk(merker,String(max));
    }
    function lauf(){
-    try{ if(!OdinNative.syncReady())return; }catch(e){ return; }
+    try{ if(!N.syncReady())return; }catch(e){ return; }
     try{ protokoll(); }catch(e){}
     try{ liste('tw_page_capture_store','odin_abl_seite','seite',
      function(c){ return [c.kind||'seite',c.url||'',c.layout||'',c.notiz||''].join(' | '); },
@@ -382,7 +392,7 @@ js = r"""
    } }catch(e){}
   };
   window.addEventListener('pagehide',flush);
-  window.__odinSyncFlush=flush;
+  H.syncFlush=flush;
  })();
  // --- Steuerzentrale: Befehle aus der App ------------------------------------
  // Die App schreibt einzelne Einstellungen in godbot_befehle. Hier werden sie
@@ -391,8 +401,8 @@ js = r"""
  // kommt beim naechsten Abholen wieder dran.
  (function(){
   var erledigt={};
-  window.__odinBefehle=function(liste){
-   var st=window.GodBotSteuerung;
+  H.befehle=function(liste){
+   var st=(H.steuerung);
    if(!st||typeof st.anwenden!=='function'||!liste||!liste.length)return;
    var n=0;
    for(var i=0;i<liste.length;i++){
@@ -402,13 +412,13 @@ js = r"""
     catch(e){ r={ok:false,text:'Fehler: '+(e&&e.message)}; }
     if(r&&r.spaeter)continue;
     erledigt[b.id]=1; n++;
-    try{ OdinNative.befehlErledigt(String(b.id), !!(r&&r.ok), String((r&&r.text)||'')); }catch(e){}
+    try{ N.befehlErledigt(String(b.id), !!(r&&r.ok), String((r&&r.text)||'')); }catch(e){}
    }
-   if(n&&window.__odinSyncFlush)setTimeout(window.__odinSyncFlush,300);
+   if(n&&H.syncFlush)setTimeout(H.syncFlush,300);
   };
   function holen(){
-   if(!window.GodBotSteuerung)return;
-   try{ if(OdinNative.syncReady())OdinNative.befehleAbrufen(); }catch(e){}
+   if(!(H.steuerung))return;
+   try{ if(N.syncReady())N.befehleAbrufen(); }catch(e){}
   }
   setTimeout(holen,2500);
   setInterval(holen,10000);
@@ -430,9 +440,9 @@ js = r"""
    // window.godbotCommands wird von GodBot gesetzt - damit laesst sich
    // 'Datei geladen' von 'Skript wirklich durchgelaufen' unterscheiden.
    var letztesUrteil='';
-   function melde(t){ if(t===letztesUrteil)return; letztesUrteil=t; OdinNative.status(t); }
+   function melde(t){ if(t===letztesUrteil)return; letztesUrteil=t; N.status(t); }
    function verdict(){try{
-    if(window.__odinErrMsg){OdinNative.status(window.__odinErrMsg);return;}
+    if(H.err){N.status(H.err);return;}
     // Ohne GodBot gibt es den Marker nicht - dann zaehlt nur, dass alle
     // Teile ohne Fehler durchgelaufen sind.
     // Zweite Pruefung nach 12 s meldet nur, wenn sich etwas geaendert hat.
@@ -449,20 +459,20 @@ js = r"""
    }catch(e){}}
    var spaet=false;
    setTimeout(verdict,3000); setTimeout(function(){spaet=true;verdict();},12000);
-   OdinNative.status('geladen ('+done+' Teile), pruefe...');
+   N.status('geladen ('+done+' Teile), pruefe...');
    return;
   }
   var sc=document.createElement('script');
   sc.src=urls[i]; sc.async=false;
   if(i===0&&gb)gbStart=Date.now();
   sc.onload=function(){if(i===0&&gb&&gbStart>0)gbMs=Date.now()-gbStart;done++;add(i+1)};
-  sc.onerror=function(){OdinNative.status('Fehler bei '+urls[i]);window.__odinGodBot=0};
+  sc.onerror=function(){N.status('Fehler bei '+urls[i]);H.__boot=0};
   (document.head||document.documentElement).appendChild(sc);
  }
- OdinNative.status('injiziere...');
+ N.status('injiziere...');
  add(0);
  return 'started';
-}catch(e){window.__odinGodBot=0;try{OdinNative.status('Bootstrap-Fehler: '+e.message)}catch(_){}return 'error'}})();
+}catch(e){H.__boot=0;try{N.status('Bootstrap-Fehler: '+e.message)}catch(_){}return 'error'}})();
 """.replace('__VERSION__', version)
 
 a = s.index(' private void loadEnabledScripts(WebView v){')
@@ -559,7 +569,7 @@ new = ''' private void loadEnabledScripts(WebView v){
     godbotTeile=teile;
     if(extra>0||uebergangen>0)setStatus("Zusatzskripte: "+extra+" aktiv, "+uebergangen+" nicht fuer diese Seite");
     final String js=''' + json.dumps(js) + '''.replace("__TEILE__",String.valueOf(teile.size()))
-      .replace("__GODBOT_AN__",gbAn?"1":"0");
+      .replace("__GODBOT_AN__",gbAn?"1":"0").replace("__BRIDGE__",bridgeName);
     runOnUiThread(()->v.evaluateJavascript(js,r->android.util.Log.i("ODIN_GODBOT","bootstrap="+r)));
    }catch(Exception e){
     setStatus("Skripte laden fehlgeschlagen: "+e.getMessage());

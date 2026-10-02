@@ -12,7 +12,7 @@ Schicht erhoehen; bei neuem GodBot wieder auf 1 setzen.
 """
 import io, re, sys, os
 
-PC_REV = 2
+PC_REV = 1
 ANON = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNqcmNvb21odXVhaGF5enR6ZGdjIiwi"
         "cm9sZSI6ImFub24iLCJpYXQiOjE3ODg3NzM4NzIsImV4cCI6MjEwNDM0OTg3Mn0.XvgEyjfhczIM0hKnVcHIOPJ4MSfndoshw0oOuWcmDoM")
 
@@ -46,15 +46,15 @@ a = loader.index(anfang); e = loader.index(ende) + len(" add(0);\n")
 schluss = r""" // --- Odin PC: GodBot direkt starten (statt der Teil-Dateien der App) ---
  // Ohne stand() behaelt GodBot sein schwebendes Fenster - im Browser gibt
  // es keine GodBot-Leiste der App (odinEingebettet() in GodBot).
- try{ delete window.Odin.stand; }catch(e){}
+ try{ if(H.odin)delete H.odin.stand; }catch(e){}
  odinPcHochladenErzwingen();
  var gbStart=Date.now(), gbMs=-1;
  try{ odinPcGodBotStarten(); gbMs=Date.now()-gbStart; }
- catch(e){ window.__odinErrMsg='JS-Fehler beim Start: '+(e&&e.message); }
+ catch(e){ H.err='JS-Fehler beim Start: '+(e&&e.message); }
  var letztesUrteil='', spaet=false;
- var melde=function(t){ if(t===letztesUrteil)return; letztesUrteil=t; OdinNative.status(t); };
+ var melde=function(t){ if(t===letztesUrteil)return; letztesUrteil=t; N.status(t); };
  var verdict=function(){try{
-  if(window.__odinErrMsg){melde(window.__odinErrMsg);return;}
+  if(H.err){melde(H.err);return;}
   if(typeof window.godbotCommands==='function'){melde('aktiv (GodBot '+gbMs+' ms)');return;}
   if(document.getElementById('tw-gate-input')){melde('wartet auf Freischaltcode');return;}
   if(!spaet)return;
@@ -66,6 +66,9 @@ loader = loader[:a] + schluss + loader[e:]
 for platz in ('__TEILE__', '__GODBOT_AN__', '/__odin_t_'):
     if platz in loader: sys.exit('Abbruch: %s steht noch im Loader' % platz)
 loader = loader.replace('__VERSION__', 'pc-' + version)
+# Odin PC stellt die Bruecke selbst als window.OdinNative bereit (JS-Nachbau).
+loader = loader.replace('__BRIDGE__', 'OdinNative')
+if '__BRIDGE__' in loader: sys.exit('Abbruch: __BRIDGE__ blieb im Loader')
 
 # --- GodBot ohne eigenen Kopf ---------------------------------------------
 gb_nl = gb.replace('\r\n', '\n')

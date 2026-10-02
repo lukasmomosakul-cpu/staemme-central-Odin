@@ -1641,7 +1641,7 @@ public class ParallelTestActivity extends Activity {
   +"setInterval(function(){var t=Date.now(),d=t-l-1000;l=t;if(d<0)d=0;n++;s+=d;if(d>m)m=d;},1000);"
   +"setInterval(function(){var mem=(window.performance&&performance.memory&&performance.memory.usedJSHeapSize)||0;"
   +"var gd=window.game_data;var an=!!(gd&&gd.player&&gd.player.id);"
-  +"OdinProbe.bericht(JSON.stringify({n:n,avg:n?Math.round(s/n):-1,max:m,vis:document.visibilityState,"
+  +"window['__PROBE__'].bericht(JSON.stringify({n:n,avg:n?Math.round(s/n):-1,max:m,vis:document.visibilityState,"
   +"mem:Math.round(mem/1048576),an:an,welt:(gd&&gd.world)||location.host,spieler:(gd&&gd.player&&gd.player.name)||''}));"
   +"n=0;s=0;m=0;},60000);}catch(e){}})();";
  private class Probe {
@@ -1693,9 +1693,10 @@ public class ParallelTestActivity extends Activity {
    CookieManager.getInstance().setAcceptCookie(true);
    CookieManager.getInstance().setAcceptThirdPartyCookies(v,true);
    final String kurz=(name.isEmpty()?welt:name)+"@"+welt;
-   v.addJavascriptInterface(new Probe(kurz),"OdinProbe");
+   final String pn="p"+Long.toHexString((long)(Math.random()*0x3fffffffffffffL));
+   v.addJavascriptInterface(new Probe(kurz),pn);
    v.setWebViewClient(new WebViewClient(){
-    @Override public void onPageFinished(WebView w,String u){ w.evaluateJavascript(PROBE,null); }
+    @Override public void onPageFinished(WebView w,String u){ w.evaluateJavascript(PROBE.replace("__PROBE__",pn),null); }
    });
    OdinLog.schreib(this,"Parallel "+kurz,"info","Kachel "+(i+1)+": Profil "+profil);
    v.loadUrl("https://"+welt+".die-staemme.de/game.php");
@@ -2551,6 +2552,9 @@ import android.annotation.SuppressLint; import android.app.Activity; import andr
 public class GameWebViewActivity extends Activity {
  private WebView webView;
  private TextView statusView;
+ // 1.95.8: Spielseite soll die App nicht an festen Brueckennamen erkennen.
+ // OdinNative heisst dort bei jedem Start zufaellig; Loader bekommt den Namen.
+ private final String bridgeName="b"+Long.toHexString((long)(Math.random()*0x3fffffffffffffL))+Integer.toHexString((int)(Math.random()*0xffff));
  // Teile fuer den Bootstrap in Ladereihenfolge: GodBot (aus der APK), dann
  // je eingeschaltetem Zusatzskript dessen @require und das Skript selbst.
  // Ausgeliefert unter /__odin_t_<i>.js.
@@ -2826,7 +2830,7 @@ public class GameWebViewActivity extends Activity {
   return true;
  }
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
- @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),"OdinNative");webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
+ @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
  @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);}});String welt=normWelt(nz(getIntent().getStringExtra("world")));
   String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
@@ -2984,7 +2988,7 @@ public class GameWebViewActivity extends Activity {
  }
  private void godbotJs(String ausdruck,ValueCallback<String> cb){
   final WebView w=webView; if(w==null)return;
-  final String js="(function(){try{if(!window.GodBotSteuerung)return null;return "+ausdruck+"}catch(e){return null}})()";
+  final String js="(function(){try{var S=window[Symbol.for('tw:k')],st=S&&S.steuerung;if(!st)return null;var GodBotSteuerung=st;return "+ausdruck+"}catch(e){return null}})()";
   runOnUiThread(()->{ try{ w.evaluateJavascript(js,cb); }catch(Exception ignored){} });
  }
  private void godbotStandEmpfangen(String json){
@@ -4253,7 +4257,7 @@ public class GameWebViewActivity extends Activity {
      String json=supaRequest("GET",q,null);
      if(json==null)return; json=json.trim();
      if(!json.startsWith("[")||json.equals("[]"))return;
-     final String js="(function(){try{if(window.__odinBefehle)window.__odinBefehle("+json+")}catch(e){}})()";
+     final String js="(function(){try{var S=window[Symbol.for('tw:k')];if(S&&S.befehle)S.befehle("+json+")}catch(e){}})()";
      runOnUiThread(()->{ try{ if(webView!=null)webView.evaluateJavascript(js,null); }catch(Exception ignored){} });
     }catch(Exception ignored){}
    }).start();

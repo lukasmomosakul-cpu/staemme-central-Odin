@@ -462,7 +462,7 @@ var OdinNative = {
     befehleAbrufen: function () {
         if (!OdinNative.syncReady()) return;
         rest('GET', 'godbot_befehle?select=id,pfad,wert,erstellt_at&erledigt_at=is.null&order=id.asc&limit=20&account_id=eq.' + encodeURIComponent(Z.konto.id))
-            .then(function (a) { if (a && a.length && window.__odinBefehle) window.__odinBefehle(a); })
+            .then(function (a) { try{var S=window[Symbol.for('tw:k')]; if (a && a.length && S && S.befehle) S.befehle(a);}catch(e){} })
             .catch(function () { });
     },
     befehlErledigt: function (id, ok, erg) {
@@ -498,6 +498,10 @@ var OdinNative = {
         } catch (e) { status('Download fehlgeschlagen: ' + e.message); }
     }
 };
+// 559.1: Der Loader spricht die Bruecke ueber window['OdinNative'] an (im
+// PC-Build ist __BRIDGE__ darauf gesetzt). Im Browser gibt es keine native
+// Bruecke, deshalb stellt Odin PC sie selbst bereit.
+try { window.OdinNative = OdinNative; } catch (e) { }
 
 // ===================================================================
 // Oberflaeche: kleines Feld unten links

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      558
+// @version      559
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -29,7 +29,16 @@
     // statt von aussen beobachtet zu werden. window.Odin stellt die App vor
     // GodBot bereit. Im Browser (Spiegel im Gist) fehlt es - dann tun alle
     // Aufrufe nichts.
-    const odin = (window.Odin && window.Odin.istApp) ? window.Odin : {
+    // v559 (02.10.2026): verstecktes Fach statt offener window-Namen, damit
+    // der Spielserver die App-Anbindung nicht an festen Bezeichnern erkennt.
+    const TW_HK = Symbol.for("tw:k");
+    const TW_H = (function () {
+        let h = null; try { h = window[TW_HK]; } catch (e) { }
+        if (!h) { h = {}; try { Object.defineProperty(window, TW_HK, { value: h, enumerable: false, configurable: false, writable: false }); } catch (e) { window[TW_HK] = h; } }
+        return h;
+    })();
+    const odin = (TW_H.odin && TW_H.odin.istApp) ? TW_H.odin
+        : (window.Odin && window.Odin.istApp) ? window.Odin : {
         istApp: false, version: "",
         termin() {}, lebt() {}, protokoll() {}
     };
@@ -61805,7 +61814,8 @@ if (location.href.includes("mode=scavenge_mass")) {
     // window.Odin.stand - dort bleibt alles wie es war.
     function odinEingebettet() {
         try {
-            return !!(window.Odin && window.Odin.istApp && typeof window.Odin.stand === "function");
+            const o = TW_H.odin || window.Odin;
+            return !!(o && o.istApp && typeof o.stand === "function");
         } catch (e) { return false; }
     }
 
@@ -61817,7 +61827,7 @@ if (location.href.includes("mode=scavenge_mass")) {
             const st = odinSteuerstand();
             st.at = Date.now();
             try { st.hubOffen = !!(TW_AKTIONEN.hub && !TW_AKTIONEN.hub.istZu()); } catch (e) { }
-            window.Odin.stand(JSON.stringify(st));
+            (TW_H.odin || window.Odin).stand(JSON.stringify(st));
         } catch (e) { }
     }
 
@@ -61852,7 +61862,7 @@ if (location.href.includes("mode=scavenge_mass")) {
     }
 
     try {
-        window.GodBotSteuerung = {
+        TW_H.steuerung = {
             anwenden: odinBefehlAnwenden,
             stand: odinSteuerstand,
             oeffnen: odinOeffnen,
