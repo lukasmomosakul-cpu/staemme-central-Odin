@@ -2789,7 +2789,15 @@ public class GameWebViewActivity extends Activity {
   rootLayout=root;
   dimRahmen=new FrameLayout(this);
   dimRahmen.addView(root,new FrameLayout.LayoutParams(-1,-1));
-  setContentView(dimRahmen);wieMobilerBrowser(webView);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
+  setContentView(dimRahmen);
+  // 1.95.15: Ladescreen in DIESER (neuen) Welt - nicht in der verlassenen.
+  // Die neue Ansicht kommt in den Vordergrund und laedt die Spielseite
+  // asynchron (~20 s). Solange zeigt eine Schicht "Lädt <Welt> …"; sie
+  // verschwindet, wenn die Seite fertig ist (onPageFinished -> ladeAus()).
+  // So haengt der Indikator am Laden selbst, nicht am Lebenszyklus einer
+  // anderen Ansicht - das war die Fehlerquelle der Versuche 1.95.9-1.95.14.
+  ladeSchichtZeigen(nz(getIntent().getStringExtra("world")));
+  wieMobilerBrowser(webView);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
  // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
  @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
@@ -2840,7 +2848,11 @@ public class GameWebViewActivity extends Activity {
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
  @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
- @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);}});String welt=normWelt(nz(getIntent().getStringExtra("world")));
+ @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
+   // 1.95.15: Spielseite steht - Ladescreen weg (nicht auf der Anmelde-/
+   // Zwischenseite, nur wenn wir in der Welt sind).
+   try{ if(u!=null&&u.contains("/game.php"))wechselIndikatorWeg(); }catch(Exception ig){}
+  }});String welt=normWelt(nz(getIntent().getStringExtra("world")));
   String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
   // Direkt in die Welt: /page/play/<welt> fuehrt nach der Anmeldung dorthin.
   String ziel = !welt.isEmpty() ? "https://www.die-staemme.de/page/play/"+welt
@@ -3148,46 +3160,43 @@ public class GameWebViewActivity extends Activity {
  // zeigt eine Schicht mit Spinner "Wechsle zu ...", damit klar ist, dass
  // etwas passiert. Sie blockiert bewusst Klicks, bis der Wechsel greift oder
  // scheitert.
+ // 1.95.15: Ladescreen der NEUEN Welt. Liegt ueber der eigenen WebView, bis
+ // deren Spielseite fertig ist. Haengt am Laden selbst, nicht an einer
+ // anderen Ansicht. Spinner animiert fluessig, weil das Laden asynchron ist.
  private android.widget.FrameLayout wechselSchicht;
- private void wechselIndikatorZeigen(String ziel){
-  // Immer auf dem UI-Thread und nie doppelt. Ohne das blieb bei manchen
-  // Wechsel-Pfaden gar nichts sichtbar.
-  runOnUiThread(()->wechselIndikatorZeigenIntern(ziel));
- }
- private void wechselIndikatorZeigenIntern(String ziel){
-  try{
-   if(dimRahmen==null)return;
-   wechselIndikatorWeg();
-   android.widget.FrameLayout o=new android.widget.FrameLayout(this);
-   o.setClickable(true); o.setFocusable(true);
-   o.setBackgroundColor(0xE60B1020);
-   android.widget.LinearLayout box=new android.widget.LinearLayout(this);
-   box.setOrientation(android.widget.LinearLayout.VERTICAL);
-   box.setGravity(android.view.Gravity.CENTER);
-   android.widget.ProgressBar sp=new android.widget.ProgressBar(this);
-   try{ sp.getIndeterminateDrawable().setColorFilter(0xFFB8893F,android.graphics.PorterDuff.Mode.SRC_IN); }catch(Exception ig){}
-   android.widget.TextView t=new android.widget.TextView(this);
-   t.setText("Wechsle zu "+ziel+" …"); t.setTextColor(0xFFEAD7B0); t.setTextSize(15f);
-   t.setGravity(android.view.Gravity.CENTER);
-   android.widget.LinearLayout.LayoutParams lp=new android.widget.LinearLayout.LayoutParams(-2,-2);
-   lp.topMargin=28; t.setLayoutParams(lp);
-   android.widget.TextView t2=new android.widget.TextView(this);
-   t2.setText("Die Welt wird geladen, einen Moment."); t2.setTextColor(0xFF9FB0C8); t2.setTextSize(12f);
-   t2.setGravity(android.view.Gravity.CENTER);
-   android.widget.LinearLayout.LayoutParams lp2=new android.widget.LinearLayout.LayoutParams(-2,-2);
-   lp2.topMargin=8; t2.setLayoutParams(lp2);
-   box.addView(sp); box.addView(t); box.addView(t2);
-   android.widget.FrameLayout.LayoutParams blp=new android.widget.FrameLayout.LayoutParams(-2,-2,android.view.Gravity.CENTER);
-   o.addView(box,blp);
-   dimRahmen.addView(o,new android.widget.FrameLayout.LayoutParams(-1,-1));
-   o.bringToFront(); o.setElevation(1000f); dimRahmen.invalidate();
-   wechselSchicht=o;
-   // Sicherheitsnetz: nach 12 s von selbst weg, falls kein onPause/onResume
-   // kommt (z. B. Wechsel scheitert lautlos) - dann nicht dauerhaft sperren.
-   // Die Zielwelt laedt im selben Prozess und braucht erfahrungsgemaess bis
-   // ~24 s, bis sie nach vorn kommt (onStop raeumt dann auf). Netz darueber.
-   o.postDelayed(this::wechselIndikatorWeg,30000L);
-  }catch(Exception ig){}
+ private android.widget.TextView ladeTextView;
+ private void ladeSchichtZeigen(String welt){
+  runOnUiThread(()->{
+   try{
+    if(dimRahmen==null||wechselSchicht!=null)return;
+    welt=normWelt(welt==null?"":welt);
+    android.widget.FrameLayout o=new android.widget.FrameLayout(this);
+    o.setClickable(true); o.setFocusable(true);
+    o.setBackgroundColor(0xF20B1020);
+    android.widget.LinearLayout box=new android.widget.LinearLayout(this);
+    box.setOrientation(android.widget.LinearLayout.VERTICAL);
+    box.setGravity(android.view.Gravity.CENTER);
+    android.widget.ProgressBar sp=new android.widget.ProgressBar(this);
+    try{ sp.getIndeterminateDrawable().setColorFilter(0xFFB8893F,android.graphics.PorterDuff.Mode.SRC_IN); }catch(Exception ig){}
+    android.widget.TextView t=new android.widget.TextView(this);
+    t.setText(welt.isEmpty()?"Welt wird geladen …":("Lädt "+welt+" …")); t.setTextColor(0xFFEAD7B0); t.setTextSize(16f);
+    t.setGravity(android.view.Gravity.CENTER);
+    android.widget.LinearLayout.LayoutParams lp=new android.widget.LinearLayout.LayoutParams(-2,-2);
+    lp.topMargin=30; t.setLayoutParams(lp); ladeTextView=t;
+    android.widget.TextView t2=new android.widget.TextView(this);
+    t2.setText("Einen Moment, die Spielseite wird vorbereitet."); t2.setTextColor(0xFF9FB0C8); t2.setTextSize(12f);
+    t2.setGravity(android.view.Gravity.CENTER);
+    android.widget.LinearLayout.LayoutParams lp2=new android.widget.LinearLayout.LayoutParams(-2,-2);
+    lp2.topMargin=8; t2.setLayoutParams(lp2);
+    box.addView(sp); box.addView(t); box.addView(t2);
+    o.addView(box,new android.widget.FrameLayout.LayoutParams(-2,-2,android.view.Gravity.CENTER));
+    dimRahmen.addView(o,new android.widget.FrameLayout.LayoutParams(-1,-1));
+    o.bringToFront(); o.setElevation(1000f);
+    wechselSchicht=o;
+    // Netz: falls onPageFinished ausbleibt, nach 40 s von selbst weg.
+    o.postDelayed(this::wechselIndikatorWeg,40000L);
+   }catch(Exception ig){}
+  });
  }
  private void wechselIndikatorWeg(){
   runOnUiThread(()->{
@@ -3212,40 +3221,16 @@ public class GameWebViewActivity extends Activity {
  }
  // Ganz verdeckt = der Wechsel hat gegriffen. onPause reicht dafuer nicht:
  // auch ein gescheiterter Wechsel pausiert die Ansicht kurz.
- @Override protected void onStop(){ super.onStop(); wechselAt=0L; wechselIndikatorWeg(); }
+ @Override protected void onStop(){ super.onStop(); wechselAt=0L; }
  private void kontoWechseln(String id,String nm,String user,String welt,String alle){
   if(id==null||id.isEmpty()||id.equals(gameAccountId))return;
   final String ziel=nm+(welt.isEmpty()?"":" · "+welt);
-  // 1.95.11 - DER INDIKATOR MUSS ZUERST GEZEICHNET WERDEN.
-  // Das Starten der Zielwelt blockiert den UI-Thread fuer Sekunden (neue
-  // WebView, Profil, Laden). Lief der schwere Teil direkt hier, kam der
-  // Choreographer nie dazu, den Spinner zu zeichnen: die nativen Leisten
-  // waren tot, die WebView (eigener Renderthread) blieb beruehrbar, und der
-  // Indikator erschien erst, wenn alles vorbei war. Deshalb: Indikator jetzt
-  // sichtbar machen, den Rest per dimRahmen.post() EINEN Frame spaeter.
+  // 1.95.15: Den Ladescreen zeigt jetzt die NEUE Welt selbst (ladeSchichtZeigen
+  // in deren onCreate), nicht mehr diese verlassene Ansicht. Frueher haftete
+  // die Schicht am Lebenszyklus dieser Ansicht und war nie zu sehen. Hier nur
+  // noch kurz Rueckmeldung, dann den Wechsel anstossen.
   setStatus("Wechsel zu "+ziel);
-  wechselIndikatorZeigen(ziel);
-  // 1.95.14: Den schweren Teil (Zielwelt starten, blockiert den UI-Thread ~24 s)
-  // erst ausfuehren, NACHDEM der Indikator wirklich einmal gezeichnet wurde.
-  // postDelayed allein reichte nicht sicher - der erste Frame konnte hinter
-  // den Start rutschen und der Spinner blieb unsichtbar. OnPreDrawListener
-  // feuert garantiert beim ersten Zeichnen.
-  if(wechselSchicht!=null){
-   final android.view.View o=wechselSchicht;
-   o.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener(){
-    public boolean onPreDraw(){
-     try{ o.getViewTreeObserver().removeOnPreDrawListener(this); }catch(Exception ig){}
-     // Noch einen Tick warten, damit dieser Frame fertig gezeichnet wird,
-     // bevor der UI-Thread blockiert.
-     o.postDelayed(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel),16L);
-     return true;
-    }
-   });
-  } else if(dimRahmen!=null){
-   dimRahmen.postDelayed(()->kontoWechselnJetzt(id,nm,user,welt,alle,ziel),50L);
-  } else {
-   kontoWechselnJetzt(id,nm,user,welt,alle,ziel);
-  }
+  kontoWechselnJetzt(id,nm,user,welt,alle,ziel);
  }
  private void kontoWechselnJetzt(String id,String nm,String user,String welt,String alle,String ziel){
   // 1.90.0 - NUR DIE ANGETIPPTE WELT IST ZU SEHEN (Nutzerwunsch 25.09.).
@@ -4044,21 +4029,11 @@ public class GameWebViewActivity extends Activity {
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
   OdinBubble.hide(); restoreFromFloat();
   try{ fussleisteFuellen(); }catch(Exception ig){}
-  // 1.95.14: onResume laeuft beim Wechsel SOFORT wieder (die Zielwelt laedt
-  // ~24 s im selben Prozess und kommt erst dann nach vorn). Frueher wurde die
-  // "hat nicht gegriffen"-Fehlmeldung dann faelschlich gezeigt UND der gerade
-  // aufgebaute Indikator sofort wieder entfernt - deshalb war nie einer zu
-  // sehen. Jetzt: Steht der Indikator noch (Wechsel laeuft), bleibt er, und
-  // die Fehlmeldung unterbleibt. onStop (Zielwelt verdeckt diese Ansicht) und
-  // das 30-s-Netz raeumen ihn auf.
-  if(wechselSchicht!=null){
-   // Wechsel laeuft noch - Ansicht nur kurz resumed, nicht als Fehlschlag werten.
-  } else if(wechselAt>0L&&System.currentTimeMillis()-wechselAt<5000L){
-   setStatus("Achtung: Wechsel zu "+wechselZiel+" hat nicht gegriffen");
-   wechselAt=0L;
-  } else {
-   wechselAt=0L;
-  }
+  // 1.95.15: Der Ladescreen gehoert jetzt zur eigenen Welt und wird ueber
+  // onPageFinished entfernt - hier nicht mehr anfassen. Die alte
+  // "hat nicht gegriffen"-Fehlmeldung entfaellt: Sie war beim langsamen
+  // Wechsel (~24 s) ohnehin falsch, weil die Zielwelt doch noch hochkam.
+  wechselAt=0L;
  }
  @Override protected void onPause(){
   super.onPause();
