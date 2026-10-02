@@ -80,16 +80,16 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
              sich gegenseitig den Anmeldestatus. -->
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
-        <!-- 1.95.18: Zurueck zu getrennten Dokument-Tasks je Welt - der
-             bewaehrte, funktionierende Wechsel (moveTaskToFront per Task-ID).
-             Die gemeinsame Task aus 1.95.17 machte aufgabeNachVorn wirkungslos
-             (gleiche Task-ID fuer alle Welten) und fror beim Fussleisten-Wechsel
-             ein. KEIN excludeFromRecents (das liess die Zielwelt erst beim
-             Minimieren hochkommen). Folge: je aktive Welt eine Karte im
-             Umschalter - dafuer laedt der Wechsel zuverlaessig im Vordergrund.
-             Die Kartenflut wird durch "max 2 aktive Welten" (onCreate) begrenzt. -->
+        <!-- 1.95.19 - VARIANTE A: GENAU EINE Spielansicht-Instanz.
+             singleTask ohne eigene Affinitaet -> eine Instanz, eine Karte im
+             Umschalter. Der Kontowechsel startet KEINE neue Activity und keine
+             neue Task mehr (das war die Quelle aller Freezes und des
+             "laedt erst beim Minimieren"): er laedt die Zielwelt in DERSELBEN
+             Instanz (neues Intent + recreate()). Sofortiger Vordergrund-Wechsel,
+             kein Task-Jonglieren. Preis: die verlassene Welt laeuft nicht im
+             Hintergrund weiter (Variante B spaeter). -->
         <activity android:name=".GameWebViewActivity" android:exported="false"
-            android:documentLaunchMode="intoExisting" android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <activity android:name=".ParallelTestActivity" android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
@@ -3276,28 +3276,27 @@ public class GameWebViewActivity extends Activity {
   // getaner Arbeit selbst.
   final boolean schwebt=false;
   schwebendeEinholen(id);
-  // 1.91.0: Laeuft die Zielwelt schon, ihre Aufgabe direkt nach vorn holen
-  // statt ein Intent zu schicken, das Android womoeglich als neue Ansicht
-  // anlegt.
-  GameWebViewActivity da;
-  synchronized(OFFEN){ da=OFFEN.get(id); }
-  if(da!=null&&!da.isFinishing()&&!da.isDestroyed()){
-   try{ if(OdinFloat.active(id))da.holeAusFenster(false); }catch(Exception ig){}
-   if(aufgabeNachVorn(this,da.getTaskId())){ wechselZiel=ziel; wechselAt=System.currentTimeMillis(); return; }
-  }
+  // 1.95.19 - VARIANTE A: Wechsel IN DERSELBEN Instanz, keine neue Activity.
+  // Das neue Intent wird gesetzt und die Activity per recreate() frisch
+  // aufgebaut: onCreate liest das Intent, baut WebView mit dem Profil des
+  // neuen Kontos und laedt die Zielwelt. Dieselbe Task, dieselbe Karte,
+  // sofort im Vordergrund. Kein moveTaskToFront, kein NEW_DOCUMENT - damit
+  // faellt die ganze Freeze-/Minimieren-Problematik weg.
   try{
+   // Laeuft hier gerade ein Vorgang? Dann nicht hart neu aufbauen, sondern
+   // wie bei einem Seitenwechsel GodBot fragen (Seitenwechsel-Sperre greift
+   // ueber onJsBeforeUnload beim loadUrl unten ohnehin).
    Intent i=new Intent(this,GameWebViewActivity.class);
    i.setData(android.net.Uri.parse("odin://account/"+id));
    i.putExtra("accountId",id); i.putExtra("username",user.isEmpty()?nm:user);
    i.putExtra("world",welt); i.putExtra("accountsJson",alle==null?"[]":alle);
    i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
    i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
-   // 1.95.18: Zielwelt ist hier nicht offen (oben geprueft) - eigene
-   // Dokument-Task. Das ist der funktionierende Wechsel: die neue Task kommt
-   // im Vordergrund hoch, der Ladescreen der neuen Welt ueberbrueckt.
-   i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+   setIntent(i);
    wechselZiel=ziel; wechselAt=System.currentTimeMillis();
-   startActivity(i);
+   // Alte WebView dieser Welt sauber beenden, bevor onCreate eine neue baut.
+   try{ if(webView!=null){ webView.stopLoading(); } }catch(Exception ig){}
+   recreate();
   }catch(Exception e){
    // Wechsel gescheitert: die Welt nicht im Symbol haengen lassen.
    setStatus("Wechsel fehlgeschlagen: "+e.getMessage());
