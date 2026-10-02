@@ -80,8 +80,16 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
              sich gegenseitig den Anmeldestatus. -->
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
+        <!-- 1.95.13: Jede Welt braucht fuer den Parallelbetrieb eine eigene,
+             dauerhaft lebende Ansicht (documentLaunchMode). excludeFromRecents
+             haelt diese Ansichten aber AUS dem App-Umschalter heraus - sonst
+             erschien je Welt eine eigene Karte (bei 3 Welten "Odin 4x offen").
+             Der Wechsel laeuft ueber die Fussleiste (moveTaskToFront per
+             Task-ID), das funktioniert auch ohne Recents-Karte. Im Umschalter
+             bleibt nur das Dashboard. -->
         <activity android:name=".GameWebViewActivity" android:exported="false"
             android:documentLaunchMode="intoExisting" android:launchMode="singleTop"
+            android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <activity android:name=".ParallelTestActivity" android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
