@@ -2307,7 +2307,8 @@ public final class OdinFloat {
  private static final int LAY_W=420, LAY_H=740;
  public static final int GROSS=150, KLEIN=72;   // Kantenlaenge in Pixeln
  private static class Fenster {
-  View rahmen; WebView web; WindowManager wm; int win;
+  // 1.97.0: inhalt = eine WebView ODER der ganze Welten-Stapel der Ansicht.
+  View rahmen; View inhalt; WindowManager wm; int win;
  }
  private static final Map<String,Fenster> offen=new LinkedHashMap<>();
 
@@ -2328,6 +2329,21 @@ public final class OdinFloat {
  }
  public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore,int win){
   return show(ctx,accountId,web,onRestore,win,null);
+ }
+ // 1.97.0 - EIN FENSTER FUER ALLE WELTEN. Statt einer WebView wandert der
+ // ganze Stapel (FrameLayout mit allen WebViews) in EIN Overlay. Das Fenster
+ // ist sichtbar, also werden alle WebViews darin gezeichnet - oben wie
+ // verdeckt - und laufen ungedrosselt, solange der Bildschirm an ist.
+ public static synchronized boolean showRahmen(Context ctx,String key,View stapel,Runnable onRestore,Runnable onClose,String zeichen){
+  return zeige(ctx,key,stapel,onRestore,GROSS,onClose,zeichen);
+ }
+ public static synchronized View hideRahmen(String key){
+  Fenster f=offen.get(schluessel(key));
+  if(f==null)return null;
+  View v=f.inhalt;
+  if(v!=null){ v.setScaleX(1f); v.setScaleY(1f); v.setPivotX(0f); v.setPivotY(0f); }
+  entfernen(schluessel(key));
+  return v;
  }
 
  // 1.92.0 - MUELLEIMER BEIM ZIEHEN. Sobald ein Symbol bewegt wird, erscheint
@@ -2374,6 +2390,9 @@ public final class OdinFloat {
  // Fuer Aktionen im Hintergrund reicht ein sehr kleines Fenster: entscheidend
  // ist, dass die WebView GERENDERT wird, nicht wie gross sie ist.
  public static synchronized boolean show(Context ctx,String accountId,WebView web,Runnable onRestore,int win,final Runnable onClose){
+  return zeige(ctx,accountId,web,onRestore,win,onClose,"⚔");
+ }
+ private static synchronized boolean zeige(Context ctx,String accountId,View web,Runnable onRestore,int win,final Runnable onClose,String zeichen){
   final Context app=ctx.getApplicationContext();
   final String key=schluessel(accountId);
   if(offen.containsKey(key)||web==null||!allowed(app))return false;
@@ -2393,7 +2412,7 @@ public final class OdinFloat {
    web.setScaleX(scale); web.setScaleY(scale);
    box.addView(web);
 
-   TextView symbol=new TextView(app); symbol.setText("⚔");
+   TextView symbol=new TextView(app); symbol.setText(zeichen==null?"⚔":zeichen);
    symbol.setTextColor(0xFFFFFFFF); symbol.setTextSize(win>=GROSS?24f:11f);
    symbol.setGravity(Gravity.CENTER);
    android.graphics.drawable.GradientDrawable g=new android.graphics.drawable.GradientDrawable();
@@ -2428,7 +2447,7 @@ public final class OdinFloat {
    }
 
    final WindowManager wm=(WindowManager)app.getSystemService(Context.WINDOW_SERVICE);
-   final Fenster f=new Fenster(); f.web=web; f.wm=wm; f.win=win;
+   final Fenster f=new Fenster(); f.inhalt=web; f.wm=wm; f.win=win;
 
    symbol.setOnTouchListener(new View.OnTouchListener(){
     float dx,dy,sx,sy; boolean bewegt;
@@ -2450,8 +2469,8 @@ public final class OdinFloat {
         else{
          // Ohne Rueckruf: Symbol entfernen und die WebView beenden, damit
          // kein unsichtbarer GodBot weiterlaeuft.
-         WebView w=hide(accountId);
-         try{ if(w!=null){ w.stopLoading(); w.loadUrl("about:blank"); w.destroy(); } }catch(Exception ig){}
+         View w=hideRahmen(accountId);
+         try{ if(w instanceof WebView){ ((WebView)w).stopLoading(); ((WebView)w).loadUrl("about:blank"); ((WebView)w).destroy(); } }catch(Exception ig){}
         }
         return true;
        }
@@ -2474,15 +2493,17 @@ public final class OdinFloat {
  public static synchronized WebView hide(String accountId){
   Fenster f=offen.get(schluessel(accountId));
   if(f==null)return null;
-  WebView w=f.web;
-  if(w!=null){ w.setScaleX(1f); w.setScaleY(1f); w.setPivotX(0f); w.setPivotY(0f); }
+  // Nur WebView-Fenster; das Sammelfenster holt hideRahmen() zurueck.
+  if(!(f.inhalt instanceof WebView))return null;
+  WebView w=(WebView)f.inhalt;
+  w.setScaleX(1f); w.setScaleY(1f); w.setPivotX(0f); w.setPivotY(0f);
   entfernen(schluessel(accountId));
   return w;
  }
  private static void entfernen(String key){
   Fenster f=offen.remove(key); if(f==null)return;
-  try{ if(f.web!=null&&f.web.getParent() instanceof ViewGroup)
-        ((ViewGroup)f.web.getParent()).removeView(f.web); }catch(Exception ignored){}
+  try{ if(f.inhalt!=null&&f.inhalt.getParent() instanceof ViewGroup)
+        ((ViewGroup)f.inhalt.getParent()).removeView(f.inhalt); }catch(Exception ignored){}
   try{ if(f.rahmen!=null&&f.wm!=null)f.wm.removeView(f.rahmen); }catch(Exception ignored){}
  }
 }
@@ -2560,7 +2581,7 @@ public final class OdinBubble {
 EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
-import android.annotation.SuppressLint; import android.app.Activity; import android.content.Context; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
+import android.annotation.SuppressLint; import android.app.Activity; import android.content.Context; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import android.view.View; import java.io.*; import java.net.*; import org.json.JSONObject;
 // 1.96.0 - VARIANTE B: MEHRERE WELTEN IN EINER SPIELANSICHT, ALLE LAUFEN.
 //
 // Bis 1.95.19 gab es genau eine WebView; der Kontowechsel baute die Ansicht
@@ -2584,6 +2605,10 @@ import android.annotation.SuppressLint; import android.app.Activity; import andr
 // ganze Fenster unsichtbar - dann drosselt Chromium ALLE Welten, wie bisher
 // die eine. Termine weckt der Dienst dann wie gehabt ueber das kleine
 // Fenster des leisen Weckens, jetzt eben je Welt.
+//
+// 1.97.0: "Minimieren" legt den GANZEN Stapel in EIN schwebendes Fenster
+// (ein Symbol). Auch dort werden alle WebViews gezeichnet und laufen
+// ungedrosselt weiter - solange der Bildschirm an ist.
 //
 // Ob die Annahme auf dem Geraet traegt, wird nicht geglaubt, sondern
 // gemessen: GodBot ruft alle 5 s Odin.lebt(). Jede Welt zaehlt das und
@@ -2663,6 +2688,11 @@ public class GameWebViewActivity extends Activity {
    }
    GameWebViewActivity a=hostFuer(kt);
    if(a!=null&&a.imVordergrund)return true;
+   // 1.97.0: im Sammelfenster - gezeichnet, solange der Bildschirm an ist.
+   if(a!=null&&OdinFloat.active(GRUPPE)){
+    android.os.PowerManager pm=(android.os.PowerManager)c.getSystemService(Context.POWER_SERVICE);
+    return pm!=null&&pm.isInteractive();
+   }
   }catch(Exception ignored){}
   return false;
  }
@@ -2918,6 +2948,72 @@ public class GameWebViewActivity extends Activity {
   }
   try{ fussleisteFuellen(); }catch(Exception ig){}
  }
+ // --- 1.97.0: EIN SCHWEBEFENSTER FUER ALLE WELTEN --------------------------
+ // Minimieren nimmt den ganzen Welten-Stapel (weltRahmen mit allen WebViews)
+ // aus der Ansicht und legt ihn in EIN Overlay mit einem Symbol. Das Overlay
+ // ist ein eigenes sichtbares Fenster: Chromium zeichnet alle WebViews darin
+ // und drosselt keine - die obere nicht und die verdeckten auch nicht
+ // (gleiches Prinzip wie der Stapel in der offenen Ansicht).
+ // Grenze: bei AUSGESCHALTETEM Bildschirm zeichnet Android auch Overlays
+ // nicht - dann greift wie bisher das Wecken durch den Dienst.
+ static final String GRUPPE="__odin_alle_welten__";
+ private boolean gruppeSchweben(){
+  if(weltRahmen==null||alleWelten().isEmpty())return false;
+  if(OdinFloat.active(GRUPPE))return true;
+  if(!OdinFloat.allowed(this)){
+   setStatus("Bitte 'Über anderen Apps anzeigen' erlauben");
+   try{ OdinBubble.requestPermission(this); }catch(Exception ig){}
+   return false;
+  }
+  // Einzelfenster (leises Wecken) zuerst zurueck in den Stapel - sonst
+  // haette eine Welt zwei Fenster und die Gruppe waere unvollstaendig.
+  for(Welt w:alleWelten()){ try{ if(OdinFloat.active(w.gameAccountId))w.holeAusFenster(false); }catch(Exception ig){} }
+  int n=alleWelten().size();
+  if(OdinFloat.showRahmen(this,GRUPPE,weltRahmen,()->gruppeHolen(true),this::gruppeSchliessen,n>1?"⚔"+n:"⚔")){
+   setStatus("schwebt mit "+n+" Welt(en) - alle laufen weiter, Symbol antippen");
+   return true;
+  }
+  // Gescheitert: Stapel sicher zurueck in die Ansicht.
+  gruppeHolen(false);
+  return false;
+ }
+ // Stapel aus dem Sammelfenster zurueck an seinen Platz (zwischen Kopf und
+ // Fussleiste). nachVorne: zusaetzlich die Ansicht in den Vordergrund holen.
+ private void gruppeHolen(boolean nachVorne){
+  runOnUiThread(()->{
+   try{
+    View r=OdinFloat.hideRahmen(GRUPPE);
+    if(weltRahmen!=null&&rootLayout!=null&&weltRahmen.getParent()!=rootLayout){
+     if(weltRahmen.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)weltRahmen.getParent()).removeView(weltRahmen);
+     weltRahmen.setScaleX(1f); weltRahmen.setScaleY(1f); weltRahmen.setPivotX(0f); weltRahmen.setPivotY(0f);
+     rootLayout.addView(weltRahmen,1,new LinearLayout.LayoutParams(-1,0,1f));
+     weltRahmen.requestLayout();
+     if(r!=null)setStatus("Schwebefenster geschlossen - Welten zurück in der Ansicht");
+    }
+    if(nachVorne&&!aufgabeNachVorn(this,getTaskId())){
+     Intent i=new Intent(this,GameWebViewActivity.class);
+     i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+     startActivity(i);
+    }
+   }catch(Exception e){ android.util.Log.e("ODIN_FLOAT","gruppeHolen",e); }
+  });
+ }
+ // Symbol in den Muelleimer: alle Welten schliessen, Ansicht beenden.
+ private void gruppeSchliessen(){
+  runOnUiThread(()->{
+   gruppeHolen(false);
+   setStatus("Alle Welten geschlossen (Symbol in den Mülleimer gezogen)");
+   try{ finishAndRemoveTask(); }catch(Exception e){ finish(); }
+  });
+ }
+ // Wird gerade alles gezeichnet? Ansicht vorn, oder Sammelfenster bei
+ // eingeschaltetem Bildschirm.
+ private boolean allesGezeichnet(){
+  if(imVordergrund)return true;
+  if(!OdinFloat.active(GRUPPE))return false;
+  try{ android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE); return pm!=null&&pm.isInteractive(); }
+  catch(Exception e){ return false; }
+ }
  // --- Takt- und Speichermessung (1.96.0) ----------------------------------
  // Je Welt: wie oft hat GodBot in den letzten 10 Minuten Odin.lebt()
  // gerufen? runJobScheduler laeuft alle 5 s -> ungedrosselt ~120. Dazu der
@@ -2928,17 +3024,20 @@ public class GameWebViewActivity extends Activity {
  private final Runnable taktMessung=new Runnable(){ @Override public void run(){
   try{
    long jetzt=System.currentTimeMillis();
-   boolean vornGanz=intervallImmerVorn&&imVordergrund;
-   String lage=!imVordergrund?"Ansicht im Hintergrund":(dimDecke!=null?"gedimmt":"Ansicht vorn");
-   if(imVordergrund&&!intervallImmerVorn)lage+=" (zwischendurch weg)";
+   boolean gruppe=OdinFloat.active(GRUPPE);
+   boolean jetztGezeichnet=allesGezeichnet();
+   boolean vornGanz=intervallImmerVorn&&jetztGezeichnet;
+   String lage=imVordergrund?(dimDecke!=null?"gedimmt":"Ansicht vorn")
+              :(gruppe?(jetztGezeichnet?"Sammelfenster, Bildschirm an":"Sammelfenster, Bildschirm aus"):"Ansicht im Hintergrund");
+   if(jetztGezeichnet&&!intervallImmerVorn)lage+=" (zwischendurch weg)";
    for(Welt w:alleWelten()){
     int n=w.lebtZaehler; w.lebtZaehler=0;
     long min=Math.max(1,(jetzt-w.taktSeit)/60000L); w.taktSeit=jetzt;
     int erwartet=(int)(min*12);
-    String wo=OdinFloat.active(w.gameAccountId)?"schwebt":(w==aktiv?"angezeigt":"verdeckt");
-    boolean befund=vornGanz&&"verdeckt".equals(wo)&&w.geladen&&!w.leaseGesperrt&&n<erwartet*3/4;
+    String wo=OdinFloat.active(w.gameAccountId)?"schwebt":(gruppe?(w==aktiv?"oben im Sammelfenster":"verdeckt im Sammelfenster"):(w==aktiv?"angezeigt":"verdeckt"));
+    boolean befund=vornGanz&&!"angezeigt".equals(wo)&&!"schwebt".equals(wo)&&w.geladen&&!w.leaseGesperrt&&n<erwartet*3/4;
     w.melde(befund?"WICHTIG":"info","Takt "+w.kurz()+": "+n+"/"+erwartet+" Lebenszeichen in "+min+" Min - "+wo+", "+lage
-      +(befund?" - VERDECKTE WELT GEDROSSELT":""));
+      +(befund?" - WELT GEDROSSELT":""));
    }
    android.app.ActivityManager am=(android.app.ActivityManager)getSystemService(Context.ACTIVITY_SERVICE);
    android.app.ActivityManager.MemoryInfo mi=new android.app.ActivityManager.MemoryInfo(); am.getMemoryInfo(mi);
@@ -2952,7 +3051,7 @@ public class GameWebViewActivity extends Activity {
     if(alt!=null)weltSchliessen(alt,"Gerätespeicher knapp");
    }
   }catch(Exception e){ android.util.Log.w("ODIN","taktMessung",e); }
-  intervallImmerVorn=imVordergrund;
+  intervallImmerVorn=allesGezeichnet();
   taktHandler.postDelayed(this,600_000L);
  }};
  private android.view.View buildHeader(String activeName){
@@ -3016,21 +3115,14 @@ public class GameWebViewActivity extends Activity {
     setStatus("Bitte 'Über anderen Apps anzeigen' erlauben");
     OdinBubble.requestPermission(this); return;
    }
-   // Die WebView wandert in ein sichtbares Overlay. Nur so bleiben die
-   // JS-Zeitgeber ungedrosselt - ein blosses moveTaskToBack() macht sie
-   // unsichtbar und Chromium taktet sie auf etwa einmal pro Minute herunter.
-   final Welt aw=aktiv; if(aw==null||aw.webView==null)return;
-   // 1.96.0: nur die ANGEZEIGTE Welt schwebt; die anderen bleiben in der
-   // Ansicht (die dann im Hintergrund liegt und gedrosselt ist).
-   if(OdinFloat.show(this,aw.gameAccountId,aw.webView,aw::restoreFromFloat,aw::ausSymbolSchliessen)){
-    setStatus("schwebt ("+OdinFloat.anzahl()+" aktiv) – Symbol antippen");
-    moveTaskToBack(true);
-   }else{
-    OdinBubble.setReturnTarget(GameWebViewActivity.class,aw.gameAccountId);
-    OdinBubble.show(this);
-    setStatus("minimiert (gedrosselt)");
-    moveTaskToBack(true);
-   }
+   // 1.97.0: ALLE Welten wandern gemeinsam in EIN schwebendes Fenster und
+   // laufen dort ungedrosselt weiter (siehe gruppeSchweben).
+   if(gruppeSchweben()){ moveTaskToBack(true); return; }
+   final Welt aw=aktiv;
+   OdinBubble.setReturnTarget(GameWebViewActivity.class,aw==null?"":aw.gameAccountId);
+   OdinBubble.show(this);
+   setStatus("minimiert (gedrosselt) - Schwebefenster nicht möglich");
+   moveTaskToBack(true);
   });
   bar.addView(min,kopfKnopfLp());
   // Kopf = Titelleiste + GodBot-Leiste als EIN Kind der Wurzel.
@@ -3379,6 +3471,7 @@ public class GameWebViewActivity extends Activity {
  // Ansichten eine Sitzung: Anmeldung mit Konto B oeffnete das Spiel von A.
  private void dimmenAn(){
   if(dimRahmen==null)return;
+  gruppeHolen(false);
   // Immer zuerst die Fensterflaggen: auch beim Auffrischen durch den Dienst
   // muessen sie wieder stehen, sonst faellt die Ansicht hinter den
   // Sperrbildschirm und wird nicht mehr gerendert.
@@ -3682,6 +3775,10 @@ public class GameWebViewActivity extends Activity {
    // 1.96.0: geweckt wird die Welt des Intents - intentAnnehmen hat sie
    // eben angezeigt (aktiv). Die anderen Welten laufen verdeckt mit.
    final Welt ww=aktiv;
+   // 1.97.0: lag alles im Sammelfenster (Bildschirm aus -> nicht gezeichnet),
+   // Stapel zurueckholen und danach wieder hineinlegen.
+   final boolean warGruppe=OdinFloat.active(GRUPPE);
+   if(warGruppe){ gruppeHolen(false); setStatus("Wecker: Welten aus dem Sammelfenster zurückgeholt"); }
    warGeschwebt=ww!=null&&OdinFloat.active(ww.gameAccountId);
    if(warGeschwebt){ ww.holeAusFenster(false); weltZeigen(ww); setStatus("Wecker: aus dem Symbol zurückgeholt"); }
    if(weckFensterEnde!=null)w.getDecorView().removeCallbacks(weckFensterEnde);
@@ -3718,7 +3815,9 @@ public class GameWebViewActivity extends Activity {
      setStatus("Weckfenster beendet – zurück in den Dimm-Modus");
      return;
     }
-    if(warGeschwebt&&ww!=null&&!ww.geschlossen&&ww.webView!=null&&OdinFloat.show(this,ww.gameAccountId,ww.webView,ww::restoreFromFloat,ww::ausSymbolSchliessen)){
+    if(warGruppe&&gruppeSchweben()){
+     setStatus("Weckfenster beendet – alle Welten wieder im Sammelfenster");
+    }else if(warGeschwebt&&ww!=null&&!ww.geschlossen&&ww.webView!=null&&OdinFloat.show(this,ww.gameAccountId,ww.webView,ww::restoreFromFloat,ww::ausSymbolSchliessen)){
      // Zurueck ins schwebende Fenster statt in den Hintergrund: dort bleibt
      // die WebView sichtbar und damit ungedrosselt.
      setStatus("Weckfenster beendet – schwebt wieder");
@@ -3848,6 +3947,7 @@ public class GameWebViewActivity extends Activity {
   sitzungNachladen();
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
   OdinBubble.hide();
+  gruppeHolen(false);
   // Ansicht vorn: alle Welten zurueck in den Stapel - dort laufen sie ohnehin
   // ungedrosselt; die angezeigte wieder nach oben.
   for(Welt w:alleWelten()){ try{ if(OdinFloat.active(w.gameAccountId))w.holeAusFenster(false); }catch(Exception ig){} }
@@ -3859,7 +3959,10 @@ public class GameWebViewActivity extends Activity {
   // Alle Welten der Ansicht waren bis eben gezeichnet - fuer den Dienst
   // zaehlt das als "vorn" (Nachwecken, Vorwarnung).
   if(imVordergrund)for(Welt w:alleWelten())OdinService.vorn(w.gameAccountId);
-  imVordergrund=false; intervallImmerVorn=false;
+  imVordergrund=false;
+  // Ins Sammelfenster minimiert, bleibt alles gezeichnet - nur sonst zaehlt
+  // das laufende Intervall nicht mehr als "durchgehend vorn".
+  taktHandler.post(()->{ if(!allesGezeichnet())intervallImmerVorn=false; });
   if(dimDecke!=null){
    try{
     android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
@@ -3889,7 +3992,7 @@ public class GameWebViewActivity extends Activity {
  }
  @Override protected void onDestroy(){
   taktHandler.removeCallbacksAndMessages(null);
-  if(HOST==this)HOST=null;
+  if(HOST==this){ HOST=null; try{ OdinFloat.hideRahmen(GRUPPE); }catch(Exception ig){} }
   // Alle Welten dieser Ansicht beenden, Geraete-Sperren sofort freigeben
   // (sonst wartet ein anderes Geraet die 3 Minuten Frist ab). Auch WebViews
   // in Schwebesymbolen - sonst lebten sie verwaist weiter (25.09.).
@@ -4313,6 +4416,9 @@ public class GameWebViewActivity extends Activity {
    // fuer den Benutzer ein Mini-Fenster, das ueber der laufenden App
    // aufpoppt, obwohl er direkt davor sitzt.
    if(imVordergrund){ setStatus("Termin - Ansicht ist offen, nichts nötig"); return; }
+   // 1.97.0: im Sammelfenster wird die Welt schon gezeichnet. Ein eigenes
+   // kleines Fenster wuerde sie aus dem Stapel reissen.
+   if(OdinFloat.active(GRUPPE)){ setStatus("Termin - läuft im Sammelfenster, nichts nötig"); return; }
    if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
    if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
    // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
