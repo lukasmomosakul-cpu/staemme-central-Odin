@@ -2594,6 +2594,15 @@ public final class OdinEgress {
   public static boolean aktivFuer(String accountId){
     return accountId!=null&&accountId.equals(aktiverAccount)&&!aktiveProxy.isEmpty();
   }
+  public static boolean passtZu(String accountId,String host){
+    if(!aktivFuer(accountId)||host==null)return false;
+    try{
+      java.net.URI u=new java.net.URI(aktiveProxy);
+      String hp=u.getHost();
+      int port=u.getPort();
+      return hp!=null && host.equalsIgnoreCase(port>0?hp+":"+port:hp);
+    }catch(Exception e){return false;}
+  }
   public static void anwenden(String accountId,String proxyUrl,Runnable fertig,Runnable fehler){
     final String a=accountId==null?"":accountId;
     final String p=proxyUrl==null?"":proxyUrl.trim();
@@ -4258,7 +4267,27 @@ public class GameWebViewActivity extends Activity {
   return true;
  }
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
- @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
+ @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}
+ @Override public void onReceivedHttpAuthRequest(WebView v,HttpAuthHandler h,String host,String realm){
+   if(!OdinEgress.passtZu(gameAccountId,host)){h.cancel();return;}
+   android.content.SharedPreferences p=getSharedPreferences("odin_egress",MODE_PRIVATE);
+   String key=gameAccountId.replaceAll("[^A-Za-z0-9_-]","_");
+   String user=p.getString("u_"+key,""), pass=p.getString("p_"+key,"");
+   if(!user.isEmpty()&&!pass.isEmpty()){h.proceed(user,pass);return;}
+   final EditText eu=new EditText(GameWebViewActivity.this); eu.setSingleLine(true); eu.setHint("Proxy-Benutzername");
+   final EditText ep=new EditText(GameWebViewActivity.this); ep.setSingleLine(true); ep.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD); ep.setHint("Proxy-Passwort");
+   LinearLayout box=new LinearLayout(GameWebViewActivity.this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(32,8,32,0); box.addView(eu); box.addView(ep);
+   new android.app.AlertDialog.Builder(GameWebViewActivity.this).setTitle("Proxy-Zugang · "+host)
+     .setMessage("Die Zugangsdaten werden nur auf diesem Gerät gespeichert.")
+     .setView(box)
+     .setPositiveButton("Speichern",(d,w)->{
+       String un=eu.getText().toString(), pw=ep.getText().toString();
+       if(un.isEmpty()||pw.isEmpty()){h.cancel();return;}
+       p.edit().putString("u_"+key,un).putString("p_"+key,pw).apply();
+       h.proceed(un,pw);
+     }).setNegativeButton("Abbrechen",(d,w)->h.cancel()).setOnCancelListener(d->h.cancel()).show();
+ }
+ });webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
  @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
    // 1.95.15: Spielseite steht - Ladescreen weg (nicht auf der Anmelde-/
