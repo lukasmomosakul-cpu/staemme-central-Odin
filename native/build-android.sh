@@ -4392,6 +4392,8 @@ public class GameWebViewActivity extends Activity {
   long authFensterStart=0L; int authVersuche=0;
   // 1.98.0: zuletzt angewendeter Proxy-Text dieses Kontos ("" = keiner).
   volatile String proxyRoh=null;
+  // 2.0.1: zuletzt gesehene Ausgangs-IP des Proxys (Wechsel melden).
+  volatile String letzteProxyIp=null;
   // Fail closed: Welt wurde wegen Proxy-Fehler nicht geladen/angehalten.
   volatile boolean proxySperre=false;
   Welt(String id,String name,String welt){
@@ -4594,6 +4596,8 @@ public class GameWebViewActivity extends Activity {
     if(geraet==null||geraet.isEmpty())geraet=OdinService.oeffentlicheIp();
     if(geraet!=null&&geraet.equals(ip))return "Proxy liefert die Geräte-IP "+ip+" - kein Schutz";
     setStatus("Proxy-Test ok: Ausgang "+ip+(geraet==null?"":" ≠ Gerät "+geraet));
+    if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
+    letzteProxyIp=ip;
    }
    String f=OdinProxy.konto(gameAccountId,weltName,z);
    if(f!=null)return f;
@@ -4608,8 +4612,17 @@ public class GameWebViewActivity extends Activity {
   // schreiben (Dashboard zeigt sie dann je Konto).
   void proxyIpMelden(OdinProxy.Zugang z){
    String ip=OdinProxy.ausgangsIp(z);
-   setStatus("Proxy-Ausgang: "+ip);
-   if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return;
+   // 2.0.1: Antwort ist keine IP (z. B. Fehlerseite des Anbieters, 03.10.
+   // 17:06 kam XML) -> deutlich melden statt Muell ins Protokoll schreiben.
+   if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}")){
+    String kurz=ip==null?"keine Antwort":ip.replaceAll("\\s+"," ");
+    if(kurz.length()>60)kurz=kurz.substring(0,60)+"…";
+    melde("WICHTIG","Proxy-Ausgang nicht lesbar ("+kurz+") - Proxy gestört?");
+    return;
+   }
+   if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
+   else setStatus("Proxy-Ausgang: "+ip);
+   letzteProxyIp=ip;
    try{
     supaRequest("POST","rpc/lease_ip_melden_konto",new org.json.JSONObject()
       .put("p_geraet",OdinService.geraetId(GameWebViewActivity.this)).put("p_konto",gameAccountId).put("p_ip",ip).toString());
