@@ -85,8 +85,14 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
              eigene WebView, gestapelt und alle sichtbar - die verdeckten
              laufen ungedrosselt weiter. Kontowechsel = WebView nach oben,
              kein recreate(), kein Neuladen. Siehe Kopf von GameWebViewActivity. -->
+        <!-- 2.0.4: EIGENE AUFGABE (taskAffinity). Vorher lag die Spielansicht in
+             der Aufgabe der MainActivity. MainActivity ist singleTask: jeder
+             Start ("⌂ Übersicht", Zurück) räumte alles darüber ab - die
+             Spielansicht wurde zerstört, alle Welten zu (03.10. 18:39/18:40:
+             "schwebt mit 2 Welten", Sekunden später neue Instanz). Mit eigener
+             Aufgabe bleibt sie im Hintergrund am Leben. -->
         <activity android:name=".GameWebViewActivity" android:exported="false"
-            android:launchMode="singleTask"
+            android:launchMode="singleTask" android:taskAffinity="de.teamzentrale.odin.spiel"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
         <activity android:name=".ParallelTestActivity" android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
@@ -4433,8 +4439,10 @@ public class GameWebViewActivity extends Activity {
   boolean schwebt=false;
   try{ if(!alleWelten().isEmpty()&&OdinFloat.allowed(this))schwebt=gruppeSchweben(); }catch(Exception ig){}
   if(!schwebt&&!alleWelten().isEmpty())setStatus("Übersicht - Welten bleiben offen (ohne Schwebefenster gedrosselt)");
+  // 2.0.4: Spielansicht hat eine eigene Aufgabe (Manifest taskAffinity) -
+  // das Dashboard kommt in SEINER Aufgabe nach vorn, ohne diese zu beenden.
   Intent i=new Intent(this,MainActivity.class);
-  i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+  i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
   startActivity(i);
  }
  // =========================================================================
