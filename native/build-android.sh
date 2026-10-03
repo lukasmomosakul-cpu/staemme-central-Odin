@@ -3323,6 +3323,43 @@ public class GameWebViewActivity extends Activity {
   try{ android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE); return pm!=null&&pm.isInteractive(); }
   catch(Exception e){ return false; }
  }
+ // --- 2.0.3: AUSGANGS-IP JE KONTO, dauerhaft gemerkt -----------------------
+ // Gespeichert in odin_ip: Konto -> "ip|zeit|proxy(1/0)|anbieter". Das ist
+ // die IP, mit der die Anfragen dieses Kontos bei den Die-Staemme-Servern
+ // ankommen: bei Proxy-Konten die Ausgangs-IP des Proxys (gemessen ueber
+ // denselben Proxy mit denselben Zugangsdaten), sonst die Geraete-IP.
+ void ipMerken(String konto,String ip,boolean proxy,String anbieter){
+  if(konto==null||konto.isEmpty()||ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return;
+  try{ getSharedPreferences("odin_ip",MODE_PRIVATE).edit()
+        .putString(konto,ip+"|"+System.currentTimeMillis()+"|"+(proxy?"1":"0")+"|"+(anbieter==null?"":anbieter)).apply(); }catch(Exception ig){}
+  runOnUiThread(()->{ try{ fussleisteFuellen(); }catch(Exception ig){} });
+ }
+ String[] ipGemerkt(String konto){
+  if(konto==null||konto.isEmpty())return null;
+  try{
+   String v=getSharedPreferences("odin_ip",MODE_PRIVATE).getString(konto,null);
+   if(v==null)return null;
+   String[] t=v.split("\\|",-1);
+   return t.length>=3?new String[]{t[0],t[1],t[2],t.length>3?t[3]:""}:null;
+  }catch(Exception e){ return null; }
+ }
+ // Langdruck auf eine Konto-Karte: alles zur IP dieses Kontos.
+ private void ipDialog(String konto,String name,String welt){
+  String[] g=ipGemerkt(konto);
+  StringBuilder b=new StringBuilder();
+  boolean proxy=OdinProxy.hatProxy(konto)||(g!=null&&"1".equals(g[2]));
+  b.append("Weg: ").append(proxy?"über eigenen Proxy"+(g!=null&&!g[3].isEmpty()?" ("+g[3]+")":""):"direkt (Geräte-Anschluss)").append("\n\n");
+  if(g!=null){
+   long ts=0; try{ ts=Long.parseLong(g[1]); }catch(Exception ig){}
+   b.append("IP bei den Die-Stämme-Servern:\n").append(g[0]).append("\n");
+   if(ts>0)b.append("gemessen: ").append(new java.text.SimpleDateFormat("dd.MM. HH:mm",java.util.Locale.GERMANY).format(new java.util.Date(ts)));
+  }else b.append("Noch keine IP gemessen - Welt einmal öffnen.");
+  String gi=OdinService.letzteIp;
+  if(gi!=null&&!gi.isEmpty())b.append("\n\nGeräte-IP: ").append(gi);
+  if(proxy&&g!=null&&gi!=null&&gi.equals(g[0]))b.append("\n\nACHTUNG: Proxy-IP = Geräte-IP!");
+  new android.app.AlertDialog.Builder(this).setTitle(name+(welt.isEmpty()?"":" · "+welt)).setMessage(b.toString())
+    .setPositiveButton("OK",null).show();
+ }
  // --- Takt- und Speichermessung (1.96.0) ----------------------------------
  // Je Welt: wie oft hat GodBot in den letzten 10 Minuten Odin.lebt()
  // gerufen? runJobScheduler laeuft alle 5 s -> ungedrosselt ~120. Dazu der
@@ -3419,11 +3456,7 @@ public class GameWebViewActivity extends Activity {
   Button back=kopfKnopf("⌂ Übersicht");
   // Frueher finish(): damit war die Spielansicht weg und das Spiel startete
   // beim Zurueckkehren von vorn. Jetzt bleibt sie im Stapel bestehen.
-  back.setOnClickListener(x->{
-   Intent i=new Intent(this,MainActivity.class);
-   i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-   startActivity(i);
-  });
+  back.setOnClickListener(x->zurUebersicht());
   bar.addView(back,kopfKnopfLp());
   // Testalarm-Knopf (⏱) entfernt - der Wecker ist erprobt.
   Button dim=kopfKnopf("🌙");
@@ -3648,6 +3681,15 @@ public class GameWebViewActivity extends Activity {
      n.setEllipsize(android.text.TextUtils.TruncateAt.END); n.setMaxWidth(dp(130));
      n.setTextColor(active?0xFFB9D6F5:UI_SCHWACH); karte.addView(n);
     }
+    // 2.0.3: zuletzt gemessene Ausgangs-IP dieses Kontos (gesichert, auch
+    // wenn die Welt gerade zu ist). Orange = ueber Proxy, grau = direkt.
+    final String[] ipInfo=ipGemerkt(kid);
+    if(ipInfo!=null){
+     TextView ipv=new TextView(this); ipv.setText("🌐 "+ipInfo[0]); ipv.setTextSize(9.5f); ipv.setSingleLine(true);
+     ipv.setTextColor("1".equals(ipInfo[2])?0xFFE0A030:UI_SCHWACH); karte.addView(ipv);
+    }
+    final String fName=nm, fWelt2=welt;
+    karte.setOnLongClickListener(x->{ ipDialog(kid,fName,fWelt2); return true; });
     if(!active){
      final String fNm=nm, fWelt=welt, fUser=o.optString("username",""), fAlle=accountsJson;
      karte.setOnClickListener(x->{
@@ -4378,7 +4420,22 @@ public class GameWebViewActivity extends Activity {
     .show();
    return;
   }
-  if(webView.canGoBack())webView.goBack();else super.onBackPressed();
+  // 2.0.3: Am Anfang der Seitengeschichte NICHT mehr schliessen (das beendete
+  // alle Welten), sondern wie "⌂ Übersicht": Welten minimieren, Dashboard.
+  if(webView.canGoBack())webView.goBack();else zurUebersicht();
+ }
+ // 2.0.3 - ZURUECK ZUR UEBERSICHT OHNE SCHLIESSEN. Alle Welten wandern ins
+ // Sammelfenster (laufen ungedrosselt weiter, solange der Bildschirm an ist),
+ // dann kommt das Dashboard nach vorn. Ohne Overlay-Erlaubnis bleiben die
+ // Welten in der Ansicht im Hintergrund (gedrosselt, aber offen) - keine
+ // Erlaubnis-Abfrage hier, die wuerde den Rueckweg blockieren.
+ private void zurUebersicht(){
+  boolean schwebt=false;
+  try{ if(!alleWelten().isEmpty()&&OdinFloat.allowed(this))schwebt=gruppeSchweben(); }catch(Exception ig){}
+  if(!schwebt&&!alleWelten().isEmpty())setStatus("Übersicht - Welten bleiben offen (ohne Schwebefenster gedrosselt)");
+  Intent i=new Intent(this,MainActivity.class);
+  i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+  startActivity(i);
  }
  // =========================================================================
  // WELT (1.96.0): alles, was je Spielkonto existiert - WebView, Bruecke,
@@ -4623,14 +4680,23 @@ public class GameWebViewActivity extends Activity {
     setStatus("Proxy-Test ok: Ausgang "+ip+(geraet==null?"":" ≠ Gerät "+geraet));
     if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
     letzteProxyIp=ip;
+    ipMerken(gameAccountId,ip,true,z.host);
    }
    String f=OdinProxy.konto(gameAccountId,weltName,z);
    if(f!=null)return f;
    proxyRoh=roh;
-   if(z==null){ setStatus("kein Proxy - direkte Verbindung"); return null; }
+   if(z==null){
+    setStatus("kein Proxy - direkte Verbindung");
+    new Thread(()->{
+     String ip=OdinService.letzteIp;
+     if(ip==null||ip.isEmpty())ip=OdinService.oeffentlicheIp();
+     ipMerken(gameAccountId,ip,false,"");
+    }).start();
+    return null;
+   }
    setStatus("Proxy aktiv für dieses Konto über "+z.host+":"+z.port+" (Spiel, Anmeldung und Grafiken)");
    final OdinProxy.Zugang zz=z;
-   new Thread(()->proxyIpMelden(zz)).start();
+   new Thread(()->{ try{ Thread.sleep(20_000); }catch(InterruptedException ig){} proxyIpMelden(zz); }).start();
    return null;
   }
   // Ausgangs-IP des Proxys pruefen und an die Geraete-Sperre dieses Kontos
@@ -4648,6 +4714,7 @@ public class GameWebViewActivity extends Activity {
    if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
    else setStatus("Proxy-Ausgang: "+ip);
    letzteProxyIp=ip;
+   ipMerken(gameAccountId,ip,true,z.host);
    try{
     supaRequest("POST","rpc/lease_ip_melden_konto",new org.json.JSONObject()
       .put("p_geraet",OdinService.geraetId(GameWebViewActivity.this)).put("p_konto",gameAccountId).put("p_ip",ip).toString());
