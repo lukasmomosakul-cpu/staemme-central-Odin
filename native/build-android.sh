@@ -2711,6 +2711,10 @@ final class OdinProxy {
       .addProxyRule("http://"+LOKAL+":"+server.getLocalPort())
       .addBypassRule("*.die-staemme.de").addBypassRule("die-staemme.de")
       .addBypassRule("*.innogamescdn.com").addBypassRule("*.innogames.com")
+      // 2.0.8: Botschutz-Captcha (hCaptcha, GodBot erkennt dessen iframe) -
+      // sonst loeste ein Proxy-Konto das Captcha ueber die Geraete-IP,
+      // waehrend das Spiel die Proxy-IP sieht.
+      .addBypassRule("*.hcaptcha.com").addBypassRule("hcaptcha.com").addBypassRule("*.recaptcha.net")
       .setReverseBypassEnabled(true).build();
     androidx.webkit.ProxyController.getInstance().setProxyOverride(cfg,r->r.run(),fertig::countDown);
     if(!fertig.await(5,java.util.concurrent.TimeUnit.SECONDS))return "ProxyController antwortet nicht";
@@ -2798,7 +2802,7 @@ final class OdinProxy {
    c.setSoTimeout(0);
    final long t0=System.currentTimeMillis();
    if(p==null){
-    ziel=new Socket(); ziel.connect(new InetSocketAddress(host,port),15_000);
+    ziel=new Socket(); ziel.setKeepAlive(true); ziel.connect(new InetSocketAddress(host,port),15_000);
     if(tunnel){
      antwort200(out);
      messen(konto,System.currentTimeMillis()-t0,false);
@@ -2812,7 +2816,7 @@ final class OdinProxy {
      zo.write(b.toString().getBytes("ISO-8859-1")); zo.flush();
     }
    }else{
-    ziel=new Socket(); ziel.connect(new InetSocketAddress(p.host,p.port),15_000);
+    ziel=new Socket(); ziel.setKeepAlive(true); ziel.connect(new InetSocketAddress(p.host,p.port),15_000);
     OutputStream zo=ziel.getOutputStream();
     String pauth=p.user.isEmpty()?"":"Proxy-Authorization: Basic "+android.util.Base64.encodeToString((p.user+":"+p.pass).getBytes("UTF-8"),android.util.Base64.NO_WRAP)+"\r\n";
     if(tunnel){
@@ -4715,6 +4719,8 @@ public class GameWebViewActivity extends Activity {
     String geraet=OdinService.letzteIp;
     if(geraet==null||geraet.isEmpty())geraet=OdinService.oeffentlicheIp();
     if(geraet!=null&&geraet.equals(ip))return "Proxy liefert die Geräte-IP "+ip+" - kein Schutz";
+    String konflikt=ipKonflikt(ip);
+    if(konflikt!=null)return konflikt;
     setStatus("Proxy-Test ok: Ausgang "+ip+(geraet==null?"":" ≠ Gerät "+geraet));
     if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
     letzteProxyIp=ip;
@@ -4739,6 +4745,44 @@ public class GameWebViewActivity extends Activity {
   }
   // Ausgangs-IP des Proxys pruefen und an die Geraete-Sperre dieses Kontos
   // schreiben (Dashboard zeigt sie dann je Konto).
+  // 2.0.8 - ZWEI KONTEN, EINE IP = SPERRE. Die Ausgangs-IP dieses Kontos
+  // darf keinem ANDEREN Konto gehoeren (anderer Name; derselbe Spieler auf
+  // einer anderen Welt ist erlaubt). Quellen: Geraete-Sperren aller Geraete
+  // im Team (account_leases.ip, App und Odin PC) und die auf diesem Geraet
+  // gemerkten IPs der anderen Konten (odin_ip, letzte 24 h).
+  // Rueckgabe: Grund oder null.
+  String ipKonflikt(String ip){
+   if(ip==null||ip.isEmpty())return null;
+   String ich=kopfName.toLowerCase(java.util.Locale.ROOT);
+   java.util.Map<String,String> namen=new java.util.HashMap<>();
+   try{
+    org.json.JSONArray k=new org.json.JSONArray(supaRequest("GET","game_accounts?select=id,name",null));
+    for(int i=0;i<k.length();i++){ org.json.JSONObject o=k.getJSONObject(i); namen.put(o.optString("id"),o.optString("name","").toLowerCase(java.util.Locale.ROOT)); }
+    if(namen.containsKey(gameAccountId))ich=namen.get(gameAccountId);
+    org.json.JSONArray l=new org.json.JSONArray(supaRequest("GET","account_leases?select=account_id,ip&ip=not.is.null",null));
+    for(int i=0;i<l.length();i++){
+     org.json.JSONObject o=l.getJSONObject(i);
+     String kid=o.optString("account_id");
+     if(kid.equals(gameAccountId)||!ip.equals(o.optString("ip")))continue;
+     String n=namen.containsKey(kid)?namen.get(kid):"";
+     if(!n.equals(ich))return "Ausgangs-IP "+ip+" nutzt bereits Konto „"+n+"“ - zwei Konten über dieselbe IP sind gesperrt";
+    }
+   }catch(Exception e){ android.util.Log.w("ODIN_PROXY","ipKonflikt",e); }
+   try{
+    java.util.Map<String,?> alle=getSharedPreferences("odin_ip",MODE_PRIVATE).getAll();
+    long jetzt=System.currentTimeMillis();
+    for(java.util.Map.Entry<String,?> e:alle.entrySet()){
+     if(e.getKey().equals(gameAccountId))continue;
+     String[] t=String.valueOf(e.getValue()).split("\\|",-1);
+     if(t.length<2||!ip.equals(t[0]))continue;
+     long ts=0; try{ ts=Long.parseLong(t[1]); }catch(Exception ig){}
+     if(jetzt-ts>86_400_000L)continue;
+     String n=namen.containsKey(e.getKey())?namen.get(e.getKey()):"";
+     if(!n.isEmpty()&&!n.equals(ich))return "Ausgangs-IP "+ip+" hatte zuletzt Konto „"+n+"“ auf diesem Gerät - zwei Konten über dieselbe IP sind gesperrt";
+    }
+   }catch(Exception ignored){}
+   return null;
+  }
   void proxyIpMelden(OdinProxy.Zugang z){
    String ip=OdinProxy.ausgangsIp(z);
    // 2.0.1: Antwort ist keine IP (z. B. Fehlerseite des Anbieters, 03.10.
@@ -4747,6 +4791,14 @@ public class GameWebViewActivity extends Activity {
     String kurz=ip==null?"keine Antwort":ip.replaceAll("\\s+"," ");
     if(kurz.length()>60)kurz=kurz.substring(0,60)+"…";
     melde("WICHTIG","Proxy-Ausgang nicht lesbar ("+kurz+") - Proxy gestört?");
+    return;
+   }
+   String konflikt=ipKonflikt(ip);
+   if(konflikt!=null){
+    proxySperre=true;
+    melde("FEHLER","PROXY-SPERRE im Betrieb: "+konflikt+" - Konto wird angehalten");
+    runOnUiThread(()->{ try{ if(webView!=null&&!geschlossen){ webView.stopLoading(); sperrseiteZeigen(konflikt);
+      taktHandler.postDelayed(()->{ if(!geschlossen&&proxySperre)laden(); },60_000L); } }catch(Exception ig){} });
     return;
    }
    if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);

@@ -408,10 +408,24 @@ function proxyHost(roh) {
     return x.split(':')[0] || '';
 }
 // Liefert { ok, ip, grund, neueIp }.
-async function proxyPruefen() {
+// 559.4: Ergebnis 60 s je Tab merken (sessionStorage). GodBot laedt oft
+// neue Seiten; ohne Merken kostete jeder Seitenaufruf ipify + 2 Supabase-
+// Anfragen und verzoegerte den Start. Die Bestaetigung behaelt ihre echte
+// Zeit - der Netz-Waechter (150 s) rechnet mit der Messzeit, nicht mit dem
+// Seitenaufruf.
+async function proxyPruefen(frisch) {
+    if (!frisch) {
+        var c = jparse(sget('odinpc_proxy_ok'), null);
+        if (c && Z.konto && c.konto === Z.konto.id && Date.now() - c.at < 60000) {
+            Z.proxyRoh = c.roh; Z.proxyIp = c.ip || ''; Z.proxyOkAt = c.at; Z.proxyGesperrt = false;
+            return { ok: true, ip: c.ip, gemerkt: true, ohne: !c.roh };
+        }
+    }
     var p = await proxyPruefenKern();
-    if (p.ok) { Z.proxyOkAt = Date.now(); Z.proxyGesperrt = false; }
-    else { Z.proxyGesperrt = true; Z.proxyOkAt = 0; }
+    if (p.ok) {
+        Z.proxyOkAt = Date.now(); Z.proxyGesperrt = false;
+        sset('odinpc_proxy_ok', JSON.stringify({ konto: Z.konto.id, at: Z.proxyOkAt, ip: p.ip || '', roh: Z.proxyRoh }));
+    } else { Z.proxyGesperrt = true; Z.proxyOkAt = 0; sdel('odinpc_proxy_ok'); }
     return p;
 }
 async function proxyPruefenKern() {
@@ -474,7 +488,7 @@ function proxyWacheStarten() {
     if (proxyWacheTimer || !Z.proxyRoh) return;
     proxyWacheTimer = setInterval(async function () {
         if (Z.godbot === 'aus') return;
-        var p = await proxyPruefen();
+        var p = await proxyPruefen(true);
         if (p.ok) { if (Date.now() - ipZuletzt > 600000) ipMelden(); return; }
         status('PROXY-SPERRE im Betrieb: ' + p.grund + ' - GodBot wird sofort beendet', 'FEHLER');
         try { if (window.__odinSyncFlush) window.__odinSyncFlush(); } catch (e) { }
@@ -846,7 +860,7 @@ async function starten(uebernahme) {
         // Proxy-Sperre zuerst - auch vor dem Holen der Geraete-Sperre.
         var pz = await proxyPruefen();
         if (!pz.ok) { proxySperren(pz); return; }
-        if (pz.ip) {
+        if (pz.ip && !pz.gemerkt) {
             Z.proxyIp = pz.ip;
             status('Proxy-Prüfung ok: Ausgang ' + pz.ip + (pz.sicher ? ' = Proxy-Adresse' : pz.erstmals ? ' (erstmals - als feste IP gemerkt)' : ' (= gemerkte feste IP)'), pz.erstmals ? 'WICHTIG' : 'info');
         }
