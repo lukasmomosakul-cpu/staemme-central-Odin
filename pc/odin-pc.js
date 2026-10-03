@@ -40,6 +40,45 @@ var ANON = '__ANONKEY__';
 var F = window.fetch.bind(window);
 var LS = window.localStorage;
 var RAW_SET = Storage.prototype.setItem, RAW_GET = Storage.prototype.getItem, RAW_DEL = Storage.prototype.removeItem;
+// 559.3 - NETZ-WAECHTER fuer Proxy-Konten. Jede fetch-/XHR-Anfrage an die
+// Spielserver wird nur durchgelassen, wenn die letzte Proxy-Pruefung
+// erfolgreich UND hoechstens 150 s alt ist. Sonst wird sie verworfen -
+// GodBot kann zwischen zwei Pruefungen keine Anfrage ueber einen falschen
+// Weg schicken. (Eigene Messungen laufen ueber das gesicherte F.)
+function spielAnfrage(url) {
+    try { var u = new URL(String(url), location.href); return /(^|\.)die-staemme\.de$/.test(u.hostname); } catch (e) { return true; }
+}
+var waechterZuletzt = 0;
+function waechterMelden() {
+    if (Date.now() - waechterZuletzt < 30000) return;
+    waechterZuletzt = Date.now();
+    try { status('Proxy-Wächter: Spielanfragen angehalten (Proxy nicht frisch bestätigt)', 'WICHTIG'); } catch (e) { }
+}
+function netzGesperrt() {
+    if (typeof Z === 'undefined' || !Z || !Z.proxyRoh) return false;
+    return !!Z.proxyGesperrt || !Z.proxyOkAt || Date.now() - Z.proxyOkAt > 150000;
+}
+(function () {
+    var orgFetch = window.fetch;
+    window.fetch = function (inp, opt) {
+        var url = (inp && inp.url) ? inp.url : inp;
+        if (spielAnfrage(url) && netzGesperrt()) {
+            waechterMelden();
+            return Promise.reject(new TypeError('Odin PC Proxy-Sperre'));
+        }
+        return orgFetch.apply(this, arguments);
+    };
+    var xo = XMLHttpRequest.prototype.open, xs = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (m, u) { this.__odinPcUrl = u; return xo.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function () {
+        if (spielAnfrage(this.__odinPcUrl) && netzGesperrt()) {
+            waechterMelden();
+            try { this.abort(); } catch (e) { }
+            return;
+        }
+        return xs.apply(this, arguments);
+    };
+})();
 function lget(k) { try { return RAW_GET.call(LS, k); } catch (e) { return null; } }
 function lset(k, v) { try { RAW_SET.call(LS, k, String(v)); } catch (e) { } }
 function ldel(k) { try { RAW_DEL.call(LS, k); } catch (e) { } }
@@ -370,6 +409,12 @@ function proxyHost(roh) {
 }
 // Liefert { ok, ip, grund, neueIp }.
 async function proxyPruefen() {
+    var p = await proxyPruefenKern();
+    if (p.ok) { Z.proxyOkAt = Date.now(); Z.proxyGesperrt = false; }
+    else { Z.proxyGesperrt = true; Z.proxyOkAt = 0; }
+    return p;
+}
+async function proxyPruefenKern() {
     Z.proxyRoh = '';
     try {
         var a = await rest('GET', 'game_accounts?select=proxy&id=eq.' + encodeURIComponent(Z.konto.id));
@@ -388,11 +433,19 @@ async function proxyPruefen() {
     // Direkte IPs: Sperren von Konten OHNE Proxy (Geraete-Anschluesse).
     try {
         var leases = await rest('GET', 'account_leases?select=account_id,ip&ip=not.is.null');
-        var kont = await rest('GET', 'game_accounts?select=id,proxy&team_id=eq.' + encodeURIComponent(Z.team));
-        var mitProxy = {};
-        (kont || []).forEach(function (k) { if (k.proxy && String(k.proxy).trim()) mitProxy[k.id] = 1; });
-        var direkt = (leases || []).filter(function (l) { return !mitProxy[l.account_id]; }).map(function (l) { return l.ip; });
-        if (direkt.indexOf(ip) >= 0) return { ok: false, ip: ip, grund: 'Ausgangs-IP ' + ip + ' ist die IP eines Kontos OHNE Proxy - der Proxy dieses Browser-Profils ist aus oder wird umgangen' };
+        var kont = await rest('GET', 'game_accounts?select=id,name,proxy&team_id=eq.' + encodeURIComponent(Z.team));
+        var info = {};
+        (kont || []).forEach(function (k) { info[k.id] = { proxy: !!(k.proxy && String(k.proxy).trim()), name: String(k.name || '').toLowerCase() }; });
+        var ich = String(Z.konto.name || '').toLowerCase();
+        for (var li = 0; li < (leases || []).length; li++) {
+            var l = leases[li];
+            if (l.ip !== ip || l.account_id === Z.konto.id) continue;
+            var o = info[l.account_id] || { proxy: false, name: '' };
+            if (!o.proxy) return { ok: false, ip: ip, grund: 'Ausgangs-IP ' + ip + ' ist die IP eines Kontos OHNE Proxy - der Proxy dieses Browser-Profils ist aus oder wird umgangen' };
+            // 559.3: auch ein ANDERES Konto mit Proxy darf nicht dieselbe IP
+            // haben (gleicher Spieler auf anderer Welt ist erlaubt).
+            if (o.name !== ich) return { ok: false, ip: ip, grund: 'Ausgangs-IP ' + ip + ' nutzt bereits ein anderes Konto - zwei Konten über dieselbe IP sind gesperrt' };
+        }
     } catch (e) { }
     var host = proxyHost(Z.proxyRoh);
     if (/^[0-9.]+$|^[0-9a-fA-F:]+$/.test(host) && host === ip) {
@@ -412,7 +465,9 @@ function proxySperren(p) {
     if (proxyRetry) clearTimeout(proxyRetry);
     proxyRetry = setTimeout(function () { proxyRetry = null; if (Z.modus === 'proxysperre') { Z.modus = ''; starten(false); } }, 60000);
 }
-// Laufend: alle 10 Min erneut. Passt es nicht mehr, wird die Seite sofort
+// Laufend: JEDE MINUTE erneut (559.3; vorher 10 Min). Dazwischen haelt der
+// Netz-Waechter alle Spielanfragen an, sobald die Bestaetigung aelter als
+// 150 s ist. Passt es nicht mehr, wird die Seite sofort
 // verlassen (about:blank) - GodBot und alle Zeitgeber sind damit weg.
 var proxyWacheTimer = null;
 function proxyWacheStarten() {
@@ -420,12 +475,12 @@ function proxyWacheStarten() {
     proxyWacheTimer = setInterval(async function () {
         if (Z.godbot === 'aus') return;
         var p = await proxyPruefen();
-        if (p.ok) { ipZuletzt = 0; ipMelden(); return; }
+        if (p.ok) { if (Date.now() - ipZuletzt > 600000) ipMelden(); return; }
         status('PROXY-SPERRE im Betrieb: ' + p.grund + ' - GodBot wird sofort beendet', 'FEHLER');
         try { if (window.__odinSyncFlush) window.__odinSyncFlush(); } catch (e) { }
         try { qSenden(); } catch (e) { }
         setTimeout(function () { location.replace('about:blank'); }, 800);
-    }, 600000);
+    }, 60000);
 }
 async function leaseHolen(erzwingen) {
     var r = await rpc('lease_holen', { p_account: Z.konto.id, p_geraet: geraetId, p_name: geraetName, p_erzwingen: !!erzwingen });
