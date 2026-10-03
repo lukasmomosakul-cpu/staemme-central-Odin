@@ -2625,6 +2625,22 @@ final class OdinProxy {
  private static volatile ServerSocket server=null;
  private static volatile boolean regelnGesetzt=false;
  private static Context app=null;
+ // 2.0.2 - MESSUNG je Konto: Verbindungen, Aufbauzeit bis "200" (bei Proxy
+ // inkl. CONNECT beim Anbieter), Fehler. Wird alle 10 Min zusammengefasst.
+ private static final java.util.Map<String,long[]> MESS=new java.util.concurrent.ConcurrentHashMap<>();
+ private static void messen(String konto,long ms,boolean fehler){
+  long[] m=MESS.computeIfAbsent(konto,k->new long[4]);   // n, summeMs, maxMs, fehler
+  synchronized(m){ if(fehler)m[3]++; else { m[0]++; m[1]+=ms; if(ms>m[2])m[2]=ms; } }
+ }
+ // "n Verbindungen, Aufbau Ø x ms (max y), z Fehler" und zuruecksetzen.
+ static String messungAbholen(String konto){
+  long[] m=MESS.remove(konto==null?"":konto);
+  if(m==null)return null;
+  synchronized(m){
+   if(m[0]==0&&m[3]==0)return null;
+   return m[0]+" Verbindungen, Aufbau Ø "+(m[0]>0?m[1]/m[0]:0)+" ms (max "+m[2]+" ms), "+m[3]+" Fehler";
+  }
+ }
  private static final Object LOCK=new Object();
 
  static void init(Context c){ if(c!=null)app=c.getApplicationContext(); }
@@ -2743,6 +2759,7 @@ final class OdinProxy {
    String methode=teil[0], ziel_s=teil[1];
    // 1) Wer fragt? Ohne gueltige Anmeldung: 407 -> WebView fragt die Welt.
    String konto=kontoAus(auth);
+   kontoZuletzt.set(konto);
    if(konto==null){
     antwort(out,"407 Proxy Authentication Required","Proxy-Authenticate: Basic realm=\"odin\"\r\n");
     c.close(); return;
@@ -2773,10 +2790,12 @@ final class OdinProxy {
    // 4) Weiterleiten.
    Zugang p=PROXY.get(konto);
    c.setSoTimeout(0);
+   final long t0=System.currentTimeMillis();
    if(p==null){
     ziel=new Socket(); ziel.connect(new InetSocketAddress(host,port),15_000);
     if(tunnel){
      antwort200(out);
+     messen(konto,System.currentTimeMillis()-t0,false);
     }else{
      OutputStream zo=ziel.getOutputStream();
      URL u=new URL(ziel_s);
@@ -2797,9 +2816,11 @@ final class OdinProxy {
      while((h=zeileLesen(zi))!=null&&!h.isEmpty()){}
      if(st==null||!st.matches("HTTP/1\\.[01] 200.*")){
       log("FEHLER","Proxy von Konto "+kurz(konto)+" lehnt "+host+" ab: "+st+" - Verbindung abgebrochen (nicht direkt)");
+      messen(konto,0,true);
       antwort(out,"502 Bad Gateway",null); ziel.close(); c.close(); return;
      }
      antwort200(out);
+     messen(konto,System.currentTimeMillis()-t0,false);
      pumpen(in,c,zi,ziel);
      return;
     }else{
@@ -2811,10 +2832,12 @@ final class OdinProxy {
    }
    pumpen(in,c,new BufferedInputStream(ziel.getInputStream()),ziel);
   }catch(Exception e){
+   if(ziel==null||!ziel.isConnected())try{ String k=kontoZuletzt.get(); if(k!=null)messen(k,0,true); }catch(Exception ig){}
    try{ c.close(); }catch(Exception ig){}
    try{ if(ziel!=null)ziel.close(); }catch(Exception ig){}
   }
  }
+ private static final ThreadLocal<String> kontoZuletzt=new ThreadLocal<>();
  private static void antwort200(OutputStream o) throws IOException {
   o.write("HTTP/1.1 200 Connection established\r\n\r\n".getBytes("ISO-8859-1")); o.flush();
  }
@@ -3322,6 +3345,8 @@ public class GameWebViewActivity extends Activity {
     int erwartet=(int)(min*12);
     String wo=OdinFloat.active(w.gameAccountId)?"schwebt":(gruppe?(w==aktiv?"oben im Sammelfenster":"verdeckt im Sammelfenster"):(w==aktiv?"angezeigt":"verdeckt"));
     boolean befund=vornGanz&&!"angezeigt".equals(wo)&&!"schwebt".equals(wo)&&w.geladen&&!w.leaseGesperrt&&n<erwartet*3/4;
+    String netz=OdinProxy.messungAbholen(w.gameAccountId);
+    if(netz!=null)w.setStatus("Netz "+w.kurz()+" ("+(OdinProxy.hatProxy(w.gameAccountId)?"über Proxy":"direkt")+"): "+netz);
     w.melde(befund?"WICHTIG":"info","Takt "+w.kurz()+": "+n+"/"+erwartet+" Lebenszeichen in "+min+" Min - "+wo+", "+lage
       +(befund?" - WELT GEDROSSELT":""));
    }
