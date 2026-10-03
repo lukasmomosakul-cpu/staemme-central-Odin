@@ -328,8 +328,104 @@ function ipMelden() {
         .then(function (ip) {
             ip = String(ip || '').trim();
             if (!/^[0-9a-fA-F:.]{3,45}$/.test(ip)) return;
+            // 2.0.5/PC: Proxy-Konten melden je Konto (lease_ip_melden laesst
+            // sie seit Migration 026 aus).
+            if (Z.proxyRoh && Z.konto) return rpc('lease_ip_melden_konto', { p_geraet: geraetId, p_konto: Z.konto.id, p_ip: ip });
             return rpc('lease_ip_melden', { p_geraet: geraetId, p_ip: ip });
         }).catch(function () { });
+}
+// ===================================================================
+// PROXY-SPERRE (Odin PC). Ein Tampermonkey-Skript kann keinen Proxy setzen -
+// das macht das Browser-Profil (Proxy-Erweiterung). Odin PC PRUEFT aber,
+// ob die Anfragen dieses Profils wirklich ueber den Proxy laufen, bevor
+// GodBot startet: Ausgangs-IP messen (ueber genau dieses Profil) und
+// vergleichen. Passt sie nicht, startet GodBot nicht.
+//   - IP nicht messbar                         -> Sperre
+//   - IP = IP eines Kontos OHNE Proxy (Lease)   -> Sperre (Proxy aus/umgangen)
+//   - Proxy-Adresse ist eine IP und Ausgang = Adresse -> sicher ok
+//   - sonst: feste IP je Konto merken (erste Pruefung), spaeter muss sie
+//     gleich bleiben; Wechsel -> Sperre, bis "Neue IP übernehmen".
+// Grenze: Die Spielseite selbst ist schon geladen, bevor das Skript laeuft -
+// verhindert wird GodBot (alle automatischen Anfragen), nicht der Seitenaufruf.
+// Deshalb im Profil den Proxy fuer ALLE Seiten setzen, nicht nur fuer
+// die-staemme.de (sonst misst auch api.ipify.org am Proxy vorbei).
+// ===================================================================
+var PK = { fest: 'odinpc_proxy_ip_fest' };
+async function ipMessen() {
+    for (var v = 0; v < 3; v++) {
+        try {
+            var ctl = new AbortController(); var t = setTimeout(function () { ctl.abort(); }, 8000);
+            var r = await F('https://api.ipify.org', { cache: 'no-store', signal: ctl.signal });
+            clearTimeout(t);
+            var ip = String(await r.text() || '').trim();
+            if (r.ok && /^[0-9a-fA-F:.]{3,45}$/.test(ip)) return ip;
+        } catch (e) { }
+        await sleep(1500);
+    }
+    return null;
+}
+function proxyHost(roh) {
+    var x = String(roh || '').trim().replace(/^https?:\/\//, '');
+    return x.split(':')[0] || '';
+}
+// Liefert { ok, ip, grund, neueIp }.
+async function proxyPruefen() {
+    Z.proxyRoh = '';
+    try {
+        var a = await rest('GET', 'game_accounts?select=proxy&id=eq.' + encodeURIComponent(Z.konto.id));
+        Z.proxyRoh = (a && a[0] && a[0].proxy) ? String(a[0].proxy).trim() : '';
+        lset('odinpc_proxy_bekannt_' + Z.konto.id, Z.proxyRoh ? '1' : '0');
+    } catch (e) {
+        // Supabase weg: zuletzt bekannter Stand; nie gesehen -> sperren.
+        var b = lget('odinpc_proxy_bekannt_' + Z.konto.id);
+        if (b === null) return { ok: false, grund: 'Proxy-Einstellung nicht abrufbar und auf diesem PC unbekannt' };
+        if (b === '1') Z.proxyRoh = 'unbekannt';
+    }
+    if (!Z.proxyRoh) return { ok: true, ohne: true };
+    var ip = await ipMessen();
+    Z.proxyIp = ip || '';
+    if (!ip) return { ok: false, grund: 'Ausgangs-IP nicht messbar - Proxy nicht erreichbar?' };
+    // Direkte IPs: Sperren von Konten OHNE Proxy (Geraete-Anschluesse).
+    try {
+        var leases = await rest('GET', 'account_leases?select=account_id,ip&ip=not.is.null');
+        var kont = await rest('GET', 'game_accounts?select=id,proxy&team_id=eq.' + encodeURIComponent(Z.team));
+        var mitProxy = {};
+        (kont || []).forEach(function (k) { if (k.proxy && String(k.proxy).trim()) mitProxy[k.id] = 1; });
+        var direkt = (leases || []).filter(function (l) { return !mitProxy[l.account_id]; }).map(function (l) { return l.ip; });
+        if (direkt.indexOf(ip) >= 0) return { ok: false, ip: ip, grund: 'Ausgangs-IP ' + ip + ' ist die IP eines Kontos OHNE Proxy - der Proxy dieses Browser-Profils ist aus oder wird umgangen' };
+    } catch (e) { }
+    var host = proxyHost(Z.proxyRoh);
+    if (/^[0-9.]+$|^[0-9a-fA-F:]+$/.test(host) && host === ip) {
+        lset(PK.fest + '_' + Z.konto.id, ip);
+        return { ok: true, ip: ip, sicher: true };
+    }
+    var fest = lget(PK.fest + '_' + Z.konto.id);
+    if (!fest) { lset(PK.fest + '_' + Z.konto.id, ip); return { ok: true, ip: ip, erstmals: true }; }
+    if (fest !== ip) return { ok: false, ip: ip, neueIp: true, grund: 'Ausgangs-IP gewechselt: erwartet ' + fest + ', gemessen ' + ip };
+    return { ok: true, ip: ip };
+}
+var proxyRetry = null;
+function proxySperren(p) {
+    Z.modus = 'proxysperre'; Z.hinweis = '🔒 Proxy-Sperre'; Z.proxyGrund = p.grund; Z.proxyNeu = !!p.neueIp; UI.offen = true;
+    status('PROXY-SPERRE: ' + p.grund + ' - GodBot startet NICHT (neuer Versuch in 60 s)', 'FEHLER');
+    ui();
+    if (proxyRetry) clearTimeout(proxyRetry);
+    proxyRetry = setTimeout(function () { proxyRetry = null; if (Z.modus === 'proxysperre') { Z.modus = ''; starten(false); } }, 60000);
+}
+// Laufend: alle 10 Min erneut. Passt es nicht mehr, wird die Seite sofort
+// verlassen (about:blank) - GodBot und alle Zeitgeber sind damit weg.
+var proxyWacheTimer = null;
+function proxyWacheStarten() {
+    if (proxyWacheTimer || !Z.proxyRoh) return;
+    proxyWacheTimer = setInterval(async function () {
+        if (Z.godbot === 'aus') return;
+        var p = await proxyPruefen();
+        if (p.ok) { ipZuletzt = 0; ipMelden(); return; }
+        status('PROXY-SPERRE im Betrieb: ' + p.grund + ' - GodBot wird sofort beendet', 'FEHLER');
+        try { if (window.__odinSyncFlush) window.__odinSyncFlush(); } catch (e) { }
+        try { qSenden(); } catch (e) { }
+        setTimeout(function () { location.replace('about:blank'); }, 800);
+    }, 600000);
 }
 async function leaseHolen(erzwingen) {
     var r = await rpc('lease_holen', { p_account: Z.konto.id, p_geraet: geraetId, p_name: geraetName, p_erzwingen: !!erzwingen });
@@ -546,6 +642,7 @@ function ui() {
     if (s) zeile('Odin', s.email || 'angemeldet');
     if (Z.konto) zeile('Konto', Z.konto.name + ' · ' + Z.konto.world);
     zeile('Gerät', geraetName);
+    if (Z.proxyRoh) zeile('Proxy-IP', (Z.proxyIp || '?') + (lget(PK.fest + '_' + (Z.konto && Z.konto.id)) ? '' : ' (noch nicht gemerkt)'));
     zeile('GodBot', ({ laeuft: 'läuft', start: 'startet…', aus: 'nicht gestartet' })[Z.godbot] || Z.godbot);
     if (Z.letzte) k.appendChild(el('div', 'margin-top:6px;color:#8fa8c7;font-size:11px;word-break:break-word', Z.letzte));
     if (Z.fehler && Z.fehler !== Z.letzte) k.appendChild(el('div', 'margin-top:4px;color:#e08a8a;font-size:11px;word-break:break-word', Z.fehler));
@@ -577,6 +674,15 @@ function ui() {
         aktionen.appendChild(knopf('PC-Stand nach Odin hochladen', function () { var f = UI.warte; UI.warte = null; if (f) f('pc'); }));
     } else if (Z.modus === 'fremd' || Z.modus === 'tab' || Z.modus === 'pause') {
         aktionen.appendChild(knopf('Hier übernehmen', function () { uebernehmen(); }, true));
+    } else if (Z.modus === 'proxysperre') {
+        k.appendChild(el('div', 'margin-top:8px;color:#f59e0b;font-weight:bold', '🔒 Proxy-Sperre - GodBot startet nicht'));
+        k.appendChild(el('div', 'margin-top:4px;color:#dfe6ee;word-break:break-word', Z.proxyGrund || ''));
+        k.appendChild(el('div', 'margin-top:4px;color:#8fa8c7;font-size:11px', 'Proxy im Browser-Profil für ALLE Seiten aktivieren. Neuer Versuch alle 60 s.'));
+        aktionen.appendChild(knopf('Erneut prüfen', function () { if (proxyRetry) { clearTimeout(proxyRetry); proxyRetry = null; } Z.modus = ''; starten(false); }, true));
+        if (Z.proxyNeu) aktionen.appendChild(knopf('Neue IP ' + (Z.proxyIp || '') + ' übernehmen', function () {
+            lset(PK.fest + '_' + Z.konto.id, Z.proxyIp); status('Neue feste Proxy-IP übernommen: ' + Z.proxyIp, 'WICHTIG');
+            if (proxyRetry) { clearTimeout(proxyRetry); proxyRetry = null; } Z.modus = ''; starten(false);
+        }));
     } else if (Z.modus === 'laeuft') {
         aktionen.appendChild(knopf('Pausieren & freigeben', function () { pausieren(); }));
     }
@@ -682,6 +788,13 @@ async function starten(uebernahme) {
     if (startLaeuft || Z.godbot !== 'aus') return;
     startLaeuft = true;
     try {
+        // Proxy-Sperre zuerst - auch vor dem Holen der Geraete-Sperre.
+        var pz = await proxyPruefen();
+        if (!pz.ok) { proxySperren(pz); return; }
+        if (pz.ip) {
+            Z.proxyIp = pz.ip;
+            status('Proxy-Prüfung ok: Ausgang ' + pz.ip + (pz.sicher ? ' = Proxy-Adresse' : pz.erstmals ? ' (erstmals - als feste IP gemerkt)' : ' (= gemerkte feste IP)'), pz.erstmals ? 'WICHTIG' : 'info');
+        }
         if (!uebernahme) {
             var t = await tabPruefen();
             if (t) { Z.modus = 'tab'; Z.hinweis = 'läuft in anderem Tab'; ui(); return; }
@@ -743,6 +856,7 @@ async function starten(uebernahme) {
             } catch (e) { }
         }
         Z.godbot = 'start'; Z.modus = 'laeuft'; Z.hinweis = Z.konto.name + ' · ' + Z.konto.world;
+        proxyWacheStarten();
         tabAktivMelden(uebernahme);
         ui();
         loaderAusfuehren();
