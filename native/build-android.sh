@@ -3405,7 +3405,9 @@ public class GameWebViewActivity extends Activity {
      if(f!=null){
       w.proxySperre=true;
       w.setStatus("Proxy-Fehler: "+f+" - Welt wird angehalten");
-      runOnUiThread(()->{ try{ if(w.webView!=null){ w.webView.stopLoading(); w.webView.loadUrl("about:blank"); } }catch(Exception ig){} });
+      final String grund=f;
+      runOnUiThread(()->{ try{ if(w.webView!=null){ w.webView.stopLoading(); w.sperrseiteZeigen(grund);
+        taktHandler.postDelayed(()->{ if(!w.geschlossen&&w.proxySperre)w.laden(); },60_000L); } }catch(Exception ig){} });
      }else if(geaendert||w.proxySperre){
       w.proxySperre=false;
       w.setStatus(geaendert?"Proxy geändert - Welt lädt neu":"Proxy wieder in Ordnung - Welt lädt");
@@ -4647,16 +4649,24 @@ public class GameWebViewActivity extends Activity {
    // Supabase-Abfrage.
    final WebView ziel_v=webView; final String ziel_u=ziel;
    new Thread(()->{
-    String fehler=proxyPruefen();
+    // 2.0.5: Beim Laden IMMER voll pruefen (auch Neuladen/Renderer-Neuaufbau),
+    // inkl. IP-Test - nicht nur beim ersten Oeffnen.
+    String fehler=proxyPruefen(true);
     runOnUiThread(()->{
      if(geschlossen||webView!=ziel_v)return;
      if(fehler!=null){
-      // Fail closed: lieber gar nicht laden als ueber die echte IP.
+      // 2.0.5 - PROXY-SPERRE: Konto mit hinterlegtem Proxy startet NICHT,
+      // solange keine Proxy-Verbindung moeglich ist. Kein Spiel, kein
+      // GodBot, keine einzige Anfrage an die Spielserver. Statt der Welt
+      // erscheint eine Sperrseite; alle 60 s neuer Versuch.
       proxySperre=true;
-      setStatus("Proxy-Fehler: "+fehler+" - Welt wird NICHT geladen (neuer Versuch alle 10 Min)");
+      melde("FEHLER","PROXY-SPERRE: "+fehler+" - Konto wird NICHT gestartet (neuer Versuch in 60 s)");
       wechselIndikatorWeg();
+      sperrseiteZeigen(fehler);
+      taktHandler.postDelayed(()->{ if(!geschlossen&&proxySperre&&webView==ziel_v)laden(); },60_000L);
       return;
      }
+     if(proxySperre){ proxySperre=false; melde("WICHTIG","Proxy-Sperre aufgehoben - Verbindung steht, Konto startet"); }
      ziel_v.loadUrl(ziel_u);
     });
    }).start();
@@ -4664,7 +4674,22 @@ public class GameWebViewActivity extends Activity {
   // Proxy dieses Kontos aus Supabase holen (Ersatz: letzter bekannter Wert
   // auf dem Geraet) und anwenden. Rueckgabe null = ok (mit oder ohne Proxy),
   // sonst Grund, warum NICHT geladen werden darf.
-  String proxyPruefen(){
+  // Sperrseite statt Spiel (lokal erzeugt, keine Netzanfrage).
+  void sperrseiteZeigen(String grund){
+   try{
+    String g=grund==null?"":grund.replace("&","&amp;").replace("<","&lt;");
+    String html="<html><head><meta name=viewport content='width=device-width'></head>"
+     +"<body style='background:#111827;color:#E5E7EB;font-family:sans-serif;padding:28px;text-align:center'>"
+     +"<div style='font-size:46px'>🔒</div><h2 style='color:#F59E0B'>Proxy-Sperre</h2>"
+     +"<p><b>"+kurz()+"</b> hat einen Proxy hinterlegt, aber keine Proxy-Verbindung.</p>"
+     +"<p>Das Konto wird nicht gestartet - es geht keine Anfrage an die Spielserver.</p>"
+     +"<p style='color:#9CA3AF;font-size:13px'>Grund: "+g+"</p>"
+     +"<p style='color:#9CA3AF;font-size:13px'>Neuer Versuch alle 60 Sekunden.</p></body></html>";
+    webView.loadDataWithBaseURL("about:blank",html,"text/html","UTF-8",null);
+   }catch(Exception ignored){}
+  }
+  String proxyPruefen(){ return proxyPruefen(false); }
+  String proxyPruefen(boolean vollTest){
    if(gameAccountId.isEmpty())return null;
    android.content.SharedPreferences sp=getSharedPreferences("odin_proxy",MODE_PRIVATE);
    String roh=null;
@@ -4672,8 +4697,13 @@ public class GameWebViewActivity extends Activity {
     org.json.JSONArray a=new org.json.JSONArray(supaRequest("GET","game_accounts?select=proxy&id=eq."+java.net.URLEncoder.encode(gameAccountId,"UTF-8"),null));
     if(a.length()>0){ roh=a.getJSONObject(0).isNull("proxy")?"":a.getJSONObject(0).optString("proxy",""); sp.edit().putString(gameAccountId,roh).apply(); }
    }catch(Exception e){ roh=null; }
+   // 2.0.5: Supabase nicht erreichbar UND auf diesem Geraet noch nie
+   // abgefragt -> unbekannt, ob ein Proxy hinterlegt ist. Dann NICHT direkt
+   // starten (koennte ein Proxy-Konto ueber die Geraete-IP schicken).
+   if(roh==null&&!sp.contains(gameAccountId))return "Proxy-Einstellung nicht abrufbar (Supabase) und auf diesem Gerät unbekannt";
    if(roh==null)roh=sp.getString(gameAccountId,"");
-   if(roh.equals(proxyRoh))return null;
+   // Ohne Proxy nichts zu testen; mit Proxy beim Laden immer voller Test.
+   if(roh.equals(proxyRoh)&&(!vollTest||roh.trim().isEmpty()))return null;
    OdinProxy.Zugang z=OdinProxy.lesen(gameAccountId,roh);
    if(!roh.trim().isEmpty()&&z==null)return "Proxy-Angabe unlesbar (erwartet host:port:benutzer:passwort)";
    // 1.99.0: Vor dem ersten Laden die Ausgangs-IP pruefen. Antwortet der
