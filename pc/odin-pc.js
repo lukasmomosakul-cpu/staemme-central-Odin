@@ -440,27 +440,20 @@ async function proxyPruefenKern() {
         if (b === null) return { ok: false, grund: 'Proxy-Einstellung nicht abrufbar und auf diesem PC unbekannt' };
         if (b === '1') Z.proxyRoh = 'unbekannt';
     }
-    if (!Z.proxyRoh) return { ok: true, ohne: true };
     var ip = await ipMessen();
+    if (!Z.proxyRoh) {
+        // 559.5: auch ohne Proxy - die IP dieses PCs darf kein Konto mit
+        // anderem Namen nutzen (z. B. Handy im selben Heimnetz).
+        if (ip) {
+            var kf = await ipKonfliktPc(ip, true);
+            if (kf) return { ok: false, ip: ip, grund: kf + ' (Konto ohne Proxy - Anschluss dieses PCs)' };
+        }
+        return { ok: true, ohne: true, ip: ip };
+    }
     Z.proxyIp = ip || '';
     if (!ip) return { ok: false, grund: 'Ausgangs-IP nicht messbar - Proxy nicht erreichbar?' };
-    // Direkte IPs: Sperren von Konten OHNE Proxy (Geraete-Anschluesse).
-    try {
-        var leases = await rest('GET', 'account_leases?select=account_id,ip&ip=not.is.null');
-        var kont = await rest('GET', 'game_accounts?select=id,name,proxy&team_id=eq.' + encodeURIComponent(Z.team));
-        var info = {};
-        (kont || []).forEach(function (k) { info[k.id] = { proxy: !!(k.proxy && String(k.proxy).trim()), name: String(k.name || '').toLowerCase() }; });
-        var ich = String(Z.konto.name || '').toLowerCase();
-        for (var li = 0; li < (leases || []).length; li++) {
-            var l = leases[li];
-            if (l.ip !== ip || l.account_id === Z.konto.id) continue;
-            var o = info[l.account_id] || { proxy: false, name: '' };
-            if (!o.proxy) return { ok: false, ip: ip, grund: 'Ausgangs-IP ' + ip + ' ist die IP eines Kontos OHNE Proxy - der Proxy dieses Browser-Profils ist aus oder wird umgangen' };
-            // 559.3: auch ein ANDERES Konto mit Proxy darf nicht dieselbe IP
-            // haben (gleicher Spieler auf anderer Welt ist erlaubt).
-            if (o.name !== ich) return { ok: false, ip: ip, grund: 'Ausgangs-IP ' + ip + ' nutzt bereits ein anderes Konto - zwei Konten über dieselbe IP sind gesperrt' };
-        }
-    } catch (e) { }
+    var kp = await ipKonfliktPc(ip, false);
+    if (kp) return { ok: false, ip: ip, grund: kp };
     var host = proxyHost(Z.proxyRoh);
     if (/^[0-9.]+$|^[0-9a-fA-F:]+$/.test(host) && host === ip) {
         lset(PK.fest + '_' + Z.konto.id, ip);
@@ -470,6 +463,25 @@ async function proxyPruefenKern() {
     if (!fest) { lset(PK.fest + '_' + Z.konto.id, ip); return { ok: true, ip: ip, erstmals: true }; }
     if (fest !== ip) return { ok: false, ip: ip, neueIp: true, grund: 'Ausgangs-IP gewechselt: erwartet ' + fest + ', gemessen ' + ip };
     return { ok: true, ip: ip };
+}
+// Gehoert die IP schon einem ANDEREN Konto (anderer Name, aktive Sperre)?
+async function ipKonfliktPc(ip, ohneProxy) {
+    try {
+        var seit = new Date(Date.now() - 600000).toISOString();   // nur aktive Sperren
+        var leases = await rest('GET', 'account_leases?select=account_id,ip&ip=not.is.null&gemeldet=gte.' + encodeURIComponent(seit));
+        var kont = await rest('GET', 'game_accounts?select=id,name,proxy&team_id=eq.' + encodeURIComponent(Z.team));
+        var info = {};
+        (kont || []).forEach(function (k) { info[k.id] = { proxy: !!(k.proxy && String(k.proxy).trim()), name: String(k.name || '').toLowerCase() }; });
+        var ich = String(Z.konto.name || '').toLowerCase();
+        for (var li = 0; li < (leases || []).length; li++) {
+            var l = leases[li];
+            if (l.ip !== ip || l.account_id === Z.konto.id) continue;
+            var o = info[l.account_id] || { proxy: false, name: '' };
+            if (!ohneProxy && !o.proxy) return 'Ausgangs-IP ' + ip + ' ist die IP eines Kontos OHNE Proxy - der Proxy dieses Browser-Profils ist aus oder wird umgangen';
+            if (o.name !== ich) return 'IP ' + ip + ' nutzt bereits Konto „' + (o.name || '?') + '“ - zwei Konten über dieselbe IP sind gesperrt';
+        }
+    } catch (e) { }
+    return null;
 }
 var proxyRetry = null;
 function proxySperren(p) {

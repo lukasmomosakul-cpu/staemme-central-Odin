@@ -4707,7 +4707,7 @@ public class GameWebViewActivity extends Activity {
    if(roh==null&&!sp.contains(gameAccountId))return "Proxy-Einstellung nicht abrufbar (Supabase) und auf diesem Gerät unbekannt";
    if(roh==null)roh=sp.getString(gameAccountId,"");
    // Ohne Proxy nichts zu testen; mit Proxy beim Laden immer voller Test.
-   if(roh.equals(proxyRoh)&&(!vollTest||roh.trim().isEmpty()))return null;
+   if(roh.equals(proxyRoh)&&!vollTest)return null;
    OdinProxy.Zugang z=OdinProxy.lesen(gameAccountId,roh);
    if(!roh.trim().isEmpty()&&z==null)return "Proxy-Angabe unlesbar (erwartet host:port:benutzer:passwort)";
    // 1.99.0: Vor dem ersten Laden die Ausgangs-IP pruefen. Antwortet der
@@ -4730,12 +4730,17 @@ public class GameWebViewActivity extends Activity {
    if(f!=null)return f;
    proxyRoh=roh;
    if(z==null){
-    setStatus("kein Proxy - direkte Verbindung");
-    new Thread(()->{
-     String ip=OdinService.letzteIp;
-     if(ip==null||ip.isEmpty())ip=OdinService.oeffentlicheIp();
+    // 2.0.9: Auch OHNE Proxy gilt "zwei Konten, eine IP = Sperre": die
+    // Geraete-IP darf nicht schon von einem Konto mit ANDEREM Namen genutzt
+    // werden (z. B. Odin PC im selben Heimnetz, anderes Handy im WLAN).
+    String ip=OdinService.letzteIp;
+    if(ip==null||ip.isEmpty())ip=OdinService.oeffentlicheIp();
+    if(ip!=null&&!ip.isEmpty()){
+     String konflikt=ipKonflikt(ip);
+     if(konflikt!=null)return konflikt+" (Konto ohne Proxy - Geräte-IP)";
      ipMerken(gameAccountId,ip,false,"");
-    }).start();
+    }
+    setStatus("kein Proxy - direkte Verbindung");
     return null;
    }
    setStatus("Proxy aktiv für dieses Konto über "+z.host+":"+z.port+" (Spiel, Anmeldung und Grafiken)");
@@ -4759,7 +4764,12 @@ public class GameWebViewActivity extends Activity {
     org.json.JSONArray k=new org.json.JSONArray(supaRequest("GET","game_accounts?select=id,name",null));
     for(int i=0;i<k.length();i++){ org.json.JSONObject o=k.getJSONObject(i); namen.put(o.optString("id"),o.optString("name","").toLowerCase(java.util.Locale.ROOT)); }
     if(namen.containsKey(gameAccountId))ich=namen.get(gameAccountId);
-    org.json.JSONArray l=new org.json.JSONArray(supaRequest("GET","account_leases?select=account_id,ip&ip=not.is.null",null));
+    // Nur aktive Sperren (in den letzten 10 Min gemeldet) - alte Zeilen
+    // eines laengst beendeten Geraets sollen nicht sperren.
+    java.text.SimpleDateFormat iso=new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'",java.util.Locale.ROOT);
+    iso.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+    String seit=iso.format(new java.util.Date(System.currentTimeMillis()-600_000L));
+    org.json.JSONArray l=new org.json.JSONArray(supaRequest("GET","account_leases?select=account_id,ip&ip=not.is.null&gemeldet=gte."+seit,null));
     for(int i=0;i<l.length();i++){
      org.json.JSONObject o=l.getJSONObject(i);
      String kid=o.optString("account_id");
