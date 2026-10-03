@@ -2579,6 +2579,177 @@ public final class OdinBubble {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinProxy.java" <<'EOF'
+package de.teamzentrale.odin;
+import android.content.Context;
+// 1.98.0 - PROXY JE KONTO.
+//
+// Android-WebView kennt KEINEN Proxy je WebView oder je Profil. Es gibt nur
+// androidx.webkit.ProxyController: EINE Einstellung fuer den ganzen Prozess
+// (developer.android.com/reference/androidx/webkit/ProxyController). Mit
+// "Reverse Bypass" gehen aber NUR die gelisteten Adressen ueber den Proxy,
+// alles andere direkt (ProxyConfig.Builder.setReverseBypassEnabled).
+//
+// Darauf baut diese Klasse: gelistet wird nur der Welt-Host des Kontos mit
+// Proxy (z. B. de258.die-staemme.de). Das traegt, solange KEIN anderes Konto
+// dieselbe Welt spielt - das wird geprueft, sonst bleibt der Proxy aus.
+//
+// Gemeinsamer Host ist www.die-staemme.de (Anmeldung, /page/play/...). Den
+// nimmt die Proxy-Welt nur waehrend ihrer eigenen Anmeldung mit auf
+// ("www-Fenster"). Solange das Fenster offen ist, WARTEN www-Anfragen der
+// anderen Welten in shouldInterceptRequest (Hintergrund-Thread), bis es zu
+// ist - sonst liefe eine fremde Anmeldung ueber die Proxy-IP. Umgekehrt
+// oeffnet die Proxy-Welt das Fenster, BEVOR ihre www-Anfrage rausgeht.
+// Chromium trennt Verbindungen nach Proxy (Socket-Pool-Schluessel), eine
+// direkte Verbindung wird fuer eine Proxy-Anfrage nicht wiederverwendet.
+//
+// Nur EIN Proxy gleichzeitig moeglich (eine Prozess-Einstellung). Fail
+// closed: kann der Proxy nicht gesetzt werden, laedt die Welt gar nicht.
+final class OdinProxy {
+ private OdinProxy(){}
+ static final class Zugang {
+  String konto="", host="", user="", pass="", welt="";
+  int port=0;
+  String hostPort(){ return host+":"+port; }
+ }
+ private static Zugang aktiv=null;              // der eine wirksame Proxy
+ private static volatile boolean wwwOffen=false;
+ private static volatile long wwwZuletzt=0L;
+ private static String angewendet="";          // Signatur der gesetzten Regeln
+ private static final Object LOCK=new Object();
+ private static final android.os.Handler H=new android.os.Handler(android.os.Looper.getMainLooper());
+ static final String WWW="www.die-staemme.de";
+
+ // host:port:user:pass -> Zugang, sonst null (leer = kein Proxy).
+ static Zugang lesen(String konto,String welt,String roh){
+  if(roh==null)return null;
+  String s=roh.trim(); if(s.isEmpty())return null;
+  if(s.startsWith("http://"))s=s.substring(7);
+  String[] t=s.split(":",4);
+  if(t.length<2)return null;
+  Zugang z=new Zugang();
+  z.konto=konto==null?"":konto; z.welt=welt==null?"":welt.trim().toLowerCase(java.util.Locale.ROOT);
+  z.host=t[0].trim();
+  try{ z.port=Integer.parseInt(t[1].trim()); }catch(Exception e){ return null; }
+  if(t.length>=4){ z.user=t[2]; z.pass=t[3]; }
+  if(z.host.isEmpty()||z.port<=0||z.port>65535)return null;
+  return z;
+ }
+ static boolean unterstuetzt(){
+  try{
+   return androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.PROXY_OVERRIDE)
+       && androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.PROXY_OVERRIDE_REVERSE_BYPASS);
+  }catch(Throwable t){ return false; }
+ }
+ static String weltHost(String welt){ return welt+".die-staemme.de"; }
+ static boolean istProxyKonto(String konto){
+  synchronized(LOCK){ return aktiv!=null&&aktiv.konto.equals(konto==null?"":konto); }
+ }
+ // Fuer onReceivedHttpAuthRequest: fragt der Proxy nach Anmeldung?
+ static Zugang fuerAuthHost(String host){
+  synchronized(LOCK){
+   if(aktiv==null||host==null)return null;
+   String h=host.toLowerCase(java.util.Locale.ROOT);
+   return (h.equals(aktiv.host.toLowerCase(java.util.Locale.ROOT))||h.equals(aktiv.hostPort().toLowerCase(java.util.Locale.ROOT)))?aktiv:null;
+  }
+ }
+ // Proxy fuer ein Konto setzen (z) oder entfernen (z==null). Wartet bis
+ // WebView die Regeln uebernommen hat (max 5 s). Rueckgabe: Fehlertext oder
+ // null bei Erfolg. andereWelten: Welten der uebrigen Konten.
+ static String setzen(String konto,Zugang z,java.util.Set<String> andereWelten){
+  synchronized(LOCK){
+   if(z==null){
+    if(aktiv!=null&&aktiv.konto.equals(konto)){ aktiv=null; wwwOffen=false; }
+    return anwendenUndWarten();
+   }
+   if(!unterstuetzt())return "WebView kann keinen Proxy je Adresse (PROXY_OVERRIDE_REVERSE_BYPASS fehlt)";
+   if(z.welt.isEmpty())return "Konto ohne Welt - Proxy nicht zuordenbar";
+   if(andereWelten!=null&&andereWelten.contains(z.welt))
+    return "Welt "+z.welt+" spielt auch ein anderes Konto - der Proxy würde beide treffen";
+   if(aktiv!=null&&!aktiv.konto.equals(z.konto))
+    return "Es ist schon ein Proxy für ein anderes Konto aktiv - WebView kann nur einen";
+   aktiv=z;
+   return anwendenUndWarten();
+  }
+ }
+ private static String anwendenUndWarten(){
+  final Zugang z=aktiv;
+  String sig=z==null?"":(z.hostPort()+"|"+z.welt+"|"+wwwOffen);
+  if(sig.equals(angewendet))return null;
+  final java.util.concurrent.CountDownLatch fertig=new java.util.concurrent.CountDownLatch(1);
+  final String[] fehler={null};
+  try{
+   java.util.concurrent.Executor ex=r->r.run();
+   if(z==null){
+    androidx.webkit.ProxyController.getInstance().clearProxyOverride(ex,fertig::countDown);
+   }else{
+    androidx.webkit.ProxyConfig.Builder b=new androidx.webkit.ProxyConfig.Builder()
+      .addProxyRule("http://"+z.hostPort())
+      .addBypassRule(weltHost(z.welt))
+      .setReverseBypassEnabled(true);
+    if(wwwOffen)b.addBypassRule(WWW);
+    androidx.webkit.ProxyController.getInstance().setProxyOverride(b.build(),ex,fertig::countDown);
+   }
+  }catch(Throwable t){ fehler[0]="ProxyController: "+t; fertig.countDown(); }
+  try{ if(!fertig.await(5,java.util.concurrent.TimeUnit.SECONDS))fehler[0]="ProxyController antwortet nicht"; }
+  catch(InterruptedException e){ fehler[0]="unterbrochen"; }
+  if(fehler[0]==null)angewendet=sig;
+  return fehler[0];
+ }
+ // Aus shouldInterceptRequest (Hintergrund-Thread) fuer JEDE Anfrage an
+ // www.die-staemme.de. Proxy-Welt: Fenster oeffnen. Andere Welt: warten, bis
+ // das Fenster zu ist (max 25 s, dann wird es zwangsweise geschlossen).
+ static void vorWwwAnfrage(String konto){
+  if(aktiv==null)return;
+  if(istProxyKonto(konto)){
+   synchronized(LOCK){
+    wwwZuletzt=System.currentTimeMillis();
+    if(!wwwOffen){ wwwOffen=true; anwendenUndWarten(); fensterZuPlanen(); }
+   }
+   return;
+  }
+  long bis=System.currentTimeMillis()+25_000L;
+  while(wwwOffen&&System.currentTimeMillis()<bis){
+   try{ Thread.sleep(150); }catch(InterruptedException e){ break; }
+  }
+  if(wwwOffen)wwwSchliessen();
+ }
+ // Fenster schliesst 15 s nach der letzten www-Anfrage der Proxy-Welt, oder
+ // sofort, sobald sie in ihrer Welt angekommen ist (wwwSchliessen).
+ private static void fensterZuPlanen(){
+  H.postDelayed(new Runnable(){ @Override public void run(){
+   if(!wwwOffen)return;
+   if(System.currentTimeMillis()-wwwZuletzt>=15_000L){
+    new Thread(OdinProxy::wwwSchliessen).start();
+   }else H.postDelayed(this,3_000L);
+  }},15_000L);
+ }
+ static void wwwSchliessen(){
+  synchronized(LOCK){
+   if(!wwwOffen)return;
+   wwwOffen=false; anwendenUndWarten();
+  }
+ }
+ // Ausgangs-IP ueber den Proxy (nur zur Kontrolle, ausserhalb der WebView):
+ // schlichte HTTP-Anfrage mit Proxy-Authorization.
+ static String ausgangsIp(Zugang z){
+  java.net.HttpURLConnection h=null;
+  try{
+   java.net.Proxy p=new java.net.Proxy(java.net.Proxy.Type.HTTP,new java.net.InetSocketAddress(z.host,z.port));
+   h=(java.net.HttpURLConnection)new java.net.URL("http://api.ipify.org").openConnection(p);
+   if(!z.user.isEmpty())h.setRequestProperty("Proxy-Authorization","Basic "+android.util.Base64.encodeToString(
+     (z.user+":"+z.pass).getBytes("UTF-8"),android.util.Base64.NO_WRAP));
+   h.setConnectTimeout(8000); h.setReadTimeout(8000);
+   int code=h.getResponseCode();
+   if(code!=200)return "HTTP "+code;
+   java.io.BufferedReader r=new java.io.BufferedReader(new java.io.InputStreamReader(h.getInputStream()));
+   String s=r.readLine(); r.close();
+   return s==null?"?":s.trim();
+  }catch(Exception e){ return "Fehler: "+e.getClass().getSimpleName(); }
+  finally{ if(h!=null)h.disconnect(); }
+ }
+}
+EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.content.Context; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import android.view.View; import java.io.*; import java.net.*; import org.json.JSONObject;
@@ -2939,6 +3110,7 @@ public class GameWebViewActivity extends Activity {
   final String k=w.gameAccountId; final Context app=getApplicationContext();
   OdinService.WARTET.remove(k);
   if(!k.isEmpty())new Thread(()->OdinService.leaseFreigeben(app,k)).start();
+  if(OdinProxy.istProxyKonto(k))new Thread(()->OdinProxy.setzen(k,null,null)).start();
   if(aktiv==w){
    aktiv=null;
    Welt naechste=null;
@@ -3038,6 +3210,29 @@ public class GameWebViewActivity extends Activity {
     boolean befund=vornGanz&&!"angezeigt".equals(wo)&&!"schwebt".equals(wo)&&w.geladen&&!w.leaseGesperrt&&n<erwartet*3/4;
     w.melde(befund?"WICHTIG":"info","Takt "+w.kurz()+": "+n+"/"+erwartet+" Lebenszeichen in "+min+" Min - "+wo+", "+lage
       +(befund?" - WELT GEDROSSELT":""));
+   }
+   // 1.98.0: Proxy im Dashboard geaendert? Alle 10 Min je Welt nachsehen;
+   // bei Aenderung anwenden und die Welt neu laden (sonst laufen offene
+   // Verbindungen noch ueber den alten Weg). Ausgangs-IP neu melden.
+   for(final Welt w:alleWelten()){
+    if(w.webView==null||w.gameAccountId.isEmpty())continue;
+    new Thread(()->{
+     String vorher=w.proxyRoh;
+     String f=w.proxyPruefen();
+     boolean geaendert=vorher!=null&&!vorher.equals(w.proxyRoh);
+     if(f!=null){
+      w.proxySperre=true;
+      w.setStatus("Proxy-Fehler: "+f+" - Welt wird angehalten");
+      runOnUiThread(()->{ try{ if(w.webView!=null){ w.webView.stopLoading(); w.webView.loadUrl("about:blank"); } }catch(Exception ig){} });
+     }else if(geaendert||w.proxySperre){
+      w.proxySperre=false;
+      w.setStatus(geaendert?"Proxy geändert - Welt lädt neu":"Proxy wieder in Ordnung - Welt lädt");
+      runOnUiThread(()->{ try{ if(w.webView!=null)w.laden(); }catch(Exception ig){} });
+     }else if(OdinProxy.istProxyKonto(w.gameAccountId)){
+      OdinProxy.Zugang z=OdinProxy.lesen(w.gameAccountId,w.weltName,w.proxyRoh);
+      if(z!=null)w.proxyIpMelden(z);
+     }
+    }).start();
    }
    android.app.ActivityManager am=(android.app.ActivityManager)getSystemService(Context.ACTIVITY_SERVICE);
    android.app.ActivityManager.MemoryInfo mi=new android.app.ActivityManager.MemoryInfo(); am.getMemoryInfo(mi);
@@ -4005,6 +4200,7 @@ public class GameWebViewActivity extends Activity {
    final String k=w.gameAccountId; final Context app=getApplicationContext();
    OdinService.WARTET.remove(k);
    if(!k.isEmpty())new Thread(()->OdinService.leaseFreigeben(app,k)).start();
+   if(OdinProxy.istProxyKonto(k))new Thread(()->OdinProxy.setzen(k,null,null)).start();
   }
   synchronized(WELTEN){ WELTEN.clear(); }
   super.onDestroy();
@@ -4079,6 +4275,11 @@ public class GameWebViewActivity extends Activity {
   long taktSeit=System.currentTimeMillis();
   long dimmNeuGeladen=0L;
   long ladeStart=0L;
+  long authFensterStart=0L; int authVersuche=0;
+  // 1.98.0: zuletzt angewendeter Proxy-Text dieses Kontos ("" = keiner).
+  volatile String proxyRoh=null;
+  // Fail closed: Welt wurde wegen Proxy-Fehler nicht geladen/angehalten.
+  volatile boolean proxySperre=false;
   Welt(String id,String name,String welt){
    gameAccountId=nz(id);
    kopfName=nz(name).isEmpty()?gameAccountId:nz(name);
@@ -4179,14 +4380,33 @@ public class GameWebViewActivity extends Activity {
  }
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
  @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
- @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
+ @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){
+   // 1.98.0: www.die-staemme.de teilen sich alle Konten - siehe OdinProxy.
+   try{ android.net.Uri pu=r.getUrl(); if(pu!=null&&OdinProxy.WWW.equalsIgnoreCase(pu.getHost()))OdinProxy.vorWwwAnfrage(gameAccountId); }catch(Exception ig){}
+   anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
  @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
-   // 1.95.15: Spielseite steht - Ladescreen weg (nicht auf der Anmelde-/
-   // Zwischenseite, nur wenn wir in der Welt sind).
-   try{ if(u!=null&&u.contains("/game.php"))wechselIndikatorWeg(); }catch(Exception ig){}
    // 1.95.15/1.96.0: Spielseite steht - Ladescreen weg, wenn diese Welt
    // gerade angezeigt wird (nicht auf der Anmelde-/Zwischenseite).
    try{ if(u!=null&&u.contains("/game.php")){ geladen=true; if(aktiv==Welt.this)wechselIndikatorWeg(); } }catch(Exception ig){}
+   // 1.98.0: in der eigenen Welt angekommen - www-Fenster des Proxys zu.
+   try{ if(u!=null&&u.contains("/game.php")&&OdinProxy.istProxyKonto(gameAccountId))new Thread(OdinProxy::wwwSchliessen).start(); }catch(Exception ig){}
+  }
+  // 1.98.0: Der Proxy verlangt Anmeldung (HTTP 407). WebView meldet das hier,
+  // mit dem Proxy-Host als 'host'. Nur fuer genau diesen Host antworten -
+  // nie Zugangsdaten an eine Seite geben. Hoechstens 3 Versuche je Minute,
+  // sonst sind die Daten falsch und es soll keine Schleife entstehen.
+  @Override public void onReceivedHttpAuthRequest(WebView v,HttpAuthHandler handler,String host,String realm){
+   OdinProxy.Zugang z=OdinProxy.fuerAuthHost(host);
+   long jetzt=System.currentTimeMillis();
+   if(z!=null&&!z.user.isEmpty()){
+    if(jetzt-authFensterStart>60_000L){ authFensterStart=jetzt; authVersuche=0; }
+    if(++authVersuche<=3){
+     if(authVersuche==1)setStatus("Proxy fragt Anmeldung ab ("+host+") - beantwortet");
+     handler.proceed(z.user,z.pass); return;
+    }
+    setStatus("Proxy lehnt die Zugangsdaten ab ("+host+") - Fehler, Anfrage abgebrochen");
+   }
+   handler.cancel();
   }
   // 1.96.0: Alle WebViews der App teilen sich EINEN Renderer-Prozess. Mit
   // mehreren Welten steigt das Risiko, dass Android ihn bei Speichermangel
@@ -4220,7 +4440,66 @@ public class GameWebViewActivity extends Activity {
                : (lastGame.contains("die-staemme.de") ? lastGame : "https://www.die-staemme.de/");
    ladeStart=System.currentTimeMillis();
    if(!weltName.isEmpty()||!gameAccountId.isEmpty())ladeSchichtZeigenWennAngezeigt();
-   webView.loadUrl(ziel);
+   // 1.98.0: erst Proxy klaeren, DANN laden - sonst ginge die erste Anfrage
+   // eines Proxy-Kontos ueber die echte IP. Ohne Proxy kostet das eine kurze
+   // Supabase-Abfrage.
+   final WebView ziel_v=webView; final String ziel_u=ziel;
+   new Thread(()->{
+    String fehler=proxyPruefen();
+    runOnUiThread(()->{
+     if(geschlossen||webView!=ziel_v)return;
+     if(fehler!=null){
+      // Fail closed: lieber gar nicht laden als ueber die echte IP.
+      proxySperre=true;
+      setStatus("Proxy-Fehler: "+fehler+" - Welt wird NICHT geladen (neuer Versuch alle 10 Min)");
+      wechselIndikatorWeg();
+      return;
+     }
+     ziel_v.loadUrl(ziel_u);
+    });
+   }).start();
+  }
+  // Proxy dieses Kontos aus Supabase holen (Ersatz: letzter bekannter Wert
+  // auf dem Geraet) und anwenden. Rueckgabe null = ok (mit oder ohne Proxy),
+  // sonst Grund, warum NICHT geladen werden darf.
+  String proxyPruefen(){
+   if(gameAccountId.isEmpty())return null;
+   android.content.SharedPreferences sp=getSharedPreferences("odin_proxy",MODE_PRIVATE);
+   String roh=null;
+   try{
+    org.json.JSONArray a=new org.json.JSONArray(supaRequest("GET","game_accounts?select=proxy&id=eq."+java.net.URLEncoder.encode(gameAccountId,"UTF-8"),null));
+    if(a.length()>0){ roh=a.getJSONObject(0).isNull("proxy")?"":a.getJSONObject(0).optString("proxy",""); sp.edit().putString(gameAccountId,roh).apply(); }
+   }catch(Exception e){ roh=null; }
+   if(roh==null)roh=sp.getString(gameAccountId,"");
+   if(roh.equals(proxyRoh))return null;
+   OdinProxy.Zugang z=OdinProxy.lesen(gameAccountId,weltName,roh);
+   if(!roh.trim().isEmpty()&&z==null)return "Proxy-Angabe unlesbar (erwartet host:port:benutzer:passwort)";
+   java.util.Set<String> andere=new java.util.HashSet<>();
+   try{
+    org.json.JSONArray arr=new org.json.JSONArray(LETZTE_KONTEN.isEmpty()?"[]":LETZTE_KONTEN);
+    for(int i=0;i<arr.length();i++){ org.json.JSONObject o=arr.optJSONObject(i); if(o==null||gameAccountId.equals(o.optString("id","")))continue;
+     String w=normWelt(o.optString("world","")); if(!w.isEmpty())andere.add(w); }
+   }catch(Exception ignored){}
+   for(Welt x:alleWelten())if(x!=this&&!x.weltName.isEmpty())andere.add(x.weltName);
+   String f=OdinProxy.setzen(gameAccountId,z,andere);
+   if(f!=null)return f;
+   proxyRoh=roh;
+   if(z==null){ setStatus("kein Proxy - direkte Verbindung"); return null; }
+   setStatus("Proxy aktiv: nur "+OdinProxy.weltHost(z.welt)+" (und die eigene Anmeldung) über "+z.host+":"+z.port);
+   final OdinProxy.Zugang zz=z;
+   new Thread(()->proxyIpMelden(zz)).start();
+   return null;
+  }
+  // Ausgangs-IP des Proxys pruefen und an die Geraete-Sperre dieses Kontos
+  // schreiben (Dashboard zeigt sie dann je Konto).
+  void proxyIpMelden(OdinProxy.Zugang z){
+   String ip=OdinProxy.ausgangsIp(z);
+   setStatus("Proxy-Ausgang: "+ip);
+   if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return;
+   try{
+    supaRequest("POST","rpc/lease_ip_melden_konto",new org.json.JSONObject()
+      .put("p_geraet",OdinService.geraetId(GameWebViewActivity.this)).put("p_konto",gameAccountId).put("p_ip",ip).toString());
+   }catch(Exception e){ android.util.Log.w("ODIN_PROXY","ip melden",e); }
   }
   private void ladeSchichtZeigenWennAngezeigt(){ if(aktiv==this)ladeSchichtZeigen(weltName); }
   // Leiste der Ansicht zeigt nur den Stand der angezeigten Welt; der Stand
