@@ -2579,6 +2579,57 @@ public final class OdinBubble {
  }
 }
 EOF
+cat > "$JAVA_DIR/OdinEgress.java" <<'EOF'
+package de.teamzentrale.odin;
+public final class OdinEgress {
+  private static final java.util.concurrent.Executor EXEC =
+      java.util.concurrent.Executors.newSingleThreadExecutor();
+  private static volatile String aktiverAccount = "";
+  private static volatile String aktiveProxy = "";
+  private OdinEgress() {}
+  public static boolean konflikt(String accountId,String proxyUrl){
+    String a=accountId==null?"":accountId;
+    return !aktiverAccount.isEmpty()&&!aktiverAccount.equals(a)&&!aktiveProxy.isEmpty();
+  }
+  public static boolean aktivFuer(String accountId){
+    return accountId!=null&&accountId.equals(aktiverAccount)&&!aktiveProxy.isEmpty();
+  }
+  public static void anwenden(String accountId,String proxyUrl,Runnable fertig,Runnable fehler){
+    final String a=accountId==null?"":accountId;
+    final String p=proxyUrl==null?"":proxyUrl.trim();
+    if(konflikt(a,p)){if(fehler!=null)fehler.run();return;}
+    if(!p.isEmpty()&&!p.matches("(?i)^(https?|socks)://[^/\\s:]+(?::[0-9]{1,5})?$")){
+      if(fehler!=null)fehler.run();return;
+    }
+    try{
+      if(!androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.PROXY_OVERRIDE)){
+        if(fehler!=null)fehler.run();return;
+      }
+      if(p.isEmpty()){
+        androidx.webkit.ProxyController.getInstance().clearProxyOverride(EXEC,()->{
+          aktiverAccount="";aktiveProxy="";if(fertig!=null)fertig.run();
+        });return;
+      }
+      if(!androidx.webkit.WebViewFeature.isFeatureSupported(
+          androidx.webkit.WebViewFeature.PROXY_OVERRIDE_REVERSE_BYPASS)){
+        if(fehler!=null)fehler.run();return;
+      }
+      androidx.webkit.ProxyConfig.Builder b=new androidx.webkit.ProxyConfig.Builder()
+        .addProxyRule(p).addBypassRule("die-staemme.de").addBypassRule("*.die-staemme.de")
+        .setReverseBypassEnabled(true);
+      androidx.webkit.ProxyController.getInstance().setProxyOverride(b.build(),EXEC,()->{
+        aktiverAccount=a;aktiveProxy=p;if(fertig!=null)fertig.run();
+      });
+    }catch(Exception e){if(fehler!=null)fehler.run();}
+  }
+  public static void loeschenWenn(String accountId,Runnable fertig){
+    if(!aktivFuer(accountId)){if(fertig!=null)fertig.run();return;}
+    try{androidx.webkit.ProxyController.getInstance().clearProxyOverride(EXEC,()->{
+      aktiverAccount="";aktiveProxy="";if(fertig!=null)fertig.run();
+    });}catch(Exception e){aktiverAccount="";aktiveProxy="";if(fertig!=null)fertig.run();}
+  }
+}
+EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.content.Context; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import android.view.View; import java.io.*; import java.net.*; import org.json.JSONObject;
@@ -2859,6 +2910,20 @@ public class GameWebViewActivity extends Activity {
   }catch(Exception ignored){}
   return null;
  }
+ private String proxyAusListe(String id){
+  if(id==null||id.isEmpty())return "";
+  try{
+   org.json.JSONArray arr=new org.json.JSONArray(LETZTE_KONTEN);
+   for(int i=0;i<arr.length();i++){
+    org.json.JSONObject o=arr.optJSONObject(i);if(o==null)continue;
+    if(id.equals(o.optString("id",""))){
+     org.json.JSONObject e=o.optJSONObject("egress");
+     if(e!=null&&e.optBoolean("enabled",false))return e.optString("endpoint_url","");
+    }
+   }
+  }catch(Exception ignored){}
+  return "";
+ }
  private int maxWelten(){
   try{ int m=getSharedPreferences("odin_svc",MODE_PRIVATE).getInt("max_welten",MAX_WELTEN_STANDARD); return Math.max(1,Math.min(6,m)); }
   catch(Exception e){ return MAX_WELTEN_STANDARD; }
@@ -2886,10 +2951,24 @@ public class GameWebViewActivity extends Activity {
   Welt w=new Welt(id,name,welt);
   synchronized(WELTEN){ WELTEN.put(w.gameAccountId,w); }
   synchronized(OFFEN){ OFFEN.put(w.gameAccountId,this); }
+  String egressProxy=proxyAusListe(id);
+  if(OdinEgress.konflikt(id,egressProxy)){
+   setStatus("Egress-Test aktiv: zuerst OmaImHühnerstall schließen");
+   return null;
+  }
   w.webViewBauen();
   weltRahmen.addView(w.webView,0,new FrameLayout.LayoutParams(-1,-1));
-  w.laden();
-  w.setStatus("Welt geöffnet ("+alleWelten().size()+" offen)");
+  OdinEgress.anwenden(id,egressProxy,
+    ()->runOnUiThread(()->{
+     if(w.geschlossen)return;
+     w.laden();
+     w.setStatus(egressProxy.isEmpty()?"Welt geöffnet (direkte Route)":"Welt geöffnet (eigener Egress)");
+    }),
+    ()->runOnUiThread(()->{
+     if(w.geschlossen)return;
+     w.setStatus("Egress konnte nicht aktiviert werden - Welt bleibt geschlossen");
+     weltSchliessen(w,"Egress-Konfiguration fehlgeschlagen");
+    }));
   return w;
  }
  // Welt nach vorn: ihre WebView an die Spitze des Stapels. Die anderen
@@ -2947,6 +3026,7 @@ public class GameWebViewActivity extends Activity {
    else { try{ finishAndRemoveTask(); }catch(Exception e){ finish(); } return; }
   }
   try{ fussleisteFuellen(); }catch(Exception ig){}
+  OdinEgress.loeschenWenn(k,()->{});
  }
  // --- 1.97.0: EIN SCHWEBEFENSTER FUER ALLE WELTEN --------------------------
  // Minimieren nimmt den ganzen Welten-Stapel (weltRahmen mit allen WebViews)
