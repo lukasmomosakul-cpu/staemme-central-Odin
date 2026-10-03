@@ -80,14 +80,11 @@ cat > "$APP/src/main/AndroidManifest.xml" <<'EOF'
              sich gegenseitig den Anmeldestatus. -->
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
-        <!-- 1.95.19 - VARIANTE A: GENAU EINE Spielansicht-Instanz.
-             singleTask ohne eigene Affinitaet -> eine Instanz, eine Karte im
-             Umschalter. Der Kontowechsel startet KEINE neue Activity und keine
-             neue Task mehr (das war die Quelle aller Freezes und des
-             "laedt erst beim Minimieren"): er laedt die Zielwelt in DERSELBEN
-             Instanz (neues Intent + recreate()). Sofortiger Vordergrund-Wechsel,
-             kein Task-Jonglieren. Preis: die verlassene Welt laeuft nicht im
-             Hintergrund weiter (Variante B spaeter). -->
+        <!-- 1.96.0 - VARIANTE B: weiterhin GENAU EINE Spielansicht-Instanz
+             (singleTask, eine Karte im Umschalter). Darin aber je Welt eine
+             eigene WebView, gestapelt und alle sichtbar - die verdeckten
+             laufen ungedrosselt weiter. Kontowechsel = WebView nach oben,
+             kein recreate(), kein Neuladen. Siehe Kopf von GameWebViewActivity. -->
         <activity android:name=".GameWebViewActivity" android:exported="false"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode" />
@@ -2564,69 +2561,108 @@ EOF
 cat > "$JAVA_DIR/GameWebViewActivity.java" <<'EOF'
 package de.teamzentrale.odin;
 import android.annotation.SuppressLint; import android.app.Activity; import android.content.Context; import android.content.Intent; import android.os.Bundle; import android.webkit.*; import android.widget.FrameLayout; import android.widget.LinearLayout; import android.widget.TextView; import android.widget.Button; import android.widget.HorizontalScrollView; import android.util.Log; import android.os.Build; import android.webkit.JavascriptInterface; import java.io.*; import java.net.*; import org.json.JSONObject;
+// 1.96.0 - VARIANTE B: MEHRERE WELTEN IN EINER SPIELANSICHT, ALLE LAUFEN.
+//
+// Bis 1.95.19 gab es genau eine WebView; der Kontowechsel baute die Ansicht
+// per recreate() neu auf und die verlassene Welt stand still, bis man
+// zurueckwechselte. Jetzt haelt die (weiterhin einzige, singleTask) Ansicht
+// je geoeffneter Welt eine eigene WebView - mit eigenem Profil, eigener
+// Bruecke, eigenem GodBot. Alle WebViews liegen GESTAPELT im selben Rahmen,
+// jede in voller Groesse und sichtbar (VISIBLE, im Fenster). Die angezeigte
+// liegt oben, die anderen darunter.
+//
+// Warum das die Drosselung umgeht: Chromium entscheidet ueber die Sichtbarkeit
+// einer WebView nach View-Sichtbarkeit, Fenstersichtbarkeit und onPause() -
+// nicht danach, ob etwas davor liegt. Genau darauf beruht seit Wochen der
+// Dimm-Modus: die schwarze Abdeckung liegt VOR der WebView, und sie laeuft im
+// vollen Takt (Protokoll "gedimmt - läuft im vollen Takt weiter", bestaetigt
+// ueber die Anfragezahlen). Eine verdeckte Welt ist fuer Chromium dasselbe
+// wie eine abgedeckte: gezeichnet, sichtbar, ungedrosselt.
+//
+// Grenze, ehrlich: Das gilt, solange die Ansicht selbst vorn ist (oder
+// gedimmt). Liegt eine andere App davor oder ist der Bildschirm aus, ist das
+// ganze Fenster unsichtbar - dann drosselt Chromium ALLE Welten, wie bisher
+// die eine. Termine weckt der Dienst dann wie gehabt ueber das kleine
+// Fenster des leisen Weckens, jetzt eben je Welt.
+//
+// Ob die Annahme auf dem Geraet traegt, wird nicht geglaubt, sondern
+// gemessen: GodBot ruft alle 5 s Odin.lebt(). Jede Welt zaehlt das und
+// schreibt alle 10 Minuten eine Takt-Zeile (erwartet ~120). Eine verdeckte
+// Welt mit deutlich weniger bei vorn liegender Ansicht ist ein Befund.
 public class GameWebViewActivity extends Activity {
- private WebView webView;
  private TextView statusView;
- // 1.95.8: Spielseite soll die App nicht an festen Brueckennamen erkennen.
- // OdinNative heisst dort bei jedem Start zufaellig; Loader bekommt den Namen.
- private final String bridgeName="b"+Long.toHexString((long)(Math.random()*0x3fffffffffffffL))+Integer.toHexString((int)(Math.random()*0xffff));
- // Teile fuer den Bootstrap in Ladereihenfolge: GodBot (aus der APK), dann
- // je eingeschaltetem Zusatzskript dessen @require und das Skript selbst.
- // Ausgeliefert unter /__odin_t_<i>.js.
- private volatile java.util.List<byte[]> godbotTeile=new java.util.ArrayList<>();
- private boolean godbotGemeldet=false;
+ private TextView kopfTitel;
  // Teamliste der Zusatzskripte: fuenf Minuten gueltig. Vorher kostete jeder
  // Seitenaufbau eine Supabase-Anfrage.
  private static org.json.JSONArray skriptListe=null;
  private static long skriptListeZeit=0L;
- private String supaUrl="",supaKey="",supaToken="",supaTeam="",gameAccountId="";
+ private String supaUrl="",supaKey="",supaToken="",supaTeam="";
  private LinearLayout rootLayout;
- // Welche Ansicht gehoert zu welchem Account - verhindert Doppelstarts.
- // 1.95.17: LinkedHashMap haelt die Einfuegereihenfolge - so laesst sich beim
- // Oeffnen die AELTESTE Welt schliessen, wenn mehr als 2 aktiv waeren.
+ // Stapel der Welten: alle WebViews liegen hier uebereinander.
+ private FrameLayout weltRahmen;
+ // Konto -> Ansicht. Seit 1.96.0 zeigen alle Konten auf DIESELBE Ansicht
+ // (die die Welt haelt). Der Dienst fragt darueber ab, ob ein Konto offen ist.
  private static final java.util.Map<String,GameWebViewActivity> OFFEN=new java.util.LinkedHashMap<>();
- private static final int MAX_AKTIVE_WELTEN=2;
+ // Die eine lebende Ansicht. Entsteht doch eine zweite (Prozess-Neuaufbau,
+ // Fremdstart), reicht sie ihr Intent hierher weiter und beendet sich.
+ private static volatile GameWebViewActivity HOST=null;
+ // Welten dieser Ansicht, Einfuegereihenfolge = Oeffnungsreihenfolge.
+ private final java.util.LinkedHashMap<String,Welt> WELTEN=new java.util.LinkedHashMap<>();
+ private volatile Welt aktiv=null;
+ // Hoechstens so viele Welten gleichzeitig (Speicher). Standard 4 = alle
+ // Welten des Nutzers (de256-de259). Ueber odin_svc/max_welten aenderbar.
+ private static final int MAX_WELTEN_STANDARD=4;
  private FrameLayout dimRahmen;
  private android.view.View dimDecke;
- // Nur wenn die Ansicht auch WIRKLICH vorn liegt, wird die WebView gerendert.
+ // Nur wenn die Ansicht auch WIRKLICH vorn liegt, werden die WebViews gerendert.
  // Ohne das koennte der Dimm-Modus "aktiv" melden, waehrend eine andere App
  // davor liegt und Chromium laengst drosselt.
  private volatile boolean imVordergrund=false;
+ private Welt weltVon(String konto){
+  synchronized(WELTEN){ return WELTEN.get(konto==null?"":konto); }
+ }
+ private java.util.List<Welt> alleWelten(){
+  synchronized(WELTEN){ return new java.util.ArrayList<>(WELTEN.values()); }
+ }
+ private static GameWebViewActivity hostFuer(String konto){
+  synchronized(OFFEN){
+   GameWebViewActivity a=OFFEN.get(konto==null?"":konto);
+   return (a!=null&&!a.isFinishing()&&!a.isDestroyed()&&a.weltVon(konto)!=null)?a:null;
+  }
+ }
  // Laeuft fuer diesen Account gerade der Dimm-Modus, sichtbar und gerendert?
  // Der Dienst fragt das, bevor er weckt - im Dimm-Modus ist nichts zu tun.
+ // 1.96.0: gilt fuer JEDE Welt der Ansicht, nicht nur die angezeigte - die
+ // Abdeckung liegt ueber dem ganzen Stapel.
  static boolean dimmLaeuft(String accountId){
   try{
-   GameWebViewActivity a=OFFEN.get(accountId==null?"":accountId);
-   return a!=null&&!a.isFinishing()&&a.dimDecke!=null&&a.imVordergrund;
+   GameWebViewActivity a=hostFuer(accountId);
+   if(a==null||a.dimDecke==null||!a.imVordergrund)return false;
+   Welt w=a.weltVon(accountId);
+   return w!=null&&!OdinFloat.active(w.gameAccountId);
   }catch(Exception e){ return false; }
  }
- // Laeuft die Seite dieses Accounts gerade OHNE Drosselung? Genau drei Faelle
- // erfuellen das, und alle drei haben dieselbe Ursache: die WebView wird
- // tatsaechlich gezeichnet.
- //   1. Dimm-Modus  - Abdeckung liegt vorn, Bildschirm an
- //   2. Ansicht vorn - offen und im Vordergrund
- //   3. schwebendes Fenster UND Bildschirm an - ein Overlay bei dunklem
- //      Bildschirm wird nicht gezeichnet und zaehlt deshalb NICHT
- // Liegt IRGENDEINE Spielansicht vorn? Dafuer reicht ein Blick in die Liste
- // der offenen Ansichten - den Vordergrund einer fremden App kann eine App
- // ohne Nutzungsdaten-Berechtigung nicht abfragen.
+ // Liegt IRGENDEINE Spielansicht vorn? Den Vordergrund einer fremden App
+ // kann eine App ohne Nutzungsdaten-Berechtigung nicht abfragen.
  static boolean imVordergrundIrgendwo(){
-  try{
-   for(GameWebViewActivity a:OFFEN.values())
-    if(a!=null&&!a.isFinishing()&&a.imVordergrund)return true;
-  }catch(Exception ignored){}
-  return false;
+  GameWebViewActivity h=HOST;
+  return h!=null&&!h.isFinishing()&&h.imVordergrund;
  }
+ // Laeuft die Seite dieses Accounts gerade OHNE Drosselung? Alle Faelle haben
+ // dieselbe Ursache: die WebView wird tatsaechlich gezeichnet.
+ //   1. Ansicht vorn (gedimmt oder nicht) - seit 1.96.0 fuer ALLE ihre
+ //      Welten, auch die verdeckten im Stapel
+ //   2. schwebendes Fenster UND Bildschirm an - ein Overlay bei dunklem
+ //      Bildschirm wird nicht gezeichnet und zaehlt deshalb NICHT
  static boolean laeuftUngedrosselt(Context c,String accountId){
   try{
    String kt=accountId==null?"":accountId;
-   if(dimmLaeuft(kt))return true;
-   GameWebViewActivity a=OFFEN.get(kt);
-   if(a!=null&&!a.isFinishing()&&a.imVordergrund)return true;
    if(OdinFloat.active(kt)){
     android.os.PowerManager pm=(android.os.PowerManager)c.getSystemService(Context.POWER_SERVICE);
-    if(pm!=null&&pm.isInteractive())return true;
+    return pm!=null&&pm.isInteractive();
    }
+   GameWebViewActivity a=hostFuer(kt);
+   if(a!=null&&a.imVordergrund)return true;
   }catch(Exception ignored){}
   return false;
  }
@@ -2637,26 +2673,6 @@ public class GameWebViewActivity extends Activity {
   catch(Exception e){ return false; }
  }
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
- // Vollstaendiges Protokoll: die Statuszeile ist einzeilig und schneidet lange
- // Fehlermeldungen ab, deshalb wird alles mitgeschrieben und ist kopierbar.
- private final StringBuilder statusLog=new StringBuilder();
- void setStatus(String msg){
-  synchronized(statusLog){
-   if(statusLog.length()==0)statusLog.append("Odin APK ").append(apkVersion()).append('\n');
-   statusLog.append('[').append(new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY)
-     .format(new java.util.Date())).append("] ").append(msg).append('\n');
-  }
-  runOnUiThread(()->{if(statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+msg);});
-  android.util.Log.i("ODIN_GODBOT",msg);
-  // 1.86.0: "kein Fehler" ist kein Fehler.
-  String stufe = ((msg.contains("Fehler")&&!msg.contains("kein Fehler"))||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
-               : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
-  OdinLog.schreib(this,kopfName+"#"+instanz,stufe,msg);
-  // Alles wandert nach Odin, aber gebuendelt: einzelne Anfragen je Meldung
-  // waeren zu viele. Die Warteschlange wird alle 30 s oder ab 25 Eintraegen
-  // in einem Rutsch geschickt.
-  ereignisMelden(stufe,bereichVon(msg),msg);
- }
  private static String bereichVon(String m){
   if(m.contains("Anmeldung"))return "anmeldung";
   if(m.contains("Wecker"))return "wecker";
@@ -2666,14 +2682,14 @@ public class GameWebViewActivity extends Activity {
  }
  private final org.json.JSONArray warteschlange=new org.json.JSONArray();
  private long letzterVersand=0L;
- private void ereignisMelden(String stufe,String bereich,String text){
+ private void ereignisMelden(String stufe,String bereich,String text,String konto,String instanz){
   if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return;
   boolean jetztSenden;
   synchronized(warteschlange){
    try{
     org.json.JSONObject r=new org.json.JSONObject();
     r.put("team_id",supaTeam);
-    if(!gameAccountId.isEmpty())r.put("account_id",gameAccountId);
+    if(konto!=null&&!konto.isEmpty())r.put("account_id",konto);
     r.put("level",stufe); r.put("bereich",bereich+"/"+instanz);
     // Sehr lange Meldungen kuerzen, damit einzelne Zeilen die Tabelle nicht
     // aufblaehen - dieselbe Falle wie beim 288 KB grossen tw_console_log.
@@ -2699,10 +2715,6 @@ public class GameWebViewActivity extends Activity {
    catch(Exception e){ android.util.Log.w("ODIN_EVENT","melden",e); }
   }).start();
  }
- private String kopfName="";
- // Kurze Kennung je Ansicht. Ohne sie laesst sich bei doppelten Zeilen nicht
- // sagen, ob zwei Instanzen laufen oder eine zweimal meldet.
- private final String instanz=Integer.toHexString(System.identityHashCode(this)).substring(0,4);
  // Vollstaendiges Protokoll ansehen, kopieren oder leeren.
  private void protokollZeigen(){
   String text=OdinLog.lesen(this);
@@ -2726,8 +2738,8 @@ public class GameWebViewActivity extends Activity {
    .show();
  }
  private void copyStatusLog(){
-  String text;
-  synchronized(statusLog){ text=statusLog.toString(); }
+  String text; Welt aw=aktiv; if(aw==null)return;
+  synchronized(aw.statusLog){ text=aw.statusLog.toString(); }
   try{
    android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
    cm.setPrimaryClip(android.content.ClipData.newPlainText("Odin GodBot-Protokoll",text));
@@ -2735,169 +2747,221 @@ public class GameWebViewActivity extends Activity {
      android.widget.Toast.LENGTH_SHORT).show();
   }catch(Exception e){android.util.Log.e("ODIN_GODBOT","clipboard",e);}
  }
- @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this); weckerModus();
-  String activeName=getIntent().getStringExtra("username"); if(activeName==null||activeName.isEmpty())activeName=getIntent().getStringExtra("accountId"); if(activeName==null)activeName="";
-  kopfName=activeName;
-  String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
-  // Nur EINE Spielansicht je Account. Zwei Instanzen teilen sich dasselbe
-  // WebView-Profil und damit denselben localStorage; GodBots eigene
-  // Mehrfachstart-Sperre erkennt das und legt die Oberflaeche still.
-  String wer=nz(getIntent().getStringExtra("accountId"));
-  GameWebViewActivity vorhanden=OFFEN.get(wer);
-  if(vorhanden!=null&&vorhanden!=this&&!vorhanden.isFinishing()){
-   android.util.Log.i("ODIN_GODBOT","zweite Ansicht fuer "+wer+" verworfen");
-   // Auch ins oertliche Protokoll: bisher ging diese Zeile nur nach Supabase
-   // und war beim Auswerten der Geraeteprotokolle unsichtbar. Ob die Sperre
-   // greift oder daneben, liess sich so gar nicht erkennen.
-   OdinLog.schreib(this,wer,"WICHTIG",
-     "zweite Ansicht verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
-   OdinService.protokoll(this,"WICHTIG","doppelstart",
-     "zweite Ansicht verworfen (bestehend #"+vorhanden.instanz+", neu #"+instanz+")");
-   // 1.91.0: die bestehende Ansicht auch ZEIGEN - sonst endet das Antippen
-   // mit gar keiner sichtbaren Welt.
-   try{
-    if(OdinFloat.active(wer))vorhanden.holeAusFenster(false);
-    aufgabeNachVorn(this,vorhanden.getTaskId());
-   }catch(Exception ig){}
+ // Ohne Welt (sehr frueh) geht die Meldung nur ins Systemprotokoll.
+ void setStatus(String msg){
+  Welt w=aktiv;
+  if(w!=null){ w.setStatus(msg); return; }
+  android.util.Log.i("ODIN_GODBOT",msg);
+  try{ OdinLog.schreib(this,"-#"+instanzAnsicht,"info",msg); }catch(Exception ignored){}
+ }
+ private final String instanzAnsicht=Integer.toHexString(System.identityHashCode(this)).substring(0,4);
+ @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
+  // 1.96.0: Es gibt genau EINE Spielansicht. Lebt schon eine andere, bekommt
+  // sie das Intent (oeffnet/zeigt dort die Welt), diese hier verschwindet.
+  GameWebViewActivity h=HOST;
+  if(h!=null&&h!=this&&!h.isFinishing()&&!h.isDestroyed()){
+   final Intent weiter=new Intent(getIntent());
+   OdinService.protokoll(this,"WICHTIG","doppelstart","zweite Spielansicht #"+instanzAnsicht+" -> an #"+h.instanzAnsicht+" weitergereicht");
+   try{ h.runOnUiThread(()->{ try{ h.intentAnnehmen(weiter); }catch(Exception ig){} }); aufgabeNachVorn(this,h.getTaskId()); }catch(Exception ig){}
    finish(); return;
   }
-  // 1.91.0 - VERWAISTE SCHWEBEANSICHT. Die Ansicht einer Welt wurde beendet,
-  // ihre WebView lebte aber im Schwebesymbol weiter - samt GodBot. Die
-  // Sperre oben sah keine lebende Ansicht, und beim Antippen entstand eine
-  // zweite (25.09., 14:17: #2019 -> #f9f1, #ebfa -> #7be6, #e664 -> #b791).
-  // Zwei GodBots in einer Welt darf es nicht geben: die alte wird beendet.
-  if(OdinFloat.active(wer)){
-   try{
-    WebView alt=OdinFloat.hide(wer);
-    if(alt!=null){ alt.stopLoading(); alt.loadUrl("about:blank"); alt.destroy(); }
-   }catch(Exception ig){}
-   OdinService.protokoll(this,"WICHTIG","doppelstart",
-     "verwaiste Schwebeansicht beendet, neu #"+instanz);
-  }
-  // Wer hier eine bestehende Instanz ersetzt, ohne dass die Sperre oben
-  // gegriffen hat, ist der Fall, den das Protokoll vom 20.09. zeigt:
-  // #af2b -> #d35a -> #cf8a, jedes Mal ein frisches onCreate. Festhalten,
-  // welche Instanz verdraengt wurde und in welchem Zustand sie war.
-  GameWebViewActivity vorher=OFFEN.get(wer);
-  if(vorher!=null&&vorher!=this){
-   OdinLog.schreib(this,wer,"WICHTIG","Ansicht ersetzt: #"+vorher.instanz
-     +" -> #"+instanz+" (alte beendet sich: "+vorher.isFinishing()+")");
-  }
-  // 1.95.18: hoechstens MAX_AKTIVE_WELTEN gleichzeitig. Opfer werden UNTER dem
-  // Lock nur ausgewaehlt und aus OFFEN genommen; finish() laeuft DANACH,
-  // ausserhalb des Locks und je auf dem eigenen UI-Thread. (In 1.95.17 lief
-  // finish() im Lock und konnte die gerade aktive Welt mitten im Wechsel
-  // beenden - das fror die App ein.) Nie die gerade geoeffnete Welt (this),
-  // nie eine, die gerade ein Konto fuehrt.
-  java.util.List<GameWebViewActivity> schliessen=new java.util.ArrayList<>();
-  synchronized(OFFEN){
-   OFFEN.remove(wer); OFFEN.put(wer,this);
-   while(OFFEN.size()-schliessen.size()>MAX_AKTIVE_WELTEN){
-    String opfer=null;
-    for(String k:OFFEN.keySet()){ GameWebViewActivity a=OFFEN.get(k);
-     if(a!=null&&a!=this&&!schliessen.contains(a)&&!OdinService.haeltLease(k)){ opfer=k; break; } }
-    if(opfer==null)break; // nur noch geschuetzte uebrig
-    GameWebViewActivity a=OFFEN.get(opfer);
-    if(a!=null)schliessen.add(a);
-    else OFFEN.remove(opfer);
-   }
-  }
-  for(GameWebViewActivity a:schliessen){
-   try{ OdinLog.schreib(this,"-","info","Aelteste Welt geschlossen (max "+MAX_AKTIVE_WELTEN+" aktiv): #"+a.instanz); }catch(Exception ig){}
-   final GameWebViewActivity aa=a;
-   try{ aa.runOnUiThread(()->{ try{ aa.finish(); }catch(Exception ig){} }); }catch(Exception ig){}
-  }
+  HOST=this;
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
   supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
   // Vom Wecker gestartet traegt das Intent keine Sitzung - dann aus der
   // dauerhaften Ablage holen, sonst laeuft die Ansicht ohne Abgleich.
   if(supaUrl.isEmpty()||supaToken.isEmpty())sitzungNachladen();
-  gameAccountId=nz(getIntent().getStringExtra("accountId"));
+  String accountsJson=getIntent().getStringExtra("accountsJson"); if(accountsJson==null)accountsJson="[]";
   LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(0xFFFFFFFF);
-  root.addView(buildHeader(activeName),new LinearLayout.LayoutParams(-1,-2));
-  webView=new WebView(this);
-  profilSetzen(webView,gameAccountId);
-  root.addView(webView,new LinearLayout.LayoutParams(-1,0,1f));
-  root.addView(buildFooter(accountsJson,activeName),new LinearLayout.LayoutParams(-1,-2));
+  root.addView(buildHeader(""),new LinearLayout.LayoutParams(-1,-2));
+  weltRahmen=new FrameLayout(this); weltRahmen.setBackgroundColor(0xFFFFFFFF);
+  root.addView(weltRahmen,new LinearLayout.LayoutParams(-1,0,1f));
+  root.addView(buildFooter(accountsJson,""),new LinearLayout.LayoutParams(-1,-2));
   rootLayout=root;
   dimRahmen=new FrameLayout(this);
   dimRahmen.addView(root,new FrameLayout.LayoutParams(-1,-1));
   setContentView(dimRahmen);
-  // 1.95.15: Ladescreen in DIESER (neuen) Welt - nicht in der verlassenen.
-  // Die neue Ansicht kommt in den Vordergrund und laedt die Spielseite
-  // asynchron (~20 s). Solange zeigt eine Schicht "Lädt <Welt> …"; sie
-  // verschwindet, wenn die Seite fertig ist (onPageFinished -> ladeAus()).
-  // So haengt der Indikator am Laden selbst, nicht am Lebenszyklus einer
-  // anderen Ansicht - das war die Fehlerquelle der Versuche 1.95.9-1.95.14.
-  ladeSchichtZeigen(nz(getIntent().getStringExtra("world")));
-  wieMobilerBrowser(webView);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
- // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
- @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
- @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
- // 1.94.15: window.open aus der Spielansicht (Export -> twforge.net) im
- // Browser oeffnen. Mit setSupportMultipleWindows(true), aber ohne
- // onCreateWindow ging window.open still ins Leere - die Importseite
- // oeffnete sich in der App nie.
- @Override public boolean onCreateWindow(WebView v,boolean dialog,boolean user,android.os.Message msg){
+  // Takt- und Speichermessung (siehe Kopfkommentar): alle 10 Minuten.
+  taktHandler.postDelayed(taktMessung,600_000L);
+  intentAnnehmen(getIntent());
+ }
+ // EINE Stelle fuer jedes eingehende Intent (onCreate, onNewIntent, weiter-
+ // gereichte Zweitansicht): Sitzung auffrischen, Welt oeffnen oder nach vorn
+ // holen, Wecker-/Dimm-Wunsch ausfuehren. Kein Umetikettieren mehr moeglich
+ // (1.94.19): jedes Konto hat seine eigene WebView, ein Start fuer Konto B
+ // landet in der Welt von B - nie in der WebView von A.
+ private void intentAnnehmen(Intent in){
+  setIntent(in);
+  try{ String kj=in.getStringExtra("accountsJson"); if(kj!=null&&kj.length()>2)LETZTE_KONTEN=kj; }catch(Exception ig){}
+  String u=nz(in.getStringExtra("supaUrl")), k=nz(in.getStringExtra("supaKey"));
+  String t=nz(in.getStringExtra("supaToken")), tm=nz(in.getStringExtra("supaTeam"));
+  // Wecker und Dimm-Waechter starten ohne Sitzung im Intent - dann nie mit
+  // leeren Werten ueberschreiben (19.09.: sechs Stunden ohne Abgleich).
+  if(!u.isEmpty()&&!t.isEmpty()){ supaUrl=u; supaKey=k; supaToken=t; supaTeam=tm; }
+  else sitzungNachladen();
+  String id=nz(in.getStringExtra("accountId"));
+  String nm=nz(in.getStringExtra("username"));
+  String welt=nz(in.getStringExtra("world"));
+  // Wecker/Dimm-Intents tragen nur die Konto-ID: Welt und Name aus der
+  // Kontenliste der Fussleiste ergaenzen.
+  if(welt.isEmpty()||nm.isEmpty()){
+   String[] ko=kontoAusListe(id);
+   if(ko!=null){ if(welt.isEmpty())welt=ko[1]; if(nm.isEmpty())nm=ko[0]; }
+  }
+  Welt w=weltVon(id);
+  if(w==null&&id.isEmpty()&&aktiv!=null)w=aktiv;   // Start ohne Konto: was offen ist
+  if(w==null)w=weltOeffnen(id,nm,welt);
+  if(w!=null)weltZeigen(w);
+  weckerModus();
+ }
+ // Name und Welt eines Kontos aus der zuletzt bekannten Kontenliste.
+ private static String[] kontoAusListe(String id){
+  if(id==null||id.isEmpty())return null;
   try{
-   WebView t=new WebView(v.getContext());
-   t.setWebViewClient(new WebViewClient(){
-    boolean weg=false;
-    void raus(WebView w,String u){
-     if(weg||u==null||u.isEmpty()||"about:blank".equals(u))return;
-     weg=true;
-     try{
-      startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-      OdinService.protokoll(GameWebViewActivity.this,"info","app","extern geöffnet: "+u);
-     }catch(Exception e){ OdinService.protokoll(GameWebViewActivity.this,"FEHLER","app","extern öffnen gescheitert: "+u); }
-     try{ w.stopLoading(); w.destroy(); }catch(Exception e){}
+   org.json.JSONArray arr=new org.json.JSONArray(LETZTE_KONTEN.isEmpty()?"[]":LETZTE_KONTEN);
+   for(int i=0;i<arr.length();i++){
+    org.json.JSONObject o=arr.optJSONObject(i); if(o==null)continue;
+    if(id.equals(o.optString("id",""))){
+     String user=o.optString("username","");
+     return new String[]{user.isEmpty()?o.optString("name",""):user,o.optString("world","")};
     }
-    @Override public boolean shouldOverrideUrlLoading(WebView w,WebResourceRequest r){ raus(w,r.getUrl().toString()); return true; }
-    @Override public void onPageStarted(WebView w,String u,android.graphics.Bitmap f){ raus(w,u); }
-   });
-   ((WebView.WebViewTransport)msg.obj).setWebView(t);
-   msg.sendToTarget();
-   return true;
-  }catch(Exception e){ return false; }
+   }
+  }catch(Exception ignored){}
+  return null;
  }
- // Seitenwechsel-Sperre (1.81.0): GodBot haelt einen Seitenwechsel an, den
- // der Nutzer waehrend eines laufenden Vorgangs ausgeloest hat. Statt der
- // nackten Browser-Rueckfrage ein eigener Dialog mit klaren Knoepfen.
- // Wegtippen oder Zurueck = hierbleiben.
- @Override public boolean onJsBeforeUnload(WebView v,String u,String msg,JsResult res){
-  runOnUiThread(()->{
-   try{
-    new android.app.AlertDialog.Builder(GameWebViewActivity.this)
-     .setTitle("GodBot arbeitet gerade")
-     .setMessage((msg==null||msg.trim().isEmpty())?"Ein Seitenwechsel jetzt bricht den laufenden Vorgang ab.":msg)
-     .setPositiveButton("Hierbleiben",(d,w)->res.cancel())
-     .setNegativeButton("Trotzdem wechseln",(d,w)->res.confirm())
-     .setOnCancelListener(d->res.cancel())
-     .show();
-   }catch(Exception e){ res.confirm(); }
-  });
-  return true;
+ private int maxWelten(){
+  try{ int m=getSharedPreferences("odin_svc",MODE_PRIVATE).getInt("max_welten",MAX_WELTEN_STANDARD); return Math.max(1,Math.min(6,m)); }
+  catch(Exception e){ return MAX_WELTEN_STANDARD; }
  }
- @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
- @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
- @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
- @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
-   // 1.95.15: Spielseite steht - Ladescreen weg (nicht auf der Anmelde-/
-   // Zwischenseite, nur wenn wir in der Welt sind).
-   try{ if(u!=null&&u.contains("/game.php"))wechselIndikatorWeg(); }catch(Exception ig){}
-  }});String welt=normWelt(nz(getIntent().getStringExtra("world")));
-  String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
-  // Direkt in die Welt: /page/play/<welt> fuehrt nach der Anmeldung dorthin.
-  String ziel = !welt.isEmpty() ? "https://www.die-staemme.de/page/play/"+welt
-              : (lastGame.contains("die-staemme.de") ? lastGame : "https://www.die-staemme.de/");
-  webView.loadUrl(ziel);}
+ // Neue Welt anlegen: eigene WebView unten in den Stapel, laden. Sind schon
+ // maxWelten() offen, wird die am laengsten nicht angezeigte geschlossen
+ // (nie die angezeigte). Deren Termine weckt der Dienst spaeter neu.
+ private Welt weltOeffnen(String id,String name,String welt){
+  java.util.List<Welt> zuViel=new java.util.ArrayList<>();
+  synchronized(WELTEN){
+   java.util.List<Welt> l=new java.util.ArrayList<>(WELTEN.values());
+   java.util.Collections.sort(l,(x,y)->Long.compare(x.zuletztGezeigt,y.zuletztGezeigt));
+   int n=WELTEN.size();
+   for(Welt x:l){ if(n<maxWelten())break; if(x==aktiv)continue; zuViel.add(x); n--; }
+  }
+  for(Welt x:zuViel)weltSchliessen(x,"höchstens "+maxWelten()+" Welten gleichzeitig - am längsten nicht angezeigt");
+  // 1.91.0 - VERWAISTE SCHWEBEANSICHT: lebt fuer dieses Konto noch eine
+  // WebView im Schwebesymbol (ohne Welt), wird sie beendet - zwei GodBots in
+  // einer Welt darf es nicht geben.
+  if(OdinFloat.active(id)){
+   try{ WebView alt=OdinFloat.hide(id);
+        if(alt!=null){ alt.stopLoading(); alt.loadUrl("about:blank"); alt.destroy(); } }catch(Exception ig){}
+   OdinService.protokoll(this,"WICHTIG","doppelstart","verwaiste Schwebeansicht beendet");
+  }
+  Welt w=new Welt(id,name,welt);
+  synchronized(WELTEN){ WELTEN.put(w.gameAccountId,w); }
+  synchronized(OFFEN){ OFFEN.put(w.gameAccountId,this); }
+  w.webViewBauen();
+  weltRahmen.addView(w.webView,0,new FrameLayout.LayoutParams(-1,-1));
+  w.laden();
+  w.setStatus("Welt geöffnet ("+alleWelten().size()+" offen)");
+  return w;
+ }
+ // Welt nach vorn: ihre WebView an die Spitze des Stapels. Die anderen
+ // bleiben VISIBLE darunter liegen und laufen weiter. Kein Neuladen.
+ private void weltZeigen(Welt w){
+  if(w==null||w.geschlossen)return;
+  Welt vorher=aktiv;
+  aktiv=w; w.zuletztGezeigt=System.currentTimeMillis();
+  try{
+   if(w.webView!=null&&w.webView.getParent()==weltRahmen){
+    w.webView.bringToFront();
+    w.webView.setVisibility(android.view.View.VISIBLE);
+    w.webView.requestFocus();
+   }
+  }catch(Exception ignored){}
+  if(kopfTitel!=null)kopfTitel.setText((w.kopfName.isEmpty()?"Die Stämme":w.kopfName)+" ⌄");
+  if(statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+w.letzterStatus);
+  if(leaseKnopf!=null)leaseKnopf.setVisibility(w.leaseGesperrt?android.view.View.VISIBLE:android.view.View.GONE);
+  // Leiste zeigt den Stand der angezeigten Welt (oder nichts, bis sie sich meldet).
+  if(godbotLeiste!=null)godbotLeiste.setVisibility(w.godbotStand!=null&&!w.leaseGesperrt?android.view.View.VISIBLE:android.view.View.GONE);
+  godbotLeisteZeichnen();
+  // Ladescreen gehoert zur Welt, die gerade laedt - nur zeigen, wenn die
+  // ANGEZEIGTE Welt noch nicht fertig ist.
+  // Nur in den ersten 40 s nach dem Laden - eine Welt, die auf der Anmelde-
+  // seite haengt, soll nicht bei jedem Zurueckkehren 40 s blockiert sein.
+  if(!w.geladen&&System.currentTimeMillis()-w.ladeStart<40_000L)ladeSchichtZeigen(w.weltName); else wechselIndikatorWeg();
+  try{ fussleisteFuellen(); }catch(Exception ig){}
+  if(vorher!=w&&vorher!=null)w.setStatus("angezeigt (vorher "+vorher.kurz()+" - läuft verdeckt weiter)");
+ }
+ // Welt ganz schliessen: WebView beenden (sonst liefe GodBot unsichtbar
+ // weiter), Geraete-Sperre freigeben. War sie angezeigt, kommt die zuletzt
+ // angezeigte andere nach vorn; gibt es keine mehr, schliesst die Ansicht.
+ private void weltSchliessen(Welt w,String grund){
+  if(w==null||w.geschlossen)return;
+  w.geschlossen=true;
+  w.setStatus("Welt geschlossen - "+grund);
+  synchronized(WELTEN){ WELTEN.remove(w.gameAccountId); }
+  synchronized(OFFEN){ if(OFFEN.get(w.gameAccountId)==this)OFFEN.remove(w.gameAccountId); }
+  try{ WebView f=OdinFloat.hide(w.gameAccountId); if(f!=null&&f!=w.webView){ f.stopLoading(); f.destroy(); } }catch(Exception ig){}
+  try{
+   WebView v=w.webView; w.webView=null;
+   if(v!=null){
+    if(v.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)v.getParent()).removeView(v);
+    v.stopLoading(); v.loadUrl("about:blank"); v.destroy();
+   }
+  }catch(Exception ig){}
+  final String k=w.gameAccountId; final Context app=getApplicationContext();
+  OdinService.WARTET.remove(k);
+  if(!k.isEmpty())new Thread(()->OdinService.leaseFreigeben(app,k)).start();
+  if(aktiv==w){
+   aktiv=null;
+   Welt naechste=null;
+   for(Welt x:alleWelten())if(naechste==null||x.zuletztGezeigt>naechste.zuletztGezeigt)naechste=x;
+   if(naechste!=null)weltZeigen(naechste);
+   else { try{ finishAndRemoveTask(); }catch(Exception e){ finish(); } return; }
+  }
+  try{ fussleisteFuellen(); }catch(Exception ig){}
+ }
+ // --- Takt- und Speichermessung (1.96.0) ----------------------------------
+ // Je Welt: wie oft hat GodBot in den letzten 10 Minuten Odin.lebt()
+ // gerufen? runJobScheduler laeuft alle 5 s -> ungedrosselt ~120. Dazu der
+ // Zustand, unter dem gemessen wurde. Nur Zeilen mit "Ansicht vorn" ueber das
+ // GANZE Intervall beweisen etwas ueber verdeckte Welten.
+ private final android.os.Handler taktHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+ private volatile boolean intervallImmerVorn=true;
+ private final Runnable taktMessung=new Runnable(){ @Override public void run(){
+  try{
+   long jetzt=System.currentTimeMillis();
+   boolean vornGanz=intervallImmerVorn&&imVordergrund;
+   String lage=!imVordergrund?"Ansicht im Hintergrund":(dimDecke!=null?"gedimmt":"Ansicht vorn");
+   if(imVordergrund&&!intervallImmerVorn)lage+=" (zwischendurch weg)";
+   for(Welt w:alleWelten()){
+    int n=w.lebtZaehler; w.lebtZaehler=0;
+    long min=Math.max(1,(jetzt-w.taktSeit)/60000L); w.taktSeit=jetzt;
+    int erwartet=(int)(min*12);
+    String wo=OdinFloat.active(w.gameAccountId)?"schwebt":(w==aktiv?"angezeigt":"verdeckt");
+    boolean befund=vornGanz&&"verdeckt".equals(wo)&&w.geladen&&!w.leaseGesperrt&&n<erwartet*3/4;
+    w.melde(befund?"WICHTIG":"info","Takt "+w.kurz()+": "+n+"/"+erwartet+" Lebenszeichen in "+min+" Min - "+wo+", "+lage
+      +(befund?" - VERDECKTE WELT GEDROSSELT":""));
+   }
+   android.app.ActivityManager am=(android.app.ActivityManager)getSystemService(Context.ACTIVITY_SERVICE);
+   android.app.ActivityManager.MemoryInfo mi=new android.app.ActivityManager.MemoryInfo(); am.getMemoryInfo(mi);
+   int anzahl=alleWelten().size();
+   setStatus("Speicher: frei "+(mi.availMem/1048576L)+" MB, App "+(android.os.Debug.getPss()/1024L)+" MB, "+anzahl+" Welt(en)"+(mi.lowMemory?" - KNAPP":""));
+   // Speicher knapp: die am laengsten nicht angezeigte Welt schliessen,
+   // bevor Android den ganzen Prozess (alle Welten) beendet.
+   if(mi.lowMemory&&anzahl>1){
+    Welt alt=null;
+    for(Welt w:alleWelten())if(w!=aktiv&&(alt==null||w.zuletztGezeigt<alt.zuletztGezeigt))alt=w;
+    if(alt!=null)weltSchliessen(alt,"Gerätespeicher knapp");
+   }
+  }catch(Exception e){ android.util.Log.w("ODIN","taktMessung",e); }
+  intervallImmerVorn=imVordergrund;
+  taktHandler.postDelayed(this,600_000L);
+ }};
  private android.view.View buildHeader(String activeName){
   // 1.95.0 - NEUES LAYOUT: dunkler Kopf im Stil der GodBot-Leiste,
   // flache runde Knoepfe statt grauer Systemknoepfe, Abstaende in dp.
   LinearLayout bar=new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL);
   bar.setBackgroundColor(UI_KOPF); bar.setPadding(dp(14),dp(8),dp(8),dp(8)); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
   LinearLayout col=new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
-  final TextView t=new TextView(this);
+  final TextView t=new TextView(this); kopfTitel=t;
   t.setText((activeName.isEmpty()?"Die Stämme":activeName)+" ⌄");
   t.setTextColor(0xFFFFFFFF); t.setTextSize(15f); t.setSingleLine(true);
   t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
@@ -2936,7 +3000,8 @@ public class GameWebViewActivity extends Activity {
   leaseKnopf.setBackground(knopfGrund(0xFF5A3A12,0xFFE0A030)); leaseKnopf.setTextColor(0xFFFFE2A8);
   leaseKnopf.setVisibility(android.view.View.GONE);
   leaseKnopf.setOnClickListener(x->{
-   final String k=gameAccountId; final Context app=getApplicationContext();
+   final Welt aw=aktiv; if(aw==null)return;
+   final String k=aw.gameAccountId; final Context app=getApplicationContext();
    setStatus("Übernehme GodBot von dem anderen Gerät ...");
    new Thread(()->{
     Object[] e=OdinService.leaseHolen(app,k,true);
@@ -2954,19 +3019,21 @@ public class GameWebViewActivity extends Activity {
    // Die WebView wandert in ein sichtbares Overlay. Nur so bleiben die
    // JS-Zeitgeber ungedrosselt - ein blosses moveTaskToBack() macht sie
    // unsichtbar und Chromium taktet sie auf etwa einmal pro Minute herunter.
-   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,this::ausSymbolSchliessen)){
+   final Welt aw=aktiv; if(aw==null||aw.webView==null)return;
+   // 1.96.0: nur die ANGEZEIGTE Welt schwebt; die anderen bleiben in der
+   // Ansicht (die dann im Hintergrund liegt und gedrosselt ist).
+   if(OdinFloat.show(this,aw.gameAccountId,aw.webView,aw::restoreFromFloat,aw::ausSymbolSchliessen)){
     setStatus("schwebt ("+OdinFloat.anzahl()+" aktiv) – Symbol antippen");
     moveTaskToBack(true);
    }else{
-    OdinBubble.setReturnTarget(GameWebViewActivity.class,gameAccountId);
+    OdinBubble.setReturnTarget(GameWebViewActivity.class,aw.gameAccountId);
     OdinBubble.show(this);
     setStatus("minimiert (gedrosselt)");
     moveTaskToBack(true);
    }
   });
   bar.addView(min,kopfKnopfLp());
-  // Kopf = Titelleiste + GodBot-Leiste. Als EIN Kind der Wurzel, damit die
-  // WebView weiter an Position 1 steht (holeAusFenster setzt sie dort ein).
+  // Kopf = Titelleiste + GodBot-Leiste als EIN Kind der Wurzel.
   LinearLayout kopf=new LinearLayout(this); kopf.setOrientation(LinearLayout.VERTICAL);
   kopf.addView(bar,new LinearLayout.LayoutParams(-1,-2));
   kopf.addView(buildGodBotLeiste(),new LinearLayout.LayoutParams(-1,-2));
@@ -2980,7 +3047,6 @@ public class GameWebViewActivity extends Activity {
  // alle 5 s und bei jeder Aenderung - die Leiste fragt nie nach.
  private HorizontalScrollView godbotLeiste;
  private final java.util.Map<String,TextView> godbotChips=new java.util.LinkedHashMap<>();
- private org.json.JSONObject godbotStand=null;
  private boolean godbotTickerAn=false;
  // Schluessel, Beschriftung, Name der Prozesssperre in GodBot (laeuft gerade)
  private static final String[][] GODBOT_BEREICHE={
@@ -3040,18 +3106,9 @@ public class GameWebViewActivity extends Activity {
   }catch(Exception ignored){}
  }
  private void godbotJs(String ausdruck,ValueCallback<String> cb){
-  final WebView w=webView; if(w==null)return;
+  final Welt aw=aktiv; final WebView w=aw==null?null:aw.webView; if(w==null)return;
   final String js="(function(){try{var S=window[Symbol.for('tw:k')],st=S&&S.steuerung;if(!st)return null;var GodBotSteuerung=st;return "+ausdruck+"}catch(e){return null}})()";
   runOnUiThread(()->{ try{ w.evaluateJavascript(js,cb); }catch(Exception ignored){} });
- }
- private void godbotStandEmpfangen(String json){
-  try{ godbotStand=new org.json.JSONObject(json); }catch(Exception e){ return; }
-  runOnUiThread(()->{
-   if(godbotLeiste!=null&&godbotLeiste.getVisibility()!=android.view.View.VISIBLE)
-    godbotLeiste.setVisibility(android.view.View.VISIBLE);
-   godbotLeisteZeichnen();
-   if(!godbotTickerAn&&godbotLeiste!=null){ godbotTickerAn=true; godbotTicker(); }
-  });
  }
  // Restzeiten laufen nativ weiter, auch wenn GodBot gerade gedrosselt ist.
  private void godbotTicker(){
@@ -3059,7 +3116,7 @@ public class GameWebViewActivity extends Activity {
   godbotLeiste.postDelayed(()->{ godbotLeisteZeichnen(); godbotTicker(); },15000L);
  }
  private void godbotLeisteZeichnen(){
-  org.json.JSONObject st=godbotStand; if(st==null)return;
+  Welt aw=aktiv; org.json.JSONObject st=aw==null?null:aw.godbotStand; if(st==null)return;
   org.json.JSONObject sch=st.optJSONObject("schalter"), nx=st.optJSONObject("naechst"), pr=st.optJSONObject("probleme");
   String laeuft=st.optString("laeuft","");
   boolean bot=st.optBoolean("botschutz",false), hub=st.optBoolean("hubOffen",false);
@@ -3143,10 +3200,11 @@ public class GameWebViewActivity extends Activity {
     String nm=o.optString("name",""); if(nm.isEmpty())continue;
     String welt=o.optString("world","");
     final String kid=o.optString("id","");
-    boolean active=kid.isEmpty()?nm.equals(fussAktiv):kid.equals(gameAccountId);
+    Welt aw=aktiv;
+    boolean active=kid.isEmpty()?nm.equals(fussAktiv):(aw!=null&&kid.equals(aw.gameAccountId));
     boolean offen=false;
-    if(!kid.isEmpty()){ GameWebViewActivity a; synchronized(OFFEN){ a=OFFEN.get(kid); }
-     offen=a!=null&&!a.isFinishing()&&!a.isDestroyed(); }
+    // 1.96.0: gruener Punkt = Welt offen und laeuft (auch verdeckt).
+    if(!kid.isEmpty())offen=weltVon(kid)!=null;
     LinearLayout karte=new LinearLayout(this); karte.setOrientation(LinearLayout.VERTICAL);
     karte.setPadding(dp(12),dp(6),dp(12),dp(6)); karte.setMinimumHeight(dp(44));
     karte.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -3178,16 +3236,6 @@ public class GameWebViewActivity extends Activity {
   }catch(Exception e){Log.e("ODIN","footer",e);}
   fussleiste.removeAllViews(); fussleiste.addView(row);
  }
- // 1.87.0 - WELTEN WECHSELN UEBER DIE FUSSLEISTE.
- // Die verlassene Welt wandert vorher in ein kleines schwebendes Fenster
- // (wie beim leisen Wecken). Ohne das waere ihre WebView nicht mehr
- // gerendert, und Chromium drosselt ihre Zeitgeber auf etwa einmal je
- // Minute - Raubzug und Rausstellen dieser Welt kaemen zu spaet. Ohne
- // Overlay-Erlaubnis wird trotzdem gewechselt, das wird aber gesagt.
- // Die Zielwelt kommt ueber dieselbe Daten-URI wie aus dem Dashboard:
- // documentLaunchMode=intoExisting holt eine offene Ansicht nach vorn
- // (Anmeldung bleibt), sonst entsteht eine neue.
- private String wechselZiel=""; private long wechselAt=0L;
  // 1.95.9: Ein Kontowechsel laedt die Zielwelt neu - das dauert, und bis sie
  // vorn ist, reagiert die alte Ansicht nicht. Statt scheinbar eingefroren
  // zeigt eine Schicht mit Spinner "Wechsle zu ...", damit klar ist, dass
@@ -3202,7 +3250,13 @@ public class GameWebViewActivity extends Activity {
   final String w=normWelt(welt==null?"":welt);
   runOnUiThread(()->{
    try{
-    if(dimRahmen==null||wechselSchicht!=null)return;
+    if(weltRahmen==null)return;
+    // 1.96.0: Schicht liegt nur ueber dem Welten-Stapel, Kopf und Fussleiste
+    // bleiben bedienbar - man kann wegwechseln, waehrend eine Welt laedt.
+    if(wechselSchicht!=null){
+     if(ladeTextView!=null)ladeTextView.setText(w.isEmpty()?"Welt wird geladen …":("Lädt "+w+" …"));
+     wechselSchicht.bringToFront(); return;
+    }
     android.widget.FrameLayout o=new android.widget.FrameLayout(this);
     o.setClickable(true); o.setFocusable(true);
     o.setBackgroundColor(0xF20B1020);
@@ -3223,7 +3277,7 @@ public class GameWebViewActivity extends Activity {
     lp2.topMargin=8; t2.setLayoutParams(lp2);
     box.addView(sp); box.addView(t); box.addView(t2);
     o.addView(box,new android.widget.FrameLayout.LayoutParams(-2,-2,android.view.Gravity.CENTER));
-    dimRahmen.addView(o,new android.widget.FrameLayout.LayoutParams(-1,-1));
+    weltRahmen.addView(o,new android.widget.FrameLayout.LayoutParams(-1,-1));
     o.bringToFront(); o.setElevation(1000f);
     wechselSchicht=o;
     // Netz: falls onPageFinished ausbleibt, nach 40 s von selbst weg.
@@ -3233,138 +3287,50 @@ public class GameWebViewActivity extends Activity {
  }
  private void wechselIndikatorWeg(){
   runOnUiThread(()->{
-   try{ if(wechselSchicht!=null&&dimRahmen!=null)dimRahmen.removeView(wechselSchicht); }catch(Exception ig){}
+   try{ if(wechselSchicht!=null&&wechselSchicht.getParent() instanceof android.view.ViewGroup)
+          ((android.view.ViewGroup)wechselSchicht.getParent()).removeView(wechselSchicht); }catch(Exception ig){}
    wechselSchicht=null;
   });
  }
  // Holt alle Welten ausser 'ausser' aus ihren grossen Schwebesymbolen zurueck
- // in die eigene Ansicht (ohne sie nach vorn zu holen). Die kleinen Fenster
- // des leisen Weckens bleiben - sie arbeiten gerade einen Termin ab.
- static void schwebendeEinholen(String ausser){
-  java.util.List<GameWebViewActivity> l;
-  synchronized(OFFEN){ l=new java.util.ArrayList<>(OFFEN.values()); }
-  for(GameWebViewActivity a:l){
+ // in den Stapel (ohne sie anzuzeigen). Die kleinen Fenster des leisen
+ // Weckens bleiben - sie arbeiten gerade einen Termin ab.
+ private void schwebendeEinholen(String ausser){
+  for(Welt w:alleWelten()){
    try{
-    if(a==null||a.isFinishing())continue;
-    if(a.gameAccountId.equals(ausser==null?"":ausser))continue;
-    if(!OdinFloat.active(a.gameAccountId)||OdinFloat.klein(a.gameAccountId))continue;
-    a.runOnUiThread(()->a.holeAusFenster(false));
+    if(w.gameAccountId.equals(ausser==null?"":ausser))continue;
+    if(!OdinFloat.active(w.gameAccountId)||OdinFloat.klein(w.gameAccountId))continue;
+    w.holeAusFenster(false);
    }catch(Exception ignored){}
   }
  }
- // Ganz verdeckt = der Wechsel hat gegriffen. onPause reicht dafuer nicht:
- // auch ein gescheiterter Wechsel pausiert die Ansicht kurz.
- @Override protected void onStop(){ super.onStop(); wechselAt=0L; }
+ // 1.96.0 - WECHSEL OHNE NEUAUFBAU. Ist die Zielwelt schon offen, kommt ihre
+ // WebView nur an die Spitze des Stapels - sofort, ohne Neuladen, GodBot dort
+ // lief die ganze Zeit. Sonst wird sie als neue Welt geoeffnet (laedt unten im
+ // Stapel, Ladescreen bis die Spielseite steht). Die verlassene Welt bleibt
+ // im Stapel und laeuft verdeckt weiter.
  private void kontoWechseln(String id,String nm,String user,String welt,String alle){
-  if(id==null||id.isEmpty()||id.equals(gameAccountId))return;
-  final String ziel=nm+(welt.isEmpty()?"":" · "+welt);
-  // 1.95.15: Den Ladescreen zeigt jetzt die NEUE Welt selbst (ladeSchichtZeigen
-  // in deren onCreate), nicht mehr diese verlassene Ansicht. Frueher haftete
-  // die Schicht am Lebenszyklus dieser Ansicht und war nie zu sehen. Hier nur
-  // noch kurz Rueckmeldung, dann den Wechsel anstossen.
-  setStatus("Wechsel zu "+ziel);
-  kontoWechselnJetzt(id,nm,user,welt,alle,ziel);
- }
- private void kontoWechselnJetzt(String id,String nm,String user,String welt,String alle,String ziel){
-  // 1.90.0 - NUR DIE ANGETIPPTE WELT IST ZU SEHEN (Nutzerwunsch 25.09.).
-  // Kein Schwebesymbol mehr fuer die verlassene Welt, und Symbole, die von
-  // frueheren Wechseln oder "Minimieren" noch stehen, werden eingeholt.
-  // Folge, bewusst in Kauf genommen: die verlassenen Welten laufen im
-  // Hintergrund gedrosselt (Chromium). Termine (Raubzug, Rausstellen,
-  // Massenunterstuetzung) weckt der Dienst weiter ueber das kleine Fenster
-  // des leisen Weckens - das bleibt unangetastet, es schliesst sich nach
-  // getaner Arbeit selbst.
-  final boolean schwebt=false;
+  if(id==null||id.isEmpty())return;
+  Welt w=weltVon(id);
+  if(w!=null&&w==aktiv)return;
   schwebendeEinholen(id);
-  // 1.95.19 - VARIANTE A: Wechsel IN DERSELBEN Instanz, keine neue Activity.
-  // Das neue Intent wird gesetzt und die Activity per recreate() frisch
-  // aufgebaut: onCreate liest das Intent, baut WebView mit dem Profil des
-  // neuen Kontos und laedt die Zielwelt. Dieselbe Task, dieselbe Karte,
-  // sofort im Vordergrund. Kein moveTaskToFront, kein NEW_DOCUMENT - damit
-  // faellt die ganze Freeze-/Minimieren-Problematik weg.
-  try{
-   // Laeuft hier gerade ein Vorgang? Dann nicht hart neu aufbauen, sondern
-   // wie bei einem Seitenwechsel GodBot fragen (Seitenwechsel-Sperre greift
-   // ueber onJsBeforeUnload beim loadUrl unten ohnehin).
-   Intent i=new Intent(this,GameWebViewActivity.class);
-   i.setData(android.net.Uri.parse("odin://account/"+id));
-   i.putExtra("accountId",id); i.putExtra("username",user.isEmpty()?nm:user);
-   i.putExtra("world",welt); i.putExtra("accountsJson",alle==null?"[]":alle);
-   i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
-   i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
-   setIntent(i);
-   wechselZiel=ziel; wechselAt=System.currentTimeMillis();
-   // Alte WebView dieser Welt sauber beenden, bevor onCreate eine neue baut.
-   try{ if(webView!=null){ webView.stopLoading(); } }catch(Exception ig){}
-   recreate();
-  }catch(Exception e){
-   // Wechsel gescheitert: die Welt nicht im Symbol haengen lassen.
-   setStatus("Wechsel fehlgeschlagen: "+e.getMessage());
-   try{ if(schwebt)restoreFromFloat(); }catch(Exception ig){}
+  if(w==null){
+   setStatus("Wechsel zu "+nm+(welt.isEmpty()?"":" · "+welt)+" - wird geöffnet");
+   w=weltOeffnen(id,user.isEmpty()?nm:user,welt);
   }
+  weltZeigen(w);
  }
  private static String nz(String x){ return x==null?"":x; }
- // Leises Wecken: die Seite muss sichtbar sein, damit die Zeitgeber laufen -
- // aber nicht im Vordergrund. Benutzt du das Geraet gerade, wandert die
- // Ansicht ins schwebende Symbol statt dir dazwischenzufunken.
- // Rueckgabe false heisst: keine Ansicht vorhanden, der Dienst muss sie
- // regulaer starten.
+ // Leises Wecken: die Seite muss gezeichnet werden, damit die Zeitgeber
+ // laufen - aber nicht im Vordergrund. Rueckgabe false heisst: keine Welt
+ // offen, der Dienst muss die Ansicht regulaer starten.
  static boolean weckeLeise(String accountId){
-  GameWebViewActivity a=OFFEN.get(accountId==null?"":accountId);
-  if(a==null||a.isFinishing())return false;
-  a.runOnUiThread(a::leiseSchweben);
+  GameWebViewActivity a=hostFuer(accountId);
+  if(a==null)return false;
+  final Welt w=a.weltVon(accountId);
+  if(w==null)return false;
+  a.runOnUiThread(w::leiseSchweben);
   return true;
- }
- // Laeuft auf der Oberflaechenschleife der eigenen Ansicht - dadurch keine
- // Zugriffe auf Felder einer fremden Instanz.
- private Runnable leiseWaechter=null;
- // Das kleine Fenster schliesst sich selbst, sobald der Durchlauf fertig ist.
- // Erkannt am ausbleibenden Puls: GodBot schreibt bei jedem Arbeitsschritt in
- // den localStorage. Danach ist die Ansicht bis zum naechsten Termin
- // gedrosselt - bei einem Raubzug alle zwanzig Minuten vertretbar und
- // deutlich sparsamer.
- private void leiseSchliessenNachArbeit(){
-  final long start=System.currentTimeMillis();
-  letzteAktivitaet=start;
-  if(leiseWaechter!=null)getWindow().getDecorView().removeCallbacks(leiseWaechter);
-  leiseWaechter=new Runnable(){
-   @Override public void run(){
-    if(!OdinFloat.active(gameAccountId))return;   // von Hand zurueckgeholt
-    long jetzt=System.currentTimeMillis();
-    long lief=jetzt-start, still=jetzt-letzteAktivitaet;
-    if(lief>FENSTER_MAX_MS){ setStatus("Fenster: Höchstdauer erreicht"); holeAusFenster(false); return; }
-    if(lief>FENSTER_MIN_MS&&still>RUHE_MS){
-     setStatus("Fenster: fertig nach "+(lief/1000)+" s"); holeAusFenster(false); return;
-    }
-    getWindow().getDecorView().postDelayed(this,10_000L);
-   }
-  };
-  getWindow().getDecorView().postDelayed(leiseWaechter,10_000L);
- }
- private void leiseSchweben(){
-  try{
-   // Im Dimm-Modus ist die WebView bereits sichtbar und ungedrosselt. Das
-   // kleine Fenster wuerde sie aus der gedimmten Ansicht herausreissen und
-   // nach getaner Arbeit in die dann im Hintergrund liegende Activity
-   // zurueckhaengen - genau so brach die Nachtaktivitaet ab.
-   if(dimDecke!=null){ setStatus("Termin - Dimm-Modus läuft, nichts nötig"); return; }
-   // Und genauso, wenn die Ansicht einfach offen vor einem liegt: dann ist
-   // die WebView schon gerendert und ungedrosselt. Das kleine Fenster riss
-   // sie aus der offenen Ansicht heraus und haengte sie danach zurueck -
-   // fuer den Benutzer ein Mini-Fenster, das ueber der laufenden App
-   // aufpoppt, obwohl er direkt davor sitzt.
-   if(imVordergrund){ setStatus("Termin - Ansicht ist offen, nichts nötig"); return; }
-   if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
-   if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
-   // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
-   // gerendert wird. Groesse spielt fuer die Drosselung keine Rolle.
-   if(OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN,this::ausSymbolSchliessen)){
-    setStatus("Termin - kleines Fenster, Gerät nicht gestört");
-    leiseSchliessenNachArbeit();
-   }
-   else
-    setStatus("Termin - Symbol nicht möglich");
-  }catch(Exception e){ Log.w("ODIN_GODBOT","leiseSchweben",e); }
  }
  // In der Datenbank steht die Welt oft nur als Zahl ("256"). Die Spielseite
  // erwartet aber den vollen Namen ("de256") - /page/play/256 antwortet mit
@@ -3411,78 +3377,6 @@ public class GameWebViewActivity extends Activity {
  }
  // Trennt Cookies und Speicher je Spielaccount. Ohne das teilen sich alle
  // Ansichten eine Sitzung: Anmeldung mit Konto B oeffnete das Spiel von A.
- private void profilSetzen(WebView v,String accountId){
-  if(accountId==null||accountId.isEmpty())return;
-  try{
-   if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)){
-    String name=OdinVault.profilName(this,accountId);
-    androidx.webkit.ProfileStore.getInstance().getOrCreateProfile(name);
-    androidx.webkit.WebViewCompat.setProfile(v,name);
-    setStatus("Profil "+name);
-   }else{
-    // Aeltere WebView-Versionen koennen das nicht - dann bleibt es bei einer
-    // gemeinsamen Sitzung, und das sagen wir auch statt es zu verschweigen.
-    setStatus("Achtung: WebView zu alt für getrennte Konten");
-   }
-  }catch(Exception e){ setStatus("Profil fehlgeschlagen: "+e.getMessage()); }
- }
- // Vom Wecker gestartet: ueber dem Sperrbildschirm anzeigen und den Schirm
- // einschalten. Erst dadurch wird die WebView sichtbar und laeuft ungedrosselt.
- // Vollbild bleibt bestehen, nur die Anzeige wird dunkel. Entscheidend: die
- // WebView wird weiter GERENDERT - die Abdeckung liegt nur davor. Ein
- // Minimieren wuerde sie unsichtbar machen und Chromium drosselt dann die
- // Zeitgeber; hier laeuft alles im vollen Takt weiter.
- // Die Skriptliste gehoert dem Team und wird im Dashboard gepflegt. Gelingt
- // der Abruf, ersetzt sie die oertliche Fassung; die bleibt nur Notvorrat,
- // damit ein Start ohne Netz nicht ganz ohne Skripte endet.
- private org.json.JSONArray serverSkripte(){
-  try{
-   if(skriptListe!=null&&System.currentTimeMillis()-skriptListeZeit<5L*60L*1000L)return skriptListe;
-   if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return null;
-   String r=supaRequest("GET","scripts?select=id,name,type,source_url,code,enabled"
-     +"&team_id=eq."+supaTeam+"&order=created_at.asc",null);
-   org.json.JSONArray sv=new org.json.JSONArray(r);
-   org.json.JSONArray out=new org.json.JSONArray();
-   for(int i=0;i<sv.length();i++){
-    org.json.JSONObject o=sv.optJSONObject(i); if(o==null)continue;
-    String code=o.isNull("code")?"":o.optString("code","");
-    String url=o.optString("source_url","");
-    // Der alte Gist-Eintrag fuer GodBot bleibt aussen vor: GodBot ist
-    // eingebaut und darf nicht ein zweites Mal laufen.
-    if(OdinSkripte.istGodBotEintrag("",url))continue;
-    org.json.JSONObject z=new org.json.JSONObject();
-    z.put("id",o.optString("id",""));
-    z.put("name",o.optString("name","(ohne Namen)"));
-    z.put("an",o.optBoolean("enabled",false));
-    if(!code.trim().isEmpty()){ z.put("quelle","code"); z.put("code",code); }
-    else { z.put("quelle","url"); z.put("url",url); }
-    out.put(z);
-   }
-   OdinSkripte.speichern(this,out);
-   skriptListe=out; skriptListeZeit=System.currentTimeMillis();
-   return out;
-  }catch(Exception e){ setStatus("Skriptliste vom Server nicht erreichbar"); return null; }
- }
- // Ein neues @version melden und im Dashboard sichtbar machen. Ohne das
- // laeuft eine neue Fassung still an und niemand weiss, ob sie ankam.
- private void versionPruefen(String id,String name,String quelltext){
-  try{
-   String v=OdinSkripte.versionAus(quelltext);
-   if(v.isEmpty())return;
-   String alt=OdinSkripte.letzteVersion(this,id);
-   if(v.equals(alt))return;
-   OdinSkripte.merkeVersion(this,id,v);
-   String text=alt.isEmpty()? (name+" v"+v+" geladen")
-                            : (name+": v"+alt+" → v"+v);
-   setStatus(text);
-   OdinService.protokoll(this,"WICHTIG","skripte",text);
-   if(!alt.isEmpty()){ try{ new OdinNative().notify("Skript aktualisiert",text,"info"); }catch(Exception ignored){} }
-   // Nur echte Tabelleneintraege haben eine UUID; der oertliche Notvorrat nicht.
-   if(!supaTeam.isEmpty()&&id.length()==36)
-    try{ supaRequest("PATCH","scripts?id=eq."+id,"{\"version\":"+org.json.JSONObject.quote(v)+"}"); }
-    catch(Exception ignored){}
-  }catch(Exception ignored){}
- }
  private void dimmenAn(){
   if(dimRahmen==null)return;
   // Immer zuerst die Fensterflaggen: auch beim Auffrischen durch den Dienst
@@ -3490,10 +3384,10 @@ public class GameWebViewActivity extends Activity {
   // Sperrbildschirm und wird nicht mehr gerendert.
   dimmFlaggen();
   try{ getSharedPreferences("odin_svc",MODE_PRIVATE).edit()
-        .putBoolean("dimm_an",true).putString("dimm_konto",nz(gameAccountId)).apply(); }
+        .putBoolean("dimm_an",true).putString("dimm_konto",aktiv==null?"":nz(aktiv.gameAccountId)).apply(); }
   catch(Exception ignored){}
   if(dimDecke!=null){ setStatus("Dimm-Modus aufgefrischt"); return; }
-  if(webView!=null){ webView.removeCallbacks(dimmPuls); webView.postDelayed(dimmPuls,300_000L); }
+  taktHandler.removeCallbacks(dimmPuls); taktHandler.postDelayed(dimmPuls,300_000L);
   android.widget.LinearLayout decke=new android.widget.LinearLayout(this);
   decke.setOrientation(android.widget.LinearLayout.VERTICAL);
   decke.setGravity(android.view.Gravity.CENTER);
@@ -3524,7 +3418,7 @@ public class GameWebViewActivity extends Activity {
   // Kurz zeigen, was da liegt, dann in die Ruhe fallen - sonst waere der
   // Umschaltmoment nicht von einem Absturz zu unterscheiden.
   dimWach(); dimNachdunkeln();
-  setStatus("gedimmt - läuft im vollen Takt weiter");
+  setStatus("gedimmt - läuft im vollen Takt weiter ("+alleWelten().size()+" Welt(en) unter der Abdeckung)");
  }
  // Alles, was den Bildschirm an und die Ansicht vorn haelt - auch ueber dem
  // Sperrbildschirm. setShowWhenLocked ENTSPERRT nichts: das Geraet bleibt
@@ -3588,81 +3482,53 @@ public class GameWebViewActivity extends Activity {
  // an und haelt Chromium die Seite fuer sichtbar? Bisher meldete der Dienst
  // nur den Startversuch ("wiederhergestellt"), nie ob er ankam.
  // anlass==null: stiller Puls, meldet nur Abweichungen.
+ // Nachschau 5 s spaeter: ist die Ansicht wirklich vorn, ist der Bildschirm
+ // an und haelt Chromium die Seite fuer sichtbar? 1.96.0: fragt JEDE Welt -
+ // auch die verdeckten muessen "visible" melden, sonst traegt Variante B nicht.
+ // anlass==null: stiller Puls, meldet nur Abweichungen.
  private void dimmKontrolle(final String anlass){
-  if(webView==null)return;
-  webView.postDelayed(()->{
+  taktHandler.postDelayed(()->{
    try{
-    if(dimDecke==null||webView==null)return;
+    if(dimDecke==null)return;
     android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
     final boolean an=pm!=null&&pm.isInteractive();
     final boolean vorn=imVordergrund;
     final String wer=anlass==null?"Puls":anlass;
-    final boolean[] antwort={false};
-    webView.evaluateJavascript("document.visibilityState",r->{
-     antwort[0]=true;
-     boolean sichtbar=r!=null&&r.contains("visible");
-     if(anlass!=null||!vorn||!an||!sichtbar)
-      setStatus("Dimm-Kontrolle ("+wer+"): "+(vorn&&an&&sichtbar?"OK":"GESTOERT")
-        +" - vorn="+vorn+", Bildschirm="+(an?"an":"aus")+", Seite="+r);
-    });
-    webView.postDelayed(()->{
-     if(!antwort[0])setStatus("Dimm-Kontrolle ("+wer+"): GESTOERT - vorn="+vorn
-       +", Bildschirm="+(an?"an":"aus")+", Seite antwortet nicht");
-    },3000);
+    for(final Welt w:alleWelten()){
+     final WebView wv=w.webView; if(wv==null||OdinFloat.active(w.gameAccountId))continue;
+     final boolean[] antwort={false};
+     wv.evaluateJavascript("document.visibilityState",r->{
+      antwort[0]=true;
+      boolean sichtbar=r!=null&&r.contains("visible");
+      if(anlass!=null||!vorn||!an||!sichtbar)
+       w.setStatus("Dimm-Kontrolle ("+wer+", "+(w==aktiv?"angezeigt":"verdeckt")+"): "+(vorn&&an&&sichtbar?"OK":"GESTOERT")
+         +" - vorn="+vorn+", Bildschirm="+(an?"an":"aus")+", Seite="+r);
+     });
+     taktHandler.postDelayed(()->{
+      if(!antwort[0])w.setStatus("Dimm-Kontrolle ("+wer+"): GESTOERT - vorn="+vorn
+        +", Bildschirm="+(an?"an":"aus")+", Seite antwortet nicht");
+     },3000);
+    }
    }catch(Exception ignored){}
   },5000);
  }
- // Alle 10 Minuten still nachsehen, solange gedimmt ist.
- private long dimmNeuGeladen=0L;
- // --- Anfragen an den Spielserver zaehlen ---------------------------------
- // Nur beobachten, nie veraendern. Erfasst ALLES, was die Spielansicht an
- // game.php schickt - Seitenaufrufe, Hintergrundrahmen, fetch/XHR -, egal
- // ob von GodBot, einem Zusatzskript oder dem Spiel selbst. Alle 10 Minuten
- // eine Zeile ins Protokoll (landet auch in app_events, bereich "app"):
- //   Spielserver 10 Min: 42 Anfragen, 9 Seitenaufrufe - am_farm 12, ...
- // Grundlage, um unnoetige Anfragen mit Zahlen statt Vermutungen zu finden.
- private final java.util.HashMap<String,Integer> anfragen=new java.util.HashMap<>();
- private long anfragenSeit=0L; private int anfragenGesamt=0, anfragenSeiten=0;
- private void anfrageZaehlen(WebResourceRequest r){
-  try{
-   android.net.Uri u=r.getUrl(); String h=u.getHost();
-   if(h==null||!h.endsWith("die-staemme.de"))return;
-   String pfad=u.getPath(); if(pfad==null||!pfad.endsWith("/game.php"))return;
-   String sc=u.getQueryParameter("screen"), mo=u.getQueryParameter("mode");
-   String aj=u.getQueryParameter("ajaxaction"); if(aj==null)aj=u.getQueryParameter("ajax");
-   if(aj==null)aj=u.getQueryParameter("action");
-   boolean seite=r.isForMainFrame();
-   String k=(sc==null?"?":sc)+(mo!=null?"/"+mo:"")+(aj!=null?":"+aj:"")+(seite?"*":"");
-   long jetzt=System.currentTimeMillis(); String bericht=null;
-   synchronized(anfragen){
-    if(anfragenSeit==0L)anfragenSeit=jetzt;
-    Integer n=anfragen.get(k); anfragen.put(k,n==null?1:n+1);
-    anfragenGesamt++; if(seite)anfragenSeiten++;
-    if(jetzt-anfragenSeit>=600_000L){
-     java.util.List<java.util.Map.Entry<String,Integer>> l=new java.util.ArrayList<>(anfragen.entrySet());
-     java.util.Collections.sort(l,(x,y)->y.getValue()-x.getValue());
-     StringBuilder b=new StringBuilder("Spielserver ").append((jetzt-anfragenSeit)/60000).append(" Min: ")
-       .append(anfragenGesamt).append(" Anfragen, ").append(anfragenSeiten).append(" Seitenaufrufe - ");
-     for(int i=0;i<l.size()&&i<10;i++){ if(i>0)b.append(", "); b.append(l.get(i).getKey()).append(' ').append(l.get(i).getValue()); }
-     bericht=b.toString();
-     anfragen.clear(); anfragenSeit=jetzt; anfragenGesamt=0; anfragenSeiten=0;
-    }
-   }
-   if(bericht!=null)setStatus(bericht);
-  }catch(Exception ignored){}
- }
+ // Alle 5 Minuten still nachsehen, solange gedimmt ist - fuer JEDE Welt:
+ // vorn, gedimmt, aber GodBot schweigt? (23.09. 03:00-07:30 kein einziges
+ // Lebenszeichen.) Dann diese Seite neu laden, hoechstens alle 15 Minuten.
  private final Runnable dimmPuls=new Runnable(){ @Override public void run(){
-  if(dimDecke==null||webView==null)return;
+  if(dimDecke==null)return;
   dimmKontrolle(null);
-  // Vorn, gedimmt - aber GodBot schweigt? Am 23.09. von 03:00 bis 07:30 kein
-  // einziges Lebenszeichen. Dann die Seite neu laden (hoechstens alle 15 Min).
-  long jetzt=System.currentTimeMillis(), l=OdinService.zuletztLebend(gameAccountId);
-  if(imVordergrund&&!OdinService.gesperrt(gameAccountId)&&l>0&&jetzt-l>300_000L&&jetzt-dimmNeuGeladen>900_000L){
-   dimmNeuGeladen=jetzt;
-   setStatus("Dimm-Kontrolle: GodBot seit "+((jetzt-l)/60000)+" Min ohne Lebenszeichen - lade Seite neu");
-   try{ webView.reload(); }catch(Exception ignored){}
+  long jetzt=System.currentTimeMillis();
+  for(Welt w:alleWelten()){
+   if(w.webView==null||!w.geladen)continue;
+   long l=OdinService.zuletztLebend(w.gameAccountId);
+   if(imVordergrund&&!w.leaseGesperrt&&!OdinService.gesperrt(w.gameAccountId)&&l>0&&jetzt-l>300_000L&&jetzt-w.dimmNeuGeladen>900_000L){
+    w.dimmNeuGeladen=jetzt;
+    w.setStatus("Dimm-Kontrolle: GodBot seit "+((jetzt-l)/60000)+" Min ohne Lebenszeichen - lade Seite neu");
+    try{ w.webView.reload(); }catch(Exception ignored){}
+   }
   }
-  webView.postDelayed(this,300_000L);
+  taktHandler.postDelayed(this,300_000L);
  }};
  private int dimBreite(){
   int b=getResources().getDisplayMetrics().widthPixels;
@@ -3813,17 +3679,20 @@ public class GameWebViewActivity extends Activity {
    // dieser Activity. Ohne Rueckholen waere die Ansicht leer und der Termin
    // liefe ins Leere.
    weckBeginn=System.currentTimeMillis();
-   warGeschwebt=OdinFloat.active(gameAccountId);
-   if(warGeschwebt){ restoreFromFloat(); setStatus("Wecker: aus dem Symbol zurückgeholt"); }
+   // 1.96.0: geweckt wird die Welt des Intents - intentAnnehmen hat sie
+   // eben angezeigt (aktiv). Die anderen Welten laufen verdeckt mit.
+   final Welt ww=aktiv;
+   warGeschwebt=ww!=null&&OdinFloat.active(ww.gameAccountId);
+   if(warGeschwebt){ ww.holeAusFenster(false); weltZeigen(ww); setStatus("Wecker: aus dem Symbol zurückgeholt"); }
    if(weckFensterEnde!=null)w.getDecorView().removeCallbacks(weckFensterEnde);
    if(ruhePruefer!=null)w.getDecorView().removeCallbacks(ruhePruefer);
    final long start=System.currentTimeMillis();
-   letzteAktivitaet=start;
+   if(ww!=null)ww.letzteAktivitaet=start;
    final boolean wartung=getIntent().getBooleanExtra("wartung",false);
    ruhePruefer=new Runnable(){
     @Override public void run(){
      if(!weckerAktiv)return;
-     long jetzt=System.currentTimeMillis(), lief=jetzt-start, still=jetzt-letzteAktivitaet;
+     long jetzt=System.currentTimeMillis(), lief=jetzt-start, still=jetzt-(ww==null?start:ww.letzteAktivitaet);
      if(lief>FENSTER_MAX_MS){
       setStatus("Weckfenster: Höchstdauer erreicht");
       if(weckFensterEnde!=null)weckFensterEnde.run(); return;
@@ -3849,7 +3718,7 @@ public class GameWebViewActivity extends Activity {
      setStatus("Weckfenster beendet – zurück in den Dimm-Modus");
      return;
     }
-    if(warGeschwebt&&OdinFloat.show(this,gameAccountId,webView,this::restoreFromFloat,this::ausSymbolSchliessen)){
+    if(warGeschwebt&&ww!=null&&!ww.geschlossen&&ww.webView!=null&&OdinFloat.show(this,ww.gameAccountId,ww.webView,ww::restoreFromFloat,ww::ausSymbolSchliessen)){
      // Zurueck ins schwebende Fenster statt in den Hintergrund: dort bleibt
      // die WebView sichtbar und damit ungedrosselt.
      setStatus("Weckfenster beendet – schwebt wieder");
@@ -3864,7 +3733,6 @@ public class GameWebViewActivity extends Activity {
  }
  private boolean dunkelWegenWecker=false, weckerAktiv=false, warGeschwebt=false;
  private Runnable weckFensterEnde=null, ruhePruefer=null;
- volatile long letzteAktivitaet=0L;
  private boolean vollbildUnterdruecken=false;
  private void systemleistenZeigen(){
   try{
@@ -3952,46 +3820,6 @@ public class GameWebViewActivity extends Activity {
   OdinService.erfolg();
   return b.toString();
  }
- // Automatische Anmeldung NUR auf dem Geraet, dem das Konto zugewiesen ist.
- // Sonst werfen sich zwei Geraete mit hinterlegten Zugangsdaten gegenseitig
- // aus dem Spiel (eine Sitzung je Welt) und melden sich immer wieder an -
- // ein auffaelliges Muster auf dem Spielserver. Die Pruefung braucht das
- // Netz, deshalb im Hintergrund; ein freies Konto wird dabei diesem Geraet
- // zugewiesen.
- private void anmeldenWennNoetig(WebView v){
-  if(gameAccountId.isEmpty())return;
-  if(!OdinVault.vorhanden(this,gameAccountId))return;
-  final String k=gameAccountId;
-  new Thread(()->{
-   boolean darf=OdinService.darfLaufen(getApplicationContext(),k);
-   runOnUiThread(()->{
-    if(darf)anmeldenJetzt(v);
-    else{
-     String h=OdinService.fremdHalter(k);
-     setStatus("Keine automatische Anmeldung - Konto ist "+(h==null?"einem anderen Gerät":h)+" zugewiesen");
-     OdinService.WARTET.add(k);
-     if(leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
-    }
-   });
-  }).start();
- }
- private void anmeldenJetzt(WebView v){
-  try{
-   if(gameAccountId.isEmpty())return;
-   String[] d=OdinVault.lesen(this,gameAccountId); if(d==null)return;
-   String u=org.json.JSONObject.quote(d[0]), p=org.json.JSONObject.quote(d[1]);
-   String js="(function(u,p){try{\n var f=document.getElementById('login_form'); if(!f) return 'kein_formular';\n var un=document.getElementById('user'), pw=document.getElementById('password');\n if(!un||!pw) return 'felder_fehlen';\n if(un.value && pw.value) return 'schon_gefuellt';\n function setz(el,v){\n  var d=Object.getOwnPropertyDescriptor(el.constructor.prototype,'value');\n  if(d&&d.set)d.set.call(el,v); else el.value=v;\n  el.dispatchEvent(new Event('input',{bubbles:true}));\n  el.dispatchEvent(new Event('change',{bubbles:true}));\n }\n setz(un,u); setz(pw,p);\n var rm=document.getElementById('remember-me'); if(rm&&!rm.checked)rm.click();\n // Das Formular hat action=\"#\" - abgeschickt wird ueber den Link, nicht submit.\n var btn=document.querySelector('a.btn-login');\n if(btn){ btn.click(); return 'abgeschickt'; }\n var sb=document.getElementById('login_submit_button');\n if(sb){ sb.click(); return 'abgeschickt_knopf'; }\n return 'kein_knopf';\n}catch(e){return 'fehler: '+e.message}})"+"("+u+","+p+");";
-   v.evaluateJavascript(js,r->{
-    String t=r==null?"":r.replace("\"","");
-    if(!"kein_formular".equals(t))setStatus("Anmeldung: "+t);
-   });
-  }catch(Exception e){ setStatus("Anmeldung fehlgeschlagen: "+e.getMessage()); }
- }
- private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
- private void loadEnabledScripts(WebView v){ }
- private void executeGodBotWhenReady(WebView v){ }
- private void injectGodBot(WebView v){ }
- private WebResourceResponse odinIntercept(WebResourceRequest r){ return null; }
  @Override public void onWindowFocusChanged(boolean f){
   super.onWindowFocusChanged(f);
   if(f){ if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this); }
@@ -4008,44 +3836,9 @@ public class GameWebViewActivity extends Activity {
  }
  @Override protected void onNewIntent(Intent in){
   super.onNewIntent(in);
-  // 1.94.19 - KEIN UMETIKETTIEREN. Lieferte Android einen Start fuer ein
-  // ANDERES Konto an diese Ansicht (26.09., 10:50: #d12e de258 -> de257),
-  // wurde bisher nur gameAccountId umgestellt; die WebView zeigte weiter
-  // die alte Welt, und deren Einstellungen gingen unter dem neuen Konto
-  // hoch (Bauplan von de257 in de258/de259). Jetzt: die richtige Ansicht
-  // nach vorn holen oder eine eigene starten - diese bleibt, was sie ist.
-  String a0=nz(in.getStringExtra("accountId"));
-  if(!a0.isEmpty()&&!gameAccountId.isEmpty()&&!a0.equals(gameAccountId)){
-   OdinService.protokoll(this,"WICHTIG","app","Start für anderes Konto ("+a0.substring(0,Math.min(8,a0.length()))
-     +") an diese Ansicht geliefert - eigene Ansicht statt Umetikettieren");
-   GameWebViewActivity da; synchronized(OFFEN){ da=OFFEN.get(a0); }
-   if(da!=null&&da!=this&&!da.isFinishing()&&!da.isDestroyed()&&aufgabeNachVorn(this,da.getTaskId()))return;
-   try{
-    Intent i=new Intent(in);
-    i.setComponent(new android.content.ComponentName(this,GameWebViewActivity.class));
-    if(i.getData()==null)i.setData(android.net.Uri.parse("odin://account/"+a0));
-    i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
-    startActivity(i);
-   }catch(Exception e){ setStatus("Wechsel fehlgeschlagen: "+e.getMessage()); }
-   return;
-  }
-  setIntent(in);
-  try{ String kj=in.getStringExtra("accountsJson"); if(kj!=null&&kj.length()>2)LETZTE_KONTEN=kj; }catch(Exception ig){}
-  // Nur die Sitzungsdaten auffrischen - die WebView bleibt unberuehrt,
-  // sonst ginge die Anmeldung bei jedem Wechsel verloren.
-  String u=nz(in.getStringExtra("supaUrl")), k=nz(in.getStringExtra("supaKey"));
-  String t=nz(in.getStringExtra("supaToken")), tm=nz(in.getStringExtra("supaTeam"));
-  // Wecker und Dimm-Waechter starten die Ansicht ohne Sitzung im Intent.
-  // Bisher wurden die Felder trotzdem mit leeren Werten ueberschrieben -
-  // ab da lief die Ansicht bis zum Neustart ohne Abgleich. Im Protokoll
-  // vom 19.09. ab 20:24 durchgehend "Abgleich inaktiv (keine Sitzung)",
-  // ueber sechs Stunden, waehrend der Dienst munter weiter erneuerte.
-  if(!u.isEmpty()&&!t.isEmpty()){ supaUrl=u; supaKey=k; supaToken=t; supaTeam=tm; }
-  else sitzungNachladen();
-  String a=nz(in.getStringExtra("accountId")); if(!a.isEmpty())gameAccountId=a;
-  // Frueher lief der Weckermodus nur in onCreate. Existierte die Ansicht
-  // bereits, kam onNewIntent dran und der Bildschirm blieb aus.
-  weckerModus();
+  // 1.96.0: jedes Intent oeffnet oder zeigt SEINE Welt (eigene WebView) -
+  // ein Umetikettieren wie bis 1.94.19 ist damit ausgeschlossen.
+  intentAnnehmen(in);
  }
  @Override protected void onResume(){
   super.onResume();
@@ -4054,23 +3847,19 @@ public class GameWebViewActivity extends Activity {
   // Ansicht mit dem Exemplar von ihrem Start weiter.
   sitzungNachladen();
   if(vollbildUnterdruecken)systemleistenZeigen(); else Fullscreen.apply(this);
-  OdinBubble.hide(); restoreFromFloat();
+  OdinBubble.hide();
+  // Ansicht vorn: alle Welten zurueck in den Stapel - dort laufen sie ohnehin
+  // ungedrosselt; die angezeigte wieder nach oben.
+  for(Welt w:alleWelten()){ try{ if(OdinFloat.active(w.gameAccountId))w.holeAusFenster(false); }catch(Exception ig){} }
+  if(aktiv!=null)weltZeigen(aktiv);
   try{ fussleisteFuellen(); }catch(Exception ig){}
-  // 1.95.15: Der Ladescreen gehoert jetzt zur eigenen Welt und wird ueber
-  // onPageFinished entfernt - hier nicht mehr anfassen. Die alte
-  // "hat nicht gegriffen"-Fehlmeldung entfaellt: Sie war beim langsamen
-  // Wechsel (~24 s) ohnehin falsch, weil die Zielwelt doch noch hochkam.
-  wechselAt=0L;
  }
  @Override protected void onPause(){
   super.onPause();
-  if(imVordergrund)OdinService.vorn(gameAccountId);
-  imVordergrund=false;
-  // 1.95.12: Indikator hier NICHT entfernen. onPause kommt sofort beim
-  // startActivity der Zielwelt - die laedt aber noch Sekunden, und diese
-  // Ansicht bleibt derweil sichtbar. Wurde der Indikator hier entfernt, war
-  // er nie zu sehen: pausierte, tote Leiste ohne Schicht. Entfernt wird er
-  // in onStop (Ansicht wirklich verdeckt) bzw. onResume (Wechsel gescheitert).
+  // Alle Welten der Ansicht waren bis eben gezeichnet - fuer den Dienst
+  // zaehlt das als "vorn" (Nachwecken, Vorwarnung).
+  if(imVordergrund)for(Welt w:alleWelten())OdinService.vorn(w.gameAccountId);
+  imVordergrund=false; intervallImmerVorn=false;
   if(dimDecke!=null){
    try{
     android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
@@ -4083,9 +3872,9 @@ public class GameWebViewActivity extends Activity {
   // einem Neuaufbau des Prozesses weg.
   try{ android.webkit.CookieManager.getInstance().flush(); }catch(Exception ignored){}
   warteschlangeLeeren();   // offene Protokolleintraege nicht verlieren
-  try{ if(webView!=null&&webView.getUrl()!=null)
+  try{ Welt aw=aktiv; if(aw!=null&&aw.webView!=null&&aw.webView.getUrl()!=null)
         getSharedPreferences("odin",MODE_PRIVATE).edit()
-          .putString("lastGameUrl",webView.getUrl()).apply(); }catch(Exception ignored){}
+          .putString("lastGameUrl",aw.webView.getUrl()).apply(); }catch(Exception ignored){}
  }
  // Holt die WebView aus dem schwebenden Fenster zurueck in die Activity.
  // Wichtig: dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
@@ -4098,115 +3887,48 @@ public class GameWebViewActivity extends Activity {
    return true;
   }catch(Exception e){ android.util.Log.w("ODIN","moveTaskToFront",e); return false; }
  }
- private void holeAusFenster(boolean nachVorne){
-  if(!OdinFloat.active(gameAccountId))return;
-  // 1.91.0: Ist diese Ansicht schon beendet, kann die WebView nicht mehr in
-  // ihr Layout zurueck - bisher geschah genau das, und der anschliessende
-  // Start legte eine zweite Ansicht daneben an. Jetzt: alte WebView beenden,
-  // eine frische Ansicht starten, die dann die einzige ist.
-  if(isDestroyed()||isFinishing()){
-   try{ WebView alt=OdinFloat.hide(gameAccountId);
-        if(alt!=null){ alt.stopLoading(); alt.loadUrl("about:blank"); alt.destroy(); } }catch(Exception ig){}
-   if(nachVorne){
-    try{
-     Intent i=new Intent(getApplicationContext(),GameWebViewActivity.class);
-     i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
-     i.putExtra("accountId",gameAccountId); i.putExtra("username",kopfName);
-     i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
-     i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
-     i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-     getApplicationContext().startActivity(i);
-    }catch(Exception e){ android.util.Log.e("ODIN_FLOAT","neu starten",e); }
-   }
-   return;
-  }
-  WebView w=OdinFloat.hide(gameAccountId);
-  if(w==null||rootLayout==null)return;
-  webView=w;
-  runOnUiThread(()->{
-   try{
-    if(w.getParent() instanceof android.view.ViewGroup)
-     ((android.view.ViewGroup)w.getParent()).removeView(w);
-    w.setScaleX(1f); w.setScaleY(1f);
-    w.setLayoutParams(new LinearLayout.LayoutParams(-1,0,1f));
-    rootLayout.addView(w,1,new LinearLayout.LayoutParams(-1,0,1f));
-    w.requestLayout(); w.invalidate();
-    // 1.91.0: zuerst die eigene Aufgabe direkt nach vorn. Ein neues Intent
-    // aus einer Hintergrund-Ansicht verlaesst sich darauf, dass Android die
-    // Aufgabe wiederfindet - das ging am 25.09. dreimal daneben.
-    if(nachVorne&&aufgabeNachVorn(this,getTaskId())){
-     setStatus("zurueck im Vordergrund");
-    }else if(nachVorne){
-     Intent i=new Intent(this,GameWebViewActivity.class);
-     if(!gameAccountId.isEmpty()){
-      i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
-      i.putExtra("accountId",gameAccountId);
-     }
-     i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
-     i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
-     i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|Intent.FLAG_ACTIVITY_SINGLE_TOP);
-     startActivity(i);
-     setStatus("zurueck im Vordergrund");
-    }else{
-     setStatus("Fenster geschlossen - bis zum nächsten Termin pausiert");
-    }
-   }catch(Exception e){android.util.Log.e("ODIN_FLOAT","restore",e);}
-  });
- }
- private void restoreFromFloat(){ holeAusFenster(true); }
- // 1.92.0: Symbol in den Muelleimer gezogen - diese Welt wird geschlossen.
- // WebView beenden (sonst liefe GodBot unsichtbar weiter) und die Ansicht
- // samt Aufgabe entfernen; onDestroy gibt die Geraete-Sperre frei.
- // Hat der Dienst fuer diese Welt einen Termin, weckt er sie spaeter wieder.
- private void ausSymbolSchliessen(){
-  try{
-   WebView w=OdinFloat.hide(gameAccountId);
-   if(w!=null){ w.stopLoading(); w.loadUrl("about:blank"); w.destroy(); }
-  }catch(Exception ig){}
-  setStatus("Welt geschlossen (Symbol in den Mülleimer gezogen)");
-  try{ finishAndRemoveTask(); }catch(Exception e){ try{ finish(); }catch(Exception ig){} }
- }
  @Override protected void onDestroy(){
-  if(OFFEN.get(gameAccountId)==this){
-   OFFEN.remove(gameAccountId);
-   // Geraete-Sperre sofort freigeben, damit ein anderes Geraet nicht die
-   // 3 Minuten Frist abwarten muss.
-   final String k=gameAccountId; final Context app=getApplicationContext();
+  taktHandler.removeCallbacksAndMessages(null);
+  if(HOST==this)HOST=null;
+  // Alle Welten dieser Ansicht beenden, Geraete-Sperren sofort freigeben
+  // (sonst wartet ein anderes Geraet die 3 Minuten Frist ab). Auch WebViews
+  // in Schwebesymbolen - sonst lebten sie verwaist weiter (25.09.).
+  for(Welt w:alleWelten()){
+   w.geschlossen=true;
+   synchronized(OFFEN){ if(OFFEN.get(w.gameAccountId)==this)OFFEN.remove(w.gameAccountId); }
+   try{ WebView f=OdinFloat.hide(w.gameAccountId); if(f!=null){ f.stopLoading(); f.destroy(); } }catch(Exception ig){}
+   try{ if(w.webView!=null){ w.webView.stopLoading(); w.webView.destroy(); } }catch(Exception ig){}
+   w.webView=null;
+   final String k=w.gameAccountId; final Context app=getApplicationContext();
    OdinService.WARTET.remove(k);
-   new Thread(()->OdinService.leaseFreigeben(app,k)).start();
+   if(!k.isEmpty())new Thread(()->OdinService.leaseFreigeben(app,k)).start();
   }
+  synchronized(WELTEN){ WELTEN.clear(); }
   super.onDestroy();
  }
  static java.util.Set<String> offeneKonten(){
   synchronized(OFFEN){ return new java.util.HashSet<>(OFFEN.keySet()); }
  }
  static void neuLadenFuer(String konto,String grund){
-  final GameWebViewActivity a;
-  synchronized(OFFEN){ a=OFFEN.get(konto); }
-  if(a==null||a.isFinishing())return;
+  final GameWebViewActivity a=hostFuer(konto);
+  if(a==null)return;
+  final Welt w=a.weltVon(konto); if(w==null)return;
   a.runOnUiThread(()->{
-   a.setStatus(grund);
-   if(a.leaseKnopf!=null)a.leaseKnopf.setVisibility(android.view.View.GONE);
-   try{ a.webView.setTag(0x0D1A0001,null); a.webView.reload(); }catch(Exception ignored){}
+   w.setStatus(grund);
+   w.leaseGesperrt=false;
+   if(a.aktiv==w&&a.leaseKnopf!=null)a.leaseKnopf.setVisibility(android.view.View.GONE);
+   try{ w.webView.setTag(0x0D1A0001,null); w.webView.reload(); }catch(Exception ignored){}
   });
  }
- // Sichtbar nur, solange ein anderes Geraet das Konto fuehrt.
+ // Sichtbar nur, solange ein anderes Geraet das Konto der ANGEZEIGTEN Welt fuehrt.
  Button leaseKnopf;
- void leaseGesperrtAnzeigen(String halter){
-  runOnUiThread(()->{
-   if(leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
-   // 1.94.7: Leiste weg, solange GodBot hier nicht laeuft. Sie blieb mit dem
-   // letzten Stand stehen und nahm Tipps an, die nichts bewirken konnten.
-   godbotStand=null;
-   if(godbotLeiste!=null)godbotLeiste.setVisibility(android.view.View.GONE);
-   setStatus("GodBot pausiert - läuft auf "+halter+". „Übernehmen“ holt ihn hierher.");
-  });
- }
  @Override public void onBackPressed(){
   if(dimDecke!=null){dimmenAus();return;}
   // Zurueck ist ein Seitenwechsel wie jeder andere: laeuft gerade ein
   // Vorgang (Stand der GodBot-Leiste, hoechstens 30 s alt), erst fragen.
-  org.json.JSONObject st=godbotStand;
+  final Welt aw=aktiv; final WebView webView=aw==null?null:aw.webView;
+  if(webView==null){ super.onBackPressed(); return; }
+  org.json.JSONObject st=aw.godbotStand;
   String lauf=st==null?"":st.optString("laeuft","");
   boolean frisch=st!=null&&System.currentTimeMillis()-st.optLong("at",0)<30000L;
   if(frisch&&!lauf.isEmpty()&&!"null".equals(lauf)&&webView.canGoBack()){
@@ -4220,13 +3942,457 @@ public class GameWebViewActivity extends Activity {
   }
   if(webView.canGoBack())webView.goBack();else super.onBackPressed();
  }
- private void minimizeToApp(){finish();}
- private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);}
+ // =========================================================================
+ // WELT (1.96.0): alles, was je Spielkonto existiert - WebView, Bruecke,
+ // GodBot-Teile, Protokoll, Lebenszeichen, Geraete-Sperre, GodBot-Stand.
+ // Bruecken und Clients einer Welt kennen NUR ihre eigene Welt; dadurch
+ // kann eine Welt nie unter dem Konto einer anderen melden oder speichern.
+ // Kopf, Fussleiste, Dimm-Modus und Wecker gehoeren der Ansicht.
+ // =========================================================================
+ final class Welt {
+  final String gameAccountId;
+  String kopfName;
+  final String weltName;
+  final String instanz;
+  WebView webView;
+  // 1.95.8: Spielseite soll die App nicht an festen Brueckennamen erkennen.
+  // Jede Welt hat ihren eigenen Zufallsnamen; der Loader bekommt ihn.
+  final String bridgeName="b"+Long.toHexString((long)(Math.random()*0x3fffffffffffffL))+Integer.toHexString((int)(Math.random()*0xffff));
+  // Teile fuer den Bootstrap in Ladereihenfolge: GodBot (aus der APK), dann
+  // je eingeschaltetem Zusatzskript dessen @require und das Skript selbst.
+  // Ausgeliefert unter /__odin_t_<i>.js - je Welt, in ihrer eigenen WebView.
+  volatile java.util.List<byte[]> godbotTeile=new java.util.ArrayList<>();
+  boolean godbotGemeldet=false;
+  // Vollstaendiges Protokoll dieser Welt (Statuszeile tippen = kopieren).
+  final StringBuilder statusLog=new StringBuilder();
+  volatile String letzterStatus="wartet";
+  volatile long letzteAktivitaet=0L;
+  volatile org.json.JSONObject godbotStand=null;
+  volatile boolean leaseGesperrt=false;
+  volatile boolean geladen=false;
+  volatile boolean geschlossen=false;
+  long zuletztGezeigt=0L;
+  volatile int lebtZaehler=0;
+  long taktSeit=System.currentTimeMillis();
+  long dimmNeuGeladen=0L;
+  long ladeStart=0L;
+  Welt(String id,String name,String welt){
+   gameAccountId=nz(id);
+   kopfName=nz(name).isEmpty()?gameAccountId:nz(name);
+   weltName=normWelt(nz(welt));
+   instanz=String.format(java.util.Locale.ROOT,"%04x",System.identityHashCode(this)&0xffff);
+  }
+  String kurz(){ return weltName.isEmpty()?kopfName:weltName; }
+  void setStatus(String msg){
+   // 1.86.0: "kein Fehler" ist kein Fehler.
+   String stufe = ((msg.contains("Fehler")&&!msg.contains("kein Fehler"))||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
+                : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
+   melde(stufe,msg);
+  }
+  // Wie setStatus, aber mit vorgegebener Stufe (Takt-Messung).
+  void melde(String stufe,String msg){
+   synchronized(statusLog){
+    if(statusLog.length()==0)statusLog.append("Odin APK ").append(apkVersion()).append(" · ").append(kurz()).append('\n');
+    statusLog.append('[').append(new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY)
+      .format(new java.util.Date())).append("] ").append(msg).append('\n');
+    // Nicht endlos wachsen lassen - bei vier Welten rund um die Uhr.
+    if(statusLog.length()>200_000)statusLog.delete(0,statusLog.length()-150_000);
+   }
+   letzterStatus=msg;
+   runOnUiThread(()->{ if(aktiv==Welt.this&&statusView!=null)statusView.setText("APK "+apkVersion()+" · GodBot: "+msg); });
+   android.util.Log.i("ODIN_GODBOT",kurz()+": "+msg);
+   OdinLog.schreib(GameWebViewActivity.this,kopfName+"#"+instanz,stufe,msg);
+   // Alles wandert nach Odin, aber gebuendelt (alle 30 s oder ab 25).
+   ereignisMelden(stufe,bereichVon(msg),msg,gameAccountId,instanz);
+  }
+ // Trennt Cookies und Speicher je Spielaccount. Ohne das teilen sich alle
+ // Ansichten eine Sitzung: Anmeldung mit Konto B oeffnete das Spiel von A.
+ private void profilSetzen(WebView v,String accountId){
+  if(accountId==null||accountId.isEmpty())return;
+  try{
+   if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)){
+    String name=OdinVault.profilName(GameWebViewActivity.this,accountId);
+    androidx.webkit.ProfileStore.getInstance().getOrCreateProfile(name);
+    androidx.webkit.WebViewCompat.setProfile(v,name);
+    setStatus("Profil "+name);
+   }else{
+    // Aeltere WebView-Versionen koennen das nicht - dann bleibt es bei einer
+    // gemeinsamen Sitzung, und das sagen wir auch statt es zu verschweigen.
+    setStatus("Achtung: WebView zu alt für getrennte Konten");
+   }
+  }catch(Exception e){ setStatus("Profil fehlgeschlagen: "+e.getMessage()); }
+ }
+ // Eigene WebView dieser Welt: Profil, Tarnung, Bruecke, Clients.
+  @SuppressLint("SetJavaScriptEnabled") void webViewBauen(){
+   webView=new WebView(GameWebViewActivity.this);
+   profilSetzen(webView,gameAccountId);
+   wieMobilerBrowser(webView);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
+ // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
+ @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
+ @Override public boolean onJsConfirm(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
+ // 1.94.15: window.open aus der Spielansicht (Export -> twforge.net) im
+ // Browser oeffnen. Mit setSupportMultipleWindows(true), aber ohne
+ // onCreateWindow ging window.open still ins Leere - die Importseite
+ // oeffnete sich in der App nie.
+ @Override public boolean onCreateWindow(WebView v,boolean dialog,boolean user,android.os.Message msg){
+  try{
+   WebView t=new WebView(v.getContext());
+   t.setWebViewClient(new WebViewClient(){
+    boolean weg=false;
+    void raus(WebView w,String u){
+     if(weg||u==null||u.isEmpty()||"about:blank".equals(u))return;
+     weg=true;
+     try{
+      startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      OdinService.protokoll(GameWebViewActivity.this,"info","app","extern geöffnet: "+u);
+     }catch(Exception e){ OdinService.protokoll(GameWebViewActivity.this,"FEHLER","app","extern öffnen gescheitert: "+u); }
+     try{ w.stopLoading(); w.destroy(); }catch(Exception e){}
+    }
+    @Override public boolean shouldOverrideUrlLoading(WebView w,WebResourceRequest r){ raus(w,r.getUrl().toString()); return true; }
+    @Override public void onPageStarted(WebView w,String u,android.graphics.Bitmap f){ raus(w,u); }
+   });
+   ((WebView.WebViewTransport)msg.obj).setWebView(t);
+   msg.sendToTarget();
+   return true;
+  }catch(Exception e){ return false; }
+ }
+ // Seitenwechsel-Sperre (1.81.0): GodBot haelt einen Seitenwechsel an, den
+ // der Nutzer waehrend eines laufenden Vorgangs ausgeloest hat. Statt der
+ // nackten Browser-Rueckfrage ein eigener Dialog mit klaren Knoepfen.
+ // Wegtippen oder Zurueck = hierbleiben.
+ @Override public boolean onJsBeforeUnload(WebView v,String u,String msg,JsResult res){
+  runOnUiThread(()->{
+   try{
+    new android.app.AlertDialog.Builder(GameWebViewActivity.this)
+     .setTitle("GodBot arbeitet gerade")
+     .setMessage((msg==null||msg.trim().isEmpty())?"Ein Seitenwechsel jetzt bricht den laufenden Vorgang ab.":msg)
+     .setPositiveButton("Hierbleiben",(d,w)->res.cancel())
+     .setNegativeButton("Trotzdem wechseln",(d,w)->res.confirm())
+     .setOnCancelListener(d->res.cancel())
+     .show();
+   }catch(Exception e){ res.confirm(); }
+  });
+  return true;
+ }
+ @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
+ @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
+ @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
+ @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
+   // 1.95.15: Spielseite steht - Ladescreen weg (nicht auf der Anmelde-/
+   // Zwischenseite, nur wenn wir in der Welt sind).
+   try{ if(u!=null&&u.contains("/game.php"))wechselIndikatorWeg(); }catch(Exception ig){}
+   // 1.95.15/1.96.0: Spielseite steht - Ladescreen weg, wenn diese Welt
+   // gerade angezeigt wird (nicht auf der Anmelde-/Zwischenseite).
+   try{ if(u!=null&&u.contains("/game.php")){ geladen=true; if(aktiv==Welt.this)wechselIndikatorWeg(); } }catch(Exception ig){}
+  }
+  // 1.96.0: Alle WebViews der App teilen sich EINEN Renderer-Prozess. Mit
+  // mehreren Welten steigt das Risiko, dass Android ihn bei Speichermangel
+  // beendet. Ohne true reisst das die ganze App mit; so baut jede Welt
+  // ihre WebView neu auf und meldet sich wieder an.
+  @Override public boolean onRenderProcessGone(WebView v,RenderProcessGoneDetail d){
+   boolean absturz=false; try{ absturz=d!=null&&d.didCrash(); }catch(Exception ig){}
+   setStatus("Renderer beendet ("+(absturz?"Absturz":"Speicher")+") - Welt wird neu aufgebaut");
+   if(v==webView)runOnUiThread(()->neuAufbauen());
+   return true;
+  }
+ });
+ }
+ // Nach Renderer-Ende: neue WebView an dieselbe Stelle im Stapel, neu laden.
+  void neuAufbauen(){
+   if(geschlossen||weltRahmen==null)return;
+   WebView alt=webView; boolean oben=(aktiv==this);
+   try{ if(OdinFloat.active(gameAccountId))OdinFloat.hide(gameAccountId); }catch(Exception ig){}
+   try{ if(alt!=null){ if(alt.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)alt.getParent()).removeView(alt); alt.destroy(); } }catch(Exception ig){}
+   geladen=false; godbotStand=null; godbotTeile=new java.util.ArrayList<>();
+   webViewBauen();
+   if(oben)weltRahmen.addView(webView,new FrameLayout.LayoutParams(-1,-1));
+   else weltRahmen.addView(webView,0,new FrameLayout.LayoutParams(-1,-1));
+   laden();
+   if(oben)weltZeigen(this);
+  }
+  // Direkt in die Welt: /page/play/<welt> fuehrt nach der Anmeldung dorthin.
+  void laden(){
+   String lastGame=getSharedPreferences("odin",MODE_PRIVATE).getString("lastGameUrl","");
+   String ziel = !weltName.isEmpty() ? "https://www.die-staemme.de/page/play/"+weltName
+               : (lastGame.contains("die-staemme.de") ? lastGame : "https://www.die-staemme.de/");
+   ladeStart=System.currentTimeMillis();
+   if(!weltName.isEmpty()||!gameAccountId.isEmpty())ladeSchichtZeigenWennAngezeigt();
+   webView.loadUrl(ziel);
+  }
+  private void ladeSchichtZeigenWennAngezeigt(){ if(aktiv==this)ladeSchichtZeigen(weltName); }
+  // Leiste der Ansicht zeigt nur den Stand der angezeigten Welt; der Stand
+  // jeder Welt wird trotzdem gemerkt, damit ein Wechsel sofort stimmt.
+  void godbotStandEmpfangen(String json){
+   try{ godbotStand=new org.json.JSONObject(json); }catch(Exception e){ return; }
+   runOnUiThread(()->{
+    if(aktiv!=Welt.this)return;
+    if(godbotLeiste!=null&&godbotLeiste.getVisibility()!=android.view.View.VISIBLE)
+     godbotLeiste.setVisibility(android.view.View.VISIBLE);
+    godbotLeisteZeichnen();
+    if(!godbotTickerAn&&godbotLeiste!=null){ godbotTickerAn=true; godbotTicker(); }
+   });
+  }
+  void leaseGesperrtAnzeigen(String halter){
+   leaseGesperrt=true;
+   // 1.94.7: Leiste weg, solange GodBot hier nicht laeuft.
+   godbotStand=null;
+   runOnUiThread(()->{
+    if(aktiv==Welt.this){
+     if(leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
+     if(godbotLeiste!=null)godbotLeiste.setVisibility(android.view.View.GONE);
+    }
+   });
+   setStatus("GodBot pausiert - läuft auf "+halter+". „Übernehmen“ holt ihn hierher.");
+  }
+ // --- Anfragen an den Spielserver zaehlen ---------------------------------
+ // Nur beobachten, nie veraendern. Erfasst ALLES, was die Spielansicht an
+ // game.php schickt - Seitenaufrufe, Hintergrundrahmen, fetch/XHR -, egal
+ // ob von GodBot, einem Zusatzskript oder dem Spiel selbst. Alle 10 Minuten
+ // eine Zeile ins Protokoll (landet auch in app_events, bereich "app"):
+ //   Spielserver 10 Min: 42 Anfragen, 9 Seitenaufrufe - am_farm 12, ...
+ // Grundlage, um unnoetige Anfragen mit Zahlen statt Vermutungen zu finden.
+ private final java.util.HashMap<String,Integer> anfragen=new java.util.HashMap<>();
+ private long anfragenSeit=0L; private int anfragenGesamt=0, anfragenSeiten=0;
+ private void anfrageZaehlen(WebResourceRequest r){
+  try{
+   android.net.Uri u=r.getUrl(); String h=u.getHost();
+   if(h==null||!h.endsWith("die-staemme.de"))return;
+   String pfad=u.getPath(); if(pfad==null||!pfad.endsWith("/game.php"))return;
+   String sc=u.getQueryParameter("screen"), mo=u.getQueryParameter("mode");
+   String aj=u.getQueryParameter("ajaxaction"); if(aj==null)aj=u.getQueryParameter("ajax");
+   if(aj==null)aj=u.getQueryParameter("action");
+   boolean seite=r.isForMainFrame();
+   String k=(sc==null?"?":sc)+(mo!=null?"/"+mo:"")+(aj!=null?":"+aj:"")+(seite?"*":"");
+   long jetzt=System.currentTimeMillis(); String bericht=null;
+   synchronized(anfragen){
+    if(anfragenSeit==0L)anfragenSeit=jetzt;
+    Integer n=anfragen.get(k); anfragen.put(k,n==null?1:n+1);
+    anfragenGesamt++; if(seite)anfragenSeiten++;
+    if(jetzt-anfragenSeit>=600_000L){
+     java.util.List<java.util.Map.Entry<String,Integer>> l=new java.util.ArrayList<>(anfragen.entrySet());
+     java.util.Collections.sort(l,(x,y)->y.getValue()-x.getValue());
+     StringBuilder b=new StringBuilder("Spielserver ").append((jetzt-anfragenSeit)/60000).append(" Min: ")
+       .append(anfragenGesamt).append(" Anfragen, ").append(anfragenSeiten).append(" Seitenaufrufe - ");
+     for(int i=0;i<l.size()&&i<10;i++){ if(i>0)b.append(", "); b.append(l.get(i).getKey()).append(' ').append(l.get(i).getValue()); }
+     bericht=b.toString();
+     anfragen.clear(); anfragenSeit=jetzt; anfragenGesamt=0; anfragenSeiten=0;
+    }
+   }
+   if(bericht!=null)setStatus(bericht);
+  }catch(Exception ignored){}
+ }
+ // Vom Wecker gestartet: ueber dem Sperrbildschirm anzeigen und den Schirm
+ // einschalten. Erst dadurch wird die WebView sichtbar und laeuft ungedrosselt.
+ // Vollbild bleibt bestehen, nur die Anzeige wird dunkel. Entscheidend: die
+ // WebView wird weiter GERENDERT - die Abdeckung liegt nur davor. Ein
+ // Minimieren wuerde sie unsichtbar machen und Chromium drosselt dann die
+ // Zeitgeber; hier laeuft alles im vollen Takt weiter.
+ // Die Skriptliste gehoert dem Team und wird im Dashboard gepflegt. Gelingt
+ // der Abruf, ersetzt sie die oertliche Fassung; die bleibt nur Notvorrat,
+ // damit ein Start ohne Netz nicht ganz ohne Skripte endet.
+ private org.json.JSONArray serverSkripte(){
+  try{
+   if(skriptListe!=null&&System.currentTimeMillis()-skriptListeZeit<5L*60L*1000L)return skriptListe;
+   if(supaUrl.isEmpty()||supaToken.isEmpty()||supaTeam.isEmpty())return null;
+   String r=supaRequest("GET","scripts?select=id,name,type,source_url,code,enabled"
+     +"&team_id=eq."+supaTeam+"&order=created_at.asc",null);
+   org.json.JSONArray sv=new org.json.JSONArray(r);
+   org.json.JSONArray out=new org.json.JSONArray();
+   for(int i=0;i<sv.length();i++){
+    org.json.JSONObject o=sv.optJSONObject(i); if(o==null)continue;
+    String code=o.isNull("code")?"":o.optString("code","");
+    String url=o.optString("source_url","");
+    // Der alte Gist-Eintrag fuer GodBot bleibt aussen vor: GodBot ist
+    // eingebaut und darf nicht ein zweites Mal laufen.
+    if(OdinSkripte.istGodBotEintrag("",url))continue;
+    org.json.JSONObject z=new org.json.JSONObject();
+    z.put("id",o.optString("id",""));
+    z.put("name",o.optString("name","(ohne Namen)"));
+    z.put("an",o.optBoolean("enabled",false));
+    if(!code.trim().isEmpty()){ z.put("quelle","code"); z.put("code",code); }
+    else { z.put("quelle","url"); z.put("url",url); }
+    out.put(z);
+   }
+   OdinSkripte.speichern(GameWebViewActivity.this,out);
+   skriptListe=out; skriptListeZeit=System.currentTimeMillis();
+   return out;
+  }catch(Exception e){ setStatus("Skriptliste vom Server nicht erreichbar"); return null; }
+ }
+ // Ein neues @version melden und im Dashboard sichtbar machen. Ohne das
+ // laeuft eine neue Fassung still an und niemand weiss, ob sie ankam.
+ private void versionPruefen(String id,String name,String quelltext){
+  try{
+   String v=OdinSkripte.versionAus(quelltext);
+   if(v.isEmpty())return;
+   String alt=OdinSkripte.letzteVersion(GameWebViewActivity.this,id);
+   if(v.equals(alt))return;
+   OdinSkripte.merkeVersion(GameWebViewActivity.this,id,v);
+   String text=alt.isEmpty()? (name+" v"+v+" geladen")
+                            : (name+": v"+alt+" → v"+v);
+   setStatus(text);
+   OdinService.protokoll(GameWebViewActivity.this,"WICHTIG","skripte",text);
+   if(!alt.isEmpty()){ try{ new OdinNative().notify("Skript aktualisiert",text,"info"); }catch(Exception ignored){} }
+   // Nur echte Tabelleneintraege haben eine UUID; der oertliche Notvorrat nicht.
+   if(!supaTeam.isEmpty()&&id.length()==36)
+    try{ supaRequest("PATCH","scripts?id=eq."+id,"{\"version\":"+org.json.JSONObject.quote(v)+"}"); }
+    catch(Exception ignored){}
+  }catch(Exception ignored){}
+ }
+ // Automatische Anmeldung NUR auf dem Geraet, dem das Konto zugewiesen ist.
+ // Sonst werfen sich zwei Geraete mit hinterlegten Zugangsdaten gegenseitig
+ // aus dem Spiel (eine Sitzung je Welt) und melden sich immer wieder an -
+ // ein auffaelliges Muster auf dem Spielserver. Die Pruefung braucht das
+ // Netz, deshalb im Hintergrund; ein freies Konto wird dabei diesem Geraet
+ // zugewiesen.
+ private void anmeldenWennNoetig(WebView v){
+  if(gameAccountId.isEmpty())return;
+  if(!OdinVault.vorhanden(GameWebViewActivity.this,gameAccountId))return;
+  final String k=gameAccountId;
+  new Thread(()->{
+   boolean darf=OdinService.darfLaufen(getApplicationContext(),k);
+   runOnUiThread(()->{
+    if(darf)anmeldenJetzt(v);
+    else{
+     String h=OdinService.fremdHalter(k);
+     setStatus("Keine automatische Anmeldung - Konto ist "+(h==null?"einem anderen Gerät":h)+" zugewiesen");
+     OdinService.WARTET.add(k);
+     leaseGesperrt=true;
+     if(aktiv==Welt.this&&leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
+    }
+   });
+  }).start();
+ }
+ private void anmeldenJetzt(WebView v){
+  try{
+   if(gameAccountId.isEmpty())return;
+   String[] d=OdinVault.lesen(GameWebViewActivity.this,gameAccountId); if(d==null)return;
+   String u=org.json.JSONObject.quote(d[0]), p=org.json.JSONObject.quote(d[1]);
+   String js="(function(u,p){try{\n var f=document.getElementById('login_form'); if(!f) return 'kein_formular';\n var un=document.getElementById('user'), pw=document.getElementById('password');\n if(!un||!pw) return 'felder_fehlen';\n if(un.value && pw.value) return 'schon_gefuellt';\n function setz(el,v){\n  var d=Object.getOwnPropertyDescriptor(el.constructor.prototype,'value');\n  if(d&&d.set)d.set.call(el,v); else el.value=v;\n  el.dispatchEvent(new Event('input',{bubbles:true}));\n  el.dispatchEvent(new Event('change',{bubbles:true}));\n }\n setz(un,u); setz(pw,p);\n var rm=document.getElementById('remember-me'); if(rm&&!rm.checked)rm.click();\n // Das Formular hat action=\"#\" - abgeschickt wird ueber den Link, nicht submit.\n var btn=document.querySelector('a.btn-login');\n if(btn){ btn.click(); return 'abgeschickt'; }\n var sb=document.getElementById('login_submit_button');\n if(sb){ sb.click(); return 'abgeschickt_knopf'; }\n return 'kein_knopf';\n}catch(e){return 'fehler: '+e.message}})"+"("+u+","+p+");";
+   v.evaluateJavascript(js,r->{
+    String t=r==null?"":r.replace("\"","");
+    if(!"kein_formular".equals(t))setStatus("Anmeldung: "+t);
+   });
+  }catch(Exception e){ setStatus("Anmeldung fehlgeschlagen: "+e.getMessage()); }
+ }
+ // Laeuft auf der Oberflaechenschleife der eigenen Ansicht - dadurch keine
+ // Zugriffe auf Felder einer fremden Instanz.
+ private Runnable leiseWaechter=null;
+ // Das kleine Fenster schliesst sich selbst, sobald der Durchlauf fertig ist.
+ // Erkannt am ausbleibenden Puls: GodBot schreibt bei jedem Arbeitsschritt in
+ // den localStorage. Danach ist die Ansicht bis zum naechsten Termin
+ // gedrosselt - bei einem Raubzug alle zwanzig Minuten vertretbar und
+ // deutlich sparsamer.
+ private void leiseSchliessenNachArbeit(){
+  final long start=System.currentTimeMillis();
+  letzteAktivitaet=start;
+  if(leiseWaechter!=null)getWindow().getDecorView().removeCallbacks(leiseWaechter);
+  leiseWaechter=new Runnable(){
+   @Override public void run(){
+    if(!OdinFloat.active(gameAccountId))return;   // von Hand zurueckgeholt
+    long jetzt=System.currentTimeMillis();
+    long lief=jetzt-start, still=jetzt-letzteAktivitaet;
+    if(lief>FENSTER_MAX_MS){ setStatus("Fenster: Höchstdauer erreicht"); holeAusFenster(false); return; }
+    if(lief>FENSTER_MIN_MS&&still>RUHE_MS){
+     setStatus("Fenster: fertig nach "+(lief/1000)+" s"); holeAusFenster(false); return;
+    }
+    getWindow().getDecorView().postDelayed(this,10_000L);
+   }
+  };
+  getWindow().getDecorView().postDelayed(leiseWaechter,10_000L);
+ }
+ private void leiseSchweben(){
+  try{
+   // Im Dimm-Modus ist die WebView bereits sichtbar und ungedrosselt. Das
+   // kleine Fenster wuerde sie aus der gedimmten Ansicht herausreissen und
+   // nach getaner Arbeit in die dann im Hintergrund liegende Activity
+   // zurueckhaengen - genau so brach die Nachtaktivitaet ab.
+   if(dimDecke!=null){ setStatus("Termin - Dimm-Modus läuft, nichts nötig"); return; }
+   // Und genauso, wenn die Ansicht einfach offen vor einem liegt: dann ist
+   // die WebView schon gerendert und ungedrosselt. Das kleine Fenster riss
+   // sie aus der offenen Ansicht heraus und haengte sie danach zurueck -
+   // fuer den Benutzer ein Mini-Fenster, das ueber der laufenden App
+   // aufpoppt, obwohl er direkt davor sitzt.
+   if(imVordergrund){ setStatus("Termin - Ansicht ist offen, nichts nötig"); return; }
+   if(webView==null){ setStatus("Termin - keine Ansicht vorhanden"); return; }
+   if(OdinFloat.active(gameAccountId)){ setStatus("Termin - schwebt bereits"); return; }
+   // Bewusst das kleine Fenster: fuer die Aktion reicht, dass die WebView
+   // gerendert wird. Groesse spielt fuer die Drosselung keine Rolle.
+   if(OdinFloat.show(GameWebViewActivity.this,gameAccountId,webView,this::restoreFromFloat,OdinFloat.KLEIN,this::ausSymbolSchliessen)){
+    setStatus("Termin - kleines Fenster, Gerät nicht gestört");
+    leiseSchliessenNachArbeit();
+   }
+   else
+    setStatus("Termin - Symbol nicht möglich");
+  }catch(Exception e){ Log.w("ODIN_GODBOT","leiseSchweben",e); }
+ }
+ // Holt die WebView aus dem schwebenden Fenster zurueck in den Stapel.
+  // Dieselbe Instanz, damit die Spielsitzung nicht neu laedt.
+  void holeAusFenster(boolean nachVorne){
+   if(!OdinFloat.active(gameAccountId))return;
+   // 1.91.0: Ist die Welt/Ansicht schon beendet, kann die WebView nicht mehr
+   // zurueck - dann beenden statt verwaist weiterlaufen lassen.
+   if(geschlossen||isDestroyed()||isFinishing()){
+    try{ WebView alt=OdinFloat.hide(gameAccountId);
+         if(alt!=null){ alt.stopLoading(); alt.loadUrl("about:blank"); alt.destroy(); } }catch(Exception ig){}
+    if(nachVorne&&!geschlossen){
+     try{
+      Intent i=new Intent(getApplicationContext(),GameWebViewActivity.class);
+      i.setData(android.net.Uri.parse("odin://account/"+gameAccountId));
+      i.putExtra("accountId",gameAccountId); i.putExtra("username",kopfName); i.putExtra("world",weltName);
+      i.putExtra("supaUrl",supaUrl); i.putExtra("supaKey",supaKey);
+      i.putExtra("supaToken",supaToken); i.putExtra("supaTeam",supaTeam);
+      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+      getApplicationContext().startActivity(i);
+     }catch(Exception e){ android.util.Log.e("ODIN_FLOAT","neu starten",e); }
+    }
+    return;
+   }
+   final WebView w=OdinFloat.hide(gameAccountId);
+   if(w==null||weltRahmen==null)return;
+   webView=w;
+   runOnUiThread(()->{
+    try{
+     if(w.getParent() instanceof android.view.ViewGroup)
+      ((android.view.ViewGroup)w.getParent()).removeView(w);
+     w.setScaleX(1f); w.setScaleY(1f);
+     // Angezeigte Welt oben, alle anderen unten in den Stapel.
+     if(aktiv==Welt.this||nachVorne)weltRahmen.addView(w,new FrameLayout.LayoutParams(-1,-1));
+     else weltRahmen.addView(w,0,new FrameLayout.LayoutParams(-1,-1));
+     w.requestLayout(); w.invalidate();
+     if(nachVorne){
+      weltZeigen(Welt.this);
+      // 1.91.0: zuerst die eigene Aufgabe direkt nach vorn.
+      if(!aufgabeNachVorn(GameWebViewActivity.this,getTaskId())){
+       Intent i=new Intent(GameWebViewActivity.this,GameWebViewActivity.class);
+       if(!gameAccountId.isEmpty()){ i.setData(android.net.Uri.parse("odin://account/"+gameAccountId)); i.putExtra("accountId",gameAccountId); }
+       i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+       startActivity(i);
+      }
+      setStatus("zurueck im Vordergrund");
+     }else{
+      setStatus("Fenster geschlossen - zurück im Welten-Stapel");
+     }
+    }catch(Exception e){android.util.Log.e("ODIN_FLOAT","restore",e);}
+   });
+  }
+  void restoreFromFloat(){ holeAusFenster(true); }
+  // 1.92.0: Symbol in den Muelleimer gezogen - NUR diese Welt schliessen.
+  // Hat der Dienst fuer sie einen Termin, weckt er sie spaeter wieder.
+  void ausSymbolSchliessen(){
+   runOnUiThread(()->weltSchliessen(Welt.this,"Symbol in den Mülleimer gezogen"));
+  }
+ private void injectManagedScripts(WebView v){try{BufferedReader r=new BufferedReader(new InputStreamReader(getAssets().open("game-scripts.js")));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append('\n');r.close();v.evaluateJavascript(b.toString(),null);}catch(Exception e){Log.e("ODIN","bootstrap",e);}}
+ private void loadEnabledScripts(WebView v){ }
+ private void executeGodBotWhenReady(WebView v){ }
+ private void injectGodBot(WebView v){ }
+ private WebResourceResponse odinIntercept(WebResourceRequest r){ return null; }
+ // __ODIN_LOADER_ENDE__ (patch-godbot-loader.sh ersetzt bis hierher)
+ private class OdinNative{@JavascriptInterface public void minimize(){runOnUiThread(()->weltSchliessen(Welt.this,"von der Seite beendet"));} @JavascriptInterface public void status(String m){setStatus(m==null?"":m);}
   // Lebenszeichen aus der Seite: GodBot schreibt bei jedem Arbeitsschritt in
   // den localStorage. Bleibt das aus, ist der Durchlauf fertig.
   @JavascriptInterface public void puls(){ letzteAktivitaet=System.currentTimeMillis(); }
   // window.Odin.lebt / window.Odin.termin (godbot/GodBot.user.js, Odin-Anbindung)
-  @JavascriptInterface public void lebt(){ OdinService.lebt(gameAccountId); }
+  @JavascriptInterface public void lebt(){ lebtZaehler++; OdinService.lebt(gameAccountId); }
   @JavascriptInterface public void termin(String skey,String art,String ms){
    long z; try{ z=Long.parseLong(ms); }catch(Exception e){ return; }
    OdinService.appTermin(GameWebViewActivity.this,gameAccountId,kopfName,skey,art,z);
@@ -4383,7 +4549,7 @@ public class GameWebViewActivity extends Activity {
    }).start();
   }
   @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
- private class OdinBridge{@JavascriptInterface public void minimize(){runOnUiThread(()->minimizeToApp());}}
+ } // Ende Welt
 }
 EOF
 printf '%s\n' "ODIN $VERSION · clean generator"

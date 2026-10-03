@@ -26,6 +26,8 @@ from pathlib import Path
 import sys, json
 
 p = Path(sys.argv[1]); version = sys.argv[2]; s = p.read_text()
+# 1.96.0: Der Block liegt in der inneren Klasse Welt (je Welt eigene WebView,
+# Bruecke, Teile). Ende-Anker ist die Marke // __ODIN_LOADER_ENDE__.
 
 js = r"""
 (function(){try{
@@ -476,7 +478,7 @@ js = r"""
 """.replace('__VERSION__', version)
 
 a = s.index(' private void loadEnabledScripts(WebView v){')
-b = s.index('\n @Override public void onWindowFocusChanged', a)
+b = s.index('\n // __ODIN_LOADER_ENDE__', a)
 
 new = ''' private void loadEnabledScripts(WebView v){
   String u=v.getUrl()==null?"":v.getUrl(); if(!u.matches("(?i).*[/]game[.]php(?:[?].*)?$")) return;
@@ -524,7 +526,7 @@ new = ''' private void loadEnabledScripts(WebView v){
    try{
     java.util.List<byte[]> teile=new java.util.ArrayList<>();
     // GodBot kommt aus der APK - kein Netz, kein Gist, keine Ablaufzeit.
-    String gb=OdinSkripte.godbot(this);
+    String gb=OdinSkripte.godbot(GameWebViewActivity.this);
     boolean gbAn=gb.length()>1000;
     // 1.93.1: GodBot nur auf einer Spielwelt, nicht auf der Anmeldeseite www.
     // Dort schrieb er seinen Freischaltcode-Zustand in die falsche Origin.
@@ -532,19 +534,19 @@ new = ''' private void loadEnabledScripts(WebView v){
      if(gbAn&&(host==null||!host.toLowerCase().matches("[a-z]+[0-9]+[.]die-staemme[.]de")))gbAn=false; }catch(Exception ignored){}
     // Geraete-Sperre: fuehrt ein anderes Geraet dieses Konto, bleibt GodBot
     // hier aus. Zusatzskripte und manuelles Spielen laufen weiter.
-    if(gbAn&&!gameAccountId.isEmpty()&&!OdinService.darfLaufen(this,gameAccountId)){
+    if(gbAn&&!gameAccountId.isEmpty()&&!OdinService.darfLaufen(GameWebViewActivity.this,gameAccountId)){
      gbAn=false;
      OdinService.WARTET.add(gameAccountId);
      String h=OdinService.fremdHalter(gameAccountId);
      leaseGesperrtAnzeigen(h==null?"einem anderen Gerät":h);
     }else OdinService.WARTET.remove(gameAccountId);
     if(gbAn){
-     teile.add(OdinSkripte.godbotBytes(this));
+     teile.add(OdinSkripte.godbotBytes(GameWebViewActivity.this));
      if(!godbotGemeldet){ godbotGemeldet=true; versionPruefen(OdinSkripte.GODBOT_ID,"GodBot",gb); }
     }else if(!OdinService.WARTET.contains(gameAccountId))setStatus("GodBot fehlt in dieser App-Fassung");
     // Zusatzskripte (Tampermonkey) aus der Teamliste.
     org.json.JSONArray liste=serverSkripte();
-    if(liste==null)liste=OdinSkripte.liste(this);
+    if(liste==null)liste=OdinSkripte.liste(GameWebViewActivity.this);
     int extra=0, uebergangen=0;
     for(int qi=0;qi<liste.length();qi++){
      org.json.JSONObject o=liste.optJSONObject(qi);
@@ -595,7 +597,7 @@ new = ''' private void loadEnabledScripts(WebView v){
 '''
 
 a = s.index(' private void loadEnabledScripts(WebView v){')
-b = s.index('\n @Override public void onWindowFocusChanged', a)
+b = s.index('\n // __ODIN_LOADER_ENDE__', a)
 s = s[:a] + new + s[b:]
 p.write_text(s)
 print('GodBot loader: interception mode, bootstrap %d chars' % len(js))
