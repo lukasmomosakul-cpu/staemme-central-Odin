@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      559
+// @version      560
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -50727,6 +50727,51 @@ function belohnungListeAusDialog(html) {
     }
 }
 
+// v560: Die Antwort von quest_popup war nie vollstaendig belegt (alle
+// Mitschnitte gekuerzt, keiner aus der mobilen Ansicht). Scheitert das
+// Lesen, wird deshalb (1) die Rohantwort in den Seitenmitschnitt gelegt -
+// auch wenn der Mitschnitt aus ist -, (2) einmal die Questseite selbst
+// geholt und nach derselben Liste durchsucht und (3) der Befund mit
+// Zahlen ins App-Protokoll geschrieben statt nur in die Konsole.
+const BELOHNUNG_ROH_MAX = 300000;
+
+function belohnungRohSichern(kind, url, status, txt, notiz) {
+    try {
+        const list = loadPageCaptures().filter(c => c && c.kind !== kind);
+        let html = String(txt || "");
+        const gekuerzt = html.length > BELOHNUNG_ROH_MAX;
+        if (gekuerzt) html = html.slice(0, BELOHNUNG_ROH_MAX);
+        const belegt = list.reduce((sum, c) => sum + (c.html ? c.html.length : 0), 0);
+        if (belegt + html.length > PAGE_CAPTURE_MAX_CHARS_TOTAL) {
+            console.warn(`[TW] Belohnungen: Rohantwort "${kind}" nicht abgelegt - Seitenmitschnitt voll ` +
+                `(${Math.round(belegt / 1024)} KB).`);
+            return false;
+        }
+        list.push({
+            kind,
+            notiz: `HTTP ${status} - ${notiz || ""}`,
+            at: Date.now(),
+            url: location.origin + url,
+            layout: pageCaptureLayoutLabel(),
+            gekuerzt,
+            html
+        });
+        return savePageCaptures(list);
+    } catch (e) {
+        console.warn("[TW] Belohnungen: Rohantwort nicht ablegbar.", e);
+        return false;
+    }
+}
+
+function belohnungBefund(status, txt, json, dialog) {
+    const t = String(txt || "");
+    const anfang = t.slice(0, 80).replace(/\s+/g, " ").replace(/[<>]/g, "");
+    return `HTTP ${status}, ${t.length} Zeichen, JSON ${json ? "ja" : "nein"}, ` +
+        `dialog ${typeof dialog === "string" ? dialog.length + " Zeichen" : "fehlt"}, ` +
+        `RewardSystem ${t.indexOf("RewardSystem") >= 0 ? "ja" : "nein"}, ` +
+        `reward-tab ${t.indexOf("reward-tab") >= 0 ? "ja" : "nein"}, Anfang „${anfang}“`;
+}
+
 function belohnungListeHolen(villageId, cb) {
     const url = "/game.php?village=" + encodeURIComponent(villageId) +
         "&screen=new_quests&ajax=quest_popup&tab=main-tab";
@@ -50742,15 +50787,53 @@ function belohnungListeHolen(villageId, cb) {
                     botschutz = frameDocBlocked(new DOMParser().parseFromString(String(txt), "text/html"),
                         "belohnung:liste");
                 } catch (e) { }
-                cb({ ok: false, botschutz, grund: botschutz ? "Botschutz" : `HTTP ${status}, kein JSON` });
-                return;
+                if (botschutz) { cb({ ok: false, botschutz: true, grund: "Botschutz" }); return; }
             }
-            const dialog = j.response && j.response.dialog;
-            const liste = belohnungListeAusDialog(dialog);
-            if (!liste) { cb({ ok: false, grund: "RewardSystem.setRewards nicht im Quest-Fenster gefunden" }); return; }
-            cb({ ok: true, liste });
+            const dialog = j && j.response && j.response.dialog;
+            const liste = (status === 200 && j) ? belohnungListeAusDialog(dialog) : null;
+            if (liste) { cb({ ok: true, liste, weg: "quest_popup" }); return; }
+            const befund = belohnungBefund(status, txt, !!j, dialog);
+            belohnungRohSichern("belohnung-quest_popup", url, status, txt, befund);
+            setTimeout(() => belohnungSeiteProben(villageId, befund, cb), humanDelay(900, 1800));
         })
         .catch(err => cb({ ok: false, grund: "Anfrage nicht möglich: " + (err && err.message ? err.message : err) }));
+}
+
+// Rueckfall: die Questseite selbst (in der mobilen Ansicht oeffnet das
+// Spiel Aufgaben als Seite, belegt durch die Seitenaufrufe new_quests* /
+// new_quests/main* vom 25./26.09.). Gesucht wird exakt derselbe Aufruf
+// RewardSystem.setRewards( - nichts wird erraten. Fehlt er, liefert der
+// Befund die auf der Seite verlinkten Questseiten-Modi fuer den naechsten
+// Schritt.
+function belohnungSeiteProben(villageId, befundPopup, cb) {
+    if (isBotProtectionActive()) { cb({ ok: false, grund: "Botschutz" }); return; }
+    const url = "/game.php?village=" + encodeURIComponent(villageId) + "&screen=new_quests";
+    twCountRequest(url, "auto", "belohnung-seite");
+    fetch(url, { credentials: "same-origin" })
+        .then(r => r.text().then(txt => ({ status: r.status, txt })))
+        .then(({ status, txt }) => {
+            let doc = null;
+            try { doc = new DOMParser().parseFromString(String(txt), "text/html"); } catch (e) { }
+            let botschutz = false;
+            try { botschutz = !!doc && frameDocBlocked(doc, "belohnung:seite"); } catch (e) { }
+            if (botschutz) { cb({ ok: false, botschutz: true, grund: "Botschutz" }); return; }
+            const liste = status === 200 ? belohnungListeAusDialog(txt) : null;
+            if (liste) {
+                cb({ ok: true, liste, weg: "Questseite", befundPopup });
+                return;
+            }
+            const modi = [];
+            const re = /screen=new_quests(?:&amp;|&)mode=([a-z_]+)/g;
+            let m;
+            while ((m = re.exec(String(txt))) !== null) { if (modi.indexOf(m[1]) < 0) modi.push(m[1]); }
+            const layout = doc ? twLayoutOf(doc) : "unklar";
+            const befundSeite = belohnungBefund(status, txt, false, undefined).replace(/, JSON nein, dialog fehlt/, "") +
+                `, Ansicht ${layout}, Modi ${modi.length ? modi.join("/") : "keine"}`;
+            belohnungRohSichern("belohnung-questseite", url, status, txt, befundSeite);
+            cb({ ok: false, grund: `quest_popup: ${befundPopup} | Questseite: ${befundSeite}` });
+        })
+        .catch(err => cb({ ok: false, grund: `quest_popup: ${befundPopup} | Questseite nicht abrufbar: ` +
+            (err && err.message ? err.message : err) }));
 }
 
 function belohnungAbholen(villageId, csrf, rewardId, cb) {
@@ -50860,11 +50943,19 @@ function belohnungFuerBau(win, villageId, kosten, vorrat, zweck, cb) {
     belohnungListeHolen(villageId, (r) => {
         if (!r.ok) {
             if (r.botschutz) { haltAllAutomation("belohnung:liste"); ende(false, "Botschutz"); return; }
-            console.warn(`[TW] Belohnungen ${dorf}: Liste nicht lesbar - ${r.grund}. ` +
-                `Nächster Versuch in 6 Std.`);
+            const text = `Belohnungen ${dorf}: Liste nicht lesbar - ${r.grund}. ` +
+                `Nächster Versuch in 6 Std. Rohantworten liegen im Seitenmitschnitt.`;
+            console.warn("[TW] " + text);
+            try { odin.protokoll(text); } catch (e) { }
             belohnungRuhe(villageId, BELOHNUNG_RUHE_FEHLER_MS, true);
             ende(false, r.grund);
             return;
+        }
+        if (r.weg === "Questseite") {
+            const text = `Belohnungen ${dorf}: Liste über die Questseite gelesen ` +
+                `(${r.liste.sichtbar.length} offen) - quest_popup ohne Liste: ${r.befundPopup}`;
+            console.log("[TW] " + text);
+            try { odin.protokoll(text); } catch (e) { }
         }
         if (!r.liste.sichtbar.length) {
             belohnungRuhe(villageId, BELOHNUNG_RUHE_LEER_MS, true);
@@ -50873,8 +50964,12 @@ function belohnungFuerBau(win, villageId, kosten, vorrat, zweck, cb) {
         }
         const p = belohnungPlan(r.liste, vorrat, kosten);
         if (!p.geschlossen) {
-            console.log(`[TW] Belohnungen ${dorf}: ${zweck} - die offenen Belohnungen schließen ` +
-                `die Lücke nicht (ohne Speicherüberlauf). Sie bleiben liegen.`);
+            const fehlt = BELOHNUNG_RES.map(x => Math.max(0, (kosten[x] || 0) - (vorrat[x] || 0))).join("/");
+            const text = `Belohnungen ${dorf}: ${zweck} - ${r.liste.sichtbar.length} offene Belohnung(en) ` +
+                `schließen die Lücke ${fehlt} nicht (Speicher ${vorrat.storageMax}, höchstens erreichbar ` +
+                `${p.danach.wood}/${p.danach.stone}/${p.danach.iron}). Sie bleiben liegen.`;
+            console.log("[TW] " + text);
+            try { odin.protokoll(text); } catch (e) { }
             belohnungRuhe(villageId, BELOHNUNG_RUHE_DORF_MS, false);
             ende(false, "Lücke nicht schließbar");
             return;
@@ -50888,7 +50983,10 @@ function belohnungFuerBau(win, villageId, kosten, vorrat, zweck, cb) {
         let i = 0;
         const naechste = () => {
             if (i >= p.plan.length) {
-                console.log(`[TW] Belohnungen ${dorf}: ${p.plan.length} abgeholt - ${zweck} ist bezahlbar.`);
+                const text = `Belohnungen ${dorf}: ${p.plan.length} abgeholt (${p.plan.join(", ")}) - ` +
+                    `${zweck} ist bezahlbar.`;
+                console.log("[TW] " + text);
+                try { odin.protokoll(text); } catch (e) { }
                 ende(true, `${p.plan.length} Belohnung(en) abgeholt`);
                 return;
             }
@@ -50904,8 +51002,10 @@ function belohnungFuerBau(win, villageId, kosten, vorrat, zweck, cb) {
             belohnungAbholen(villageId, csrf, rw.id, (a) => {
                 if (!a.ok) {
                     if (a.botschutz) { haltAllAutomation("belohnung:abholen"); ende(false, "Botschutz"); return; }
-                    console.warn(`[TW] Belohnungen ${dorf}: Abholen von ${geb} Stufe ${rw.building_level} ` +
-                        `fehlgeschlagen - ${a.grund}.`);
+                    const text = `Belohnungen ${dorf}: Abholen von ${geb} Stufe ${rw.building_level} ` +
+                        `fehlgeschlagen nach ${i} von ${p.plan.length} - ${a.grund}.`;
+                    console.warn("[TW] " + text);
+                    try { odin.protokoll(text); } catch (e) { }
                     belohnungRuhe(villageId, BELOHNUNG_RUHE_DORF_MS, false);
                     ende(false, a.grund);
                     return;
@@ -50914,8 +51014,10 @@ function belohnungFuerBau(win, villageId, kosten, vorrat, zweck, cb) {
                 // die Antwort ein anderes, sofort aufhoeren.
                 const gv = a.gameData && a.gameData.village;
                 if (gv && String(gv.id) !== String(villageId)) {
-                    console.error(`[TW] Belohnungen ${dorf}: Antwort nennt Dorf ${gv.id} statt ${villageId} - ` +
-                        `Abbruch, damit nichts im falschen Dorf landet.`);
+                    const text = `Belohnungen ${dorf}: Antwort nennt Dorf ${gv.id} statt ${villageId} - ` +
+                        `Abbruch, damit nichts im falschen Dorf landet.`;
+                    console.error("[TW] " + text);
+                    try { odin.protokoll(text); } catch (e) { }
                     belohnungRuhe(villageId, BELOHNUNG_RUHE_FEHLER_MS, true);
                     ende(false, "falsches Dorf");
                     return;
