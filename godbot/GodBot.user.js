@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      562
+// @version      563
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -42335,6 +42335,63 @@ function bauVorlageAblegen(v) {
     return id;
 }
 
+// VORLAGENSAMMLUNG (v563, 04.10.2026)
+// ------------------------------------------------------------------
+// Odin fuehrt eine Sammlung fuer alle Konten des Teams (Supabase
+// bau_vorlagen, Web-App "Vorlagen"). Uebertragen wird sie als App-Befehl
+// bauvorlage.uebernehmen mit {name, queue, zuweisen}. queue hat genau das
+// Format von bauAuftraegeAlsQueueData ("gebaeude:stufen;..." relativ).
+// Gleicher Name = dieselbe Vorlage (id bleibt, Zuweisungen bleiben).
+// zuweisen: "frei" (Doerfer ohne Vorlage, Vorgabe), "alle", "keine".
+// Ob ein Gebaeude auf der Welt existiert, prueft wie immer der Bauteil.
+function bauVorlageAusSammlung(wert) {
+    const w = (wert && typeof wert === "object") ? wert : {};
+    const name = String(w.name || "").trim().slice(0, 60);
+    if (!name) return { ok: false, text: "Name fehlt" };
+    const teile = String(w.queue || "").split(";").map(x => x.trim()).filter(Boolean);
+    const auftraege = [];
+    for (const t of teile) {
+        const m = t.match(/^([a-z_]+):(\d{1,2})$/);
+        if (!m || !BAU_NAMEN[m[1]] || parseInt(m[2], 10) < 1) {
+            return { ok: false, text: `ungültiger Eintrag „${t.slice(0, 30)}“` };
+        }
+        auftraege.push({ gebaeude: m[1], stufen: parseInt(m[2], 10) });
+    }
+    if (!auftraege.length) return { ok: false, text: "Vorlage ist leer" };
+    const end = {};
+    auftraege.forEach(a => { end[a.gebaeude] = (end[a.gebaeude] || 0) + a.stufen; });
+    const zuHoch = Object.keys(end).filter(g => end[g] > 30);
+    if (zuHoch.length) return { ok: false, text: `Endstufe über 30: ${zuHoch.join(", ")}` };
+
+    if (bauPapierkorbGesperrt(name)) bauPapierkorbVergessen(name);
+    const alt = ladeBauVorlagen().find(v => v && v.name === name) || null;
+    const id = bauVorlageAblegen({
+        id: alt ? alt.id : undefined,
+        name,
+        auftraege,
+        zusatz: alt && Array.isArray(alt.zusatz) ? alt.zusatz : [0, 0],
+        art: alt ? alt.art : undefined,
+        abreissen: alt ? !!alt.abreissen : false
+    });
+
+    const modus = w.zuweisen === "alle" ? "alle" : (w.zuweisen === "keine" ? "keine" : "frei");
+    let zugewiesen = 0;
+    if (modus !== "keine") {
+        bauDorfListe().forEach(d => {
+            const vid = String(d.id);
+            const ist = bauVorlageFuerDorf(vid);
+            if (ist && String(ist.vorlageId) === String(id)) return;
+            if (modus === "frei" && ist) return;
+            if (bauZuweisungSetzen("doerfer", vid, id, "gesamt", getVillageDisplayName(vid) || vid)) zugewiesen++;
+        });
+    }
+    try { bauZuweisungAufloesen(); } catch (e) { }
+    const text = `Vorlage „${name}“ ${alt ? "aktualisiert" : "angelegt"} (${auftraege.length} Aufträge, ` +
+        `${Object.keys(end).length} Gebäude), ${zugewiesen} Dorf/Dörfer neu zugewiesen`;
+    console.log("[TW] Vorlagensammlung: " + text + ".");
+    return { ok: true, text };
+}
+
 // PAPIERKORB (29.08.2026)
 // ------------------------------------------------------------------
 // Der Abgleich mit dem Account-Manager holt die Vorlagen ueber ihren
@@ -50352,6 +50409,8 @@ function merkeBauFehler(villageId, grund) {
 // Speicherschluessel fuer dieselbe Sache waere genau die Doppelung,
 // die spaeter auseinanderlaeuft.
 function merkeBauErgebnis(villageId, art, text, stand, restMs, kosten) {
+    // v563: Fertigstellung des laufenden Auftrags fuer die Belohnung merken.
+    try { if (restMs > 0) belohnungFaelligMerken(restMs); } catch (e) { }
     const plaene = ladeBauPlaene();
     const p = plaene[String(villageId)];
     if (!p) return false;
@@ -50676,6 +50735,10 @@ function belohnungStandSpeichern(s) {
 function belohnungRuhe(villageId, ms, allgemein) {
     const s = belohnungStandLaden();
     const bis = Date.now() + ms;
+    // v563: Fehler-Ruhe gesondert merken - sie gilt auch gegen das
+    // Sofort-Abholen nach einer fertigen Stufe (kein Dauerabfragen bei
+    // unlesbarer Liste).
+    if (ms >= BELOHNUNG_RUHE_FEHLER_MS) s.fehlerBis = bis;
     if (allgemein) s.ruheBis = bis;
     else {
         s.dorfRuhe = s.dorfRuhe || {};
@@ -50683,6 +50746,45 @@ function belohnungRuhe(villageId, ms, allgemein) {
         // Alte Eintraege nicht ewig mitschleppen.
         Object.keys(s.dorfRuhe).forEach(k => { if (s.dorfRuhe[k] < Date.now()) delete s.dorfRuhe[k]; });
     }
+    belohnungStandSpeichern(s);
+}
+
+// v563 (Fetteruruk 04.10.2026): "Immer wenn eine Gebaeudestufe gebaut
+// wurde, ist die Belohnung sofort verfuegbar." Die Restzeit des laufenden
+// Auftrags liest der Bauteil ohnehin (bauSchleifeRestMs, belegt an der
+// mobilen Bauseite). Daraus wird der Fertigstellungszeitpunkt gemerkt;
+// ist er erreicht, holt der Belohnungslauf sofort ab - unabhaengig von
+// der Ruhe nach "nichts offen". Derselbe Auftrag liefert bei jedem Besuch
+// fast denselben Zeitpunkt, deshalb gilt alles innerhalb einer Minute als
+// schon bekannt.
+const BELOHNUNG_NACHLAUF_MS = 20 * 1000;
+
+function belohnungFaelligMerken(restMs) {
+    const ms = Number(restMs);
+    if (!(ms > 0) || ms > 7 * 24 * 3600 * 1000) return false;
+    const at = Date.now() + ms + BELOHNUNG_NACHLAUF_MS;
+    const s = belohnungStandLaden();
+    const l = (Array.isArray(s.faellig) ? s.faellig : []).filter(x => Number(x) > Date.now() - 6 * 3600 * 1000);
+    if (l.some(x => Math.abs(Number(x) - at) < 60 * 1000)) return false;
+    l.push(at);
+    l.sort((a, b) => a - b);
+    s.faellig = l.slice(-30);
+    belohnungStandSpeichern(s);
+    return true;
+}
+
+function belohnungStufeFertig() {
+    const s = belohnungStandLaden();
+    const jetzt = Date.now();
+    if (s.fehlerBis && s.fehlerBis > jetzt) return false;
+    return (Array.isArray(s.faellig) ? s.faellig : []).some(x => Number(x) <= jetzt);
+}
+
+function belohnungFaelligVerbrauchen() {
+    const s = belohnungStandLaden();
+    if (!Array.isArray(s.faellig) || !s.faellig.length) return;
+    const jetzt = Date.now();
+    s.faellig = s.faellig.filter(x => Number(x) > jetzt);
     belohnungStandSpeichern(s);
 }
 
@@ -50951,6 +51053,7 @@ function belohnungDauerFaellig() {
     if (belohnungLaufAktiv || !belohnungCfg().enabled) return false;
     try {
         if (typeof game_data === "undefined" || !game_data.village || !game_data.csrf) return false;
+        if (belohnungStufeFertig()) return true;
         return !belohnungInRuhe(game_data.village.id);
     } catch (e) { return false; }
 }
@@ -50964,12 +51067,14 @@ function belohnungDauerlauf() {
     const csrf = game_data.csrf;
     const dorf = getVillageDisplayName(villageId) || villageId;
     belohnungLaufAktiv = true;
+    belohnungFaelligVerbrauchen();
     const geholt = [];
     const summe = { wood: 0, stone: 0, iron: 0 };
     const ende = (text, ruheMs, allgemein, protokoll) => {
         belohnungLaufAktiv = false;
         if (ruheMs) belohnungRuhe(villageId, ruheMs, allgemein);
         if (geholt.length) {
+            try { bauTerminLoeschen(villageId); } catch (e) { }
             const t = `Belohnungen ${dorf}: ${geholt.length} abgeholt (${geholt.join(", ")}), ` +
                 `+${summe.wood}/${summe.stone}/${summe.iron}. ${text}`;
             console.log("[TW] " + t);
@@ -51152,6 +51257,15 @@ function bauSchrittAusfuehren(win, doc, villageId, callback) {
             // macht sofort weiter, und faellt er aus, ist das Dorf beim
             // naechsten Blick dran. Der Fehlerzaehler faellt mit.
             bauTerminLoeschen(villageId);
+            // v563: Die Antwort bringt die frische Bauschleife mit. Lief
+            // vorher nichts, ist der neue Auftrag jetzt der laufende - seine
+            // Restzeit steht nur hier.
+            try {
+                if (antwort.queueHtml) {
+                    const qd = new DOMParser().parseFromString(String(antwort.queueHtml), "text/html");
+                    belohnungFaelligMerken(bauSchleifeRestMs(qd));
+                }
+            } catch (e) { }
             merkeBauErgebnis(villageId, "ok", schritt.grund +
                 (antwort.fertigIn ? `, fertig in ${antwort.fertigIn}` : ""),
                 stand, bauSchleifeRestMs(doc), null);
@@ -61833,8 +61947,18 @@ if (location.href.includes("mode=scavenge_mass")) {
 
     function odinBefehlAnwenden(pfad, wert, erstelltMs) {
         pfad = String(pfad || "");
-        if (erstelltMs && Date.now() - erstelltMs > ODIN_BEFEHL_VERFALL_MS) {
-            return { ok: false, text: "verfallen - lag über 60 Min ungelesen" };
+        // v563: Eine Vorlage aus der Sammlung ist nicht zeitkritisch - sie
+        // gilt eine Woche, damit sie auch ein Konto erreicht, das gerade ruht.
+        const vorlageBefehl = pfad === "bauvorlage.uebernehmen";
+        if (erstelltMs && Date.now() - erstelltMs > (vorlageBefehl ? 7 * 24 * 3600 * 1000 : ODIN_BEFEHL_VERFALL_MS)) {
+            return { ok: false, text: vorlageBefehl ? "verfallen - lag über 7 Tage ungelesen"
+                : "verfallen - lag über 60 Min ungelesen" };
+        }
+
+        if (vorlageBefehl) {
+            const r = bauVorlageAusSammlung(wert);
+            try { odinSteuerstandMelden(true); } catch (e) { }
+            return r;
         }
 
         // --- Schalter ---------------------------------------------------
