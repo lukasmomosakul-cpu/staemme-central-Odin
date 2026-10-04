@@ -796,6 +796,7 @@ public class OdinService extends Service {
    if(GameWebViewActivity.laeuftUngedrosselt(this,konto))continue;
    if(zuletztVorn(konto)>ms+60_000L)continue;
    if(gesperrt(konto))continue;
+   if(fremdHalter(konto)!=null)continue;   // 2.0.17: fuehrt ein anderes Geraet
    Long z=nachgeweckt.get(e.getKey());
    if(z!=null&&jetzt-z<300_000L)continue;
    long[] zahl=nachweckZahl.get(e.getKey());
@@ -992,8 +993,15 @@ public class OdinService extends Service {
  private long vorgewarntFuer=0L;
  private void vorwarnPruefen(){
   if(!nbVorwarnAn)return;
-  java.util.Map.Entry<Long,String[]> e;
-  synchronized(faellig){ e=faellig.firstEntry(); }
+  // 2.0.17: Termine von Konten, die ein anderes Geraet fuehrt, meldet
+  // dieses Geraet nicht - dort laeuft GodBot und erledigt sie.
+  java.util.Map.Entry<Long,String[]> e=null;
+  synchronized(faellig){
+   for(java.util.Map.Entry<Long,String[]> x:faellig.entrySet()){
+    if(fremdHalter(x.getValue()[0])!=null)continue;
+    e=x; break;
+   }
+  }
   if(e==null)return;
   long ziel=e.getKey(), jetzt=System.currentTimeMillis();
   long rest=ziel-jetzt;
@@ -1215,8 +1223,11 @@ public class OdinService extends Service {
   synchronized(faellig){ e=faellig.firstEntry(); }
   if(e==null||e.getKey()>jetzt)return;
   synchronized(faellig){ faellig.remove(e.getKey()); }
-  zuletztGeweckt=jetzt;
   String konto=e.getValue()[0], text=e.getValue()[1], art=e.getValue()[2];
+  // 2.0.17: fremd gefuehrtes Konto - Termin verwerfen, ohne die 90-s-Sperre
+  // fuer eigene Termine zu verbrauchen.
+  if(fremdHalter(konto)!=null){ OdinLog.schreib(this,"-","info","Termin übergangen ("+art+") - Konto läuft auf "+fremdHalter(konto)); return; }
+  zuletztGeweckt=jetzt;
   wecken(this,konto,text,art,"Raubzug".equals(art));
  }
  // Der Dimm-Modus soll die Nacht durchhalten. Faellt die Ansicht aus dem
@@ -1474,6 +1485,16 @@ public class OdinService extends Service {
    lastSeen=o.optString("created_at",lastSeen);
    // Eigene Meldungen nicht erneut anzeigen.
    if(device.equals(o.optString("source","")))continue;
+   // 2.0.17: Meldungen zu einem Konto, das gerade ein anderes Geraet fuehrt,
+   // gehoeren dorthin - einzige Ausnahme ist der Botschutz, der ueberall
+   // ankommen muss.
+   {
+    String acc=o.optString("account_id","");
+    if(!acc.isEmpty()&&!"null".equals(acc)&&fremdHalter(acc)!=null){
+     String z=o.optString("title","")+" "+o.optString("body","");
+     if(!IST_BOTSCHUTZ.matcher(z).find())continue;
+    }
+   }
    show(o.optString("title","Odin"),o.optString("body",""),o.optString("level","info"));
   }
  }
@@ -3479,13 +3500,7 @@ public class GameWebViewActivity extends Activity {
   leaseKnopf.setVisibility(android.view.View.GONE);
   leaseKnopf.setOnClickListener(x->{
    final Welt aw=aktiv; if(aw==null)return;
-   final String k=aw.gameAccountId; final Context app=getApplicationContext();
-   setStatus("Übernehme GodBot von dem anderen Gerät ...");
-   new Thread(()->{
-    Object[] e=OdinService.leaseHolen(app,k,true);
-    if(e!=null&&(Boolean)e[0]){ OdinService.WARTET.remove(k); neuLadenFuer(k,"GodBot übernommen - das andere Gerät pausiert bei seiner nächsten Prüfung"); }
-    else setStatus("Übernehmen fehlgeschlagen - keine Verbindung?");
-   }).start();
+   aw.uebernehmen();
   });
   bar.addView(leaseKnopf,kopfKnopfLp());
   Button min=kopfKnopf("▁ Minimieren");
@@ -4407,8 +4422,10 @@ public class GameWebViewActivity extends Activity {
   final Welt w=a.weltVon(konto); if(w==null)return;
   a.runOnUiThread(()->{
    w.setStatus(grund);
-   w.leaseGesperrt=false;
+   w.leaseGesperrt=false; w.anmeldungOffen=false;
    if(a.aktiv==w&&a.leaseKnopf!=null)a.leaseKnopf.setVisibility(android.view.View.GONE);
+   // 2.0.17: Auf der Sperrseite wuerde reload() nur sie selbst wiederholen.
+   if(w.leaseSeite){ w.leaseSeite=false; w.laden(); return; }
    try{ w.webView.setTag(0x0D1A0001,null); w.webView.reload(); }catch(Exception ignored){}
   });
  }
@@ -4482,6 +4499,10 @@ public class GameWebViewActivity extends Activity {
   // Hand (keine Zugangsdaten hinterlegt oder Konto einem anderen Geraet
   // zugewiesen). Dann darf kein Ladescreen darueber liegen.
   volatile boolean anmeldungOffen=false;
+  // 2.0.17: Statt der Spielseite steht die lokale Seite "Konto laeuft auf
+  // Geraet X - Uebernehmen?". Neuladen muss dann laden() aufrufen, nicht
+  // die lokale Seite wiederholen.
+  volatile boolean leaseSeite=false;
   volatile boolean geladen=false;
   volatile boolean geschlossen=false;
   long zuletztGezeigt=0L;
@@ -4505,7 +4526,8 @@ public class GameWebViewActivity extends Activity {
   String kurz(){ return weltName.isEmpty()?kopfName:weltName; }
   void setStatus(String msg){
    // 1.86.0: "kein Fehler" ist kein Fehler.
-   String stufe = ((msg.contains("Fehler")&&!msg.contains("kein Fehler"))||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
+   // 2.0.17: "0 Fehler" (Netz-Messzeile) ist ebenfalls kein Fehler.
+   String stufe = ((msg.contains("Fehler")&&!msg.contains("kein Fehler")&&!java.util.regex.Pattern.compile("(^|[^0-9])0 Fehler").matcher(msg).find())||msg.contains("fehlgeschlagen")||msg.contains("Achtung")) ? "FEHLER"
                 : (msg.contains("Zugangssperre")||msg.contains("Wecker")) ? "WICHTIG" : "info";
    melde(stufe,msg);
   }
@@ -4595,7 +4617,10 @@ public class GameWebViewActivity extends Activity {
   return true;
  }
  @Override public boolean onShowFileChooser(WebView v,ValueCallback<android.net.Uri[]> cb,FileChooserParams p){cb.onReceiveValue(null);return true;}
- @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return false;}
+ @Override public void onPermissionRequest(final PermissionRequest r){runOnUiThread(()->r.deny());}});webView.addJavascriptInterface(new OdinNative(),bridgeName);webView.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
+   // 2.0.17: Knopf der Sperrseite (lokal erzeugt, keine Netzanfrage).
+   try{ if(r!=null&&r.getUrl()!=null&&r.getUrl().toString().startsWith("odin-app://uebernehmen")){ uebernehmen(); return true; } }catch(Exception ig){}
+   return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){
    anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
  @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
@@ -4673,6 +4698,13 @@ public class GameWebViewActivity extends Activity {
     // 2.0.5: Beim Laden IMMER voll pruefen (auch Neuladen/Renderer-Neuaufbau),
     // inkl. IP-Test - nicht nur beim ersten Oeffnen.
     String fehler=proxyPruefen(true);
+    // 2.0.17: Fuehrt ein anderes Geraet dieses Konto, wird NICHT geladen -
+    // sonst wuerde die Anmeldung (automatisch oder von Hand) das andere
+    // Geraet aus dem Spiel werfen. Stattdessen fragen, ob uebernommen werden
+    // soll. darfLaufen nimmt eine freie Sperre gleich fuer dieses Geraet.
+    final boolean darf=fehler!=null||gameAccountId.isEmpty()
+      ||OdinService.darfLaufen(getApplicationContext(),gameAccountId);
+    final String halter=darf?null:OdinService.fremdHalter(gameAccountId);
     runOnUiThread(()->{
      if(geschlossen||webView!=ziel_v)return;
      if(fehler!=null){
@@ -4688,6 +4720,8 @@ public class GameWebViewActivity extends Activity {
       return;
      }
      if(proxySperre){ proxySperre=false; melde("WICHTIG","Proxy-Sperre aufgehoben - Verbindung steht, Konto startet"); }
+     if(!darf){ leaseSeiteZeigen(halter); return; }
+     leaseSeite=false;
      ziel_v.loadUrl(ziel_u);
     });
    }).start();
@@ -4708,6 +4742,41 @@ public class GameWebViewActivity extends Activity {
      +"<p style='color:#9CA3AF;font-size:13px'>Neuer Versuch alle 60 Sekunden.</p></body></html>";
     webView.loadDataWithBaseURL("about:blank",html,"text/html","UTF-8",null);
    }catch(Exception ignored){}
+  }
+  // 2.0.17: Sperrseite "Konto laeuft auf Geraet X". Lokal erzeugt, keine
+  // Anfrage an die Spielserver. Der Knopf ruft uebernehmen() (eigenes
+  // Schema odin-app://, abgefangen in shouldOverrideUrlLoading). Wird die
+  // Sperre frei, laedt der Dienst die Welt von selbst (WARTET).
+  void leaseSeiteZeigen(String halter){
+   leaseSeite=true; leaseGesperrt=true; anmeldungOffen=true;
+   try{ OdinService.WARTET.add(gameAccountId); }catch(Exception ig){}
+   String h=halter==null||halter.isEmpty()?"einem anderen Gerät":halter;
+   setStatus("Konto läuft auf "+h+" - nicht angemeldet, Übernehmen?");
+   if(aktiv==Welt.this){ wechselIndikatorWeg(); if(leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE); }
+   try{
+    String hs=h.replace("&","&amp;").replace("<","&lt;");
+    String html="<html><head><meta name=viewport content='width=device-width'></head>"
+     +"<body style='background:#111827;color:#E5E7EB;font-family:sans-serif;padding:28px;text-align:center'>"
+     +"<div style='font-size:46px'>📱</div><h2 style='color:#F59E0B'>Konto läuft auf "+hs+"</h2>"
+     +"<p><b>"+kurz()+"</b> ist gerade auf einem anderen Gerät aktiv.</p>"
+     +"<p>Hier wurde <b>nicht</b> angemeldet - eine Anmeldung würde das andere Gerät aus dem Spiel werfen.</p>"
+     +"<p style='margin:28px 0'><a href='odin-app://uebernehmen' style='background:#B8893F;color:#111827;padding:14px 26px;"
+     +"border-radius:12px;text-decoration:none;font-weight:bold;font-size:17px'>Übernehmen</a></p>"
+     +"<p style='color:#9CA3AF;font-size:13px'>Übernehmen: GodBot pausiert auf dem anderen Gerät, dieses Gerät meldet sich an.</p>"
+     +"<p style='color:#9CA3AF;font-size:13px'>Oder warten: Wird das Konto dort beendet, startet es hier von selbst.</p></body></html>";
+    webView.loadDataWithBaseURL("about:blank",html,"text/html","UTF-8",null);
+   }catch(Exception ignored){}
+  }
+  // Konto auf dieses Geraet holen (erzwungene Sperre) und neu laden.
+  void uebernehmen(){
+   final String k=gameAccountId; final Context app=getApplicationContext();
+   if(k.isEmpty())return;
+   setStatus("Übernehme Konto von dem anderen Gerät ...");
+   new Thread(()->{
+    Object[] e=OdinService.leaseHolen(app,k,true);
+    if(e!=null&&(Boolean)e[0]){ OdinService.WARTET.remove(k); neuLadenFuer(k,"Konto übernommen - das andere Gerät pausiert bei seiner nächsten Prüfung"); }
+    else setStatus("Übernehmen fehlgeschlagen - keine Verbindung?");
+   }).start();
   }
   String proxyPruefen(){ return proxyPruefen(false); }
   String proxyPruefen(boolean vollTest){
