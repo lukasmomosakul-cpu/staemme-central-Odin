@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      561
+// @version      562
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -50656,15 +50656,21 @@ function belohnungSetzen(aenderung) {
     return belohnungCfg();
 }
 
+// v562: Ruhezeiten aus aelteren Fassungen stammen vom Lesefehler der
+// mobilen Antwort - beim ersten Lesen einmalig verwerfen.
+const BELOHNUNG_STAND_STUFE = 562;
+
 function belohnungStandLaden() {
     try {
         const s = JSON.parse(localStorage.getItem(BELOHNUNG_KEY) || "{}");
-        return (s && typeof s === "object") ? s : {};
+        if (!s || typeof s !== "object" || s.stufe !== BELOHNUNG_STAND_STUFE) return {};
+        return s;
     } catch (e) { return {}; }
 }
 
 function belohnungStandSpeichern(s) {
-    try { localStorage.setItem(BELOHNUNG_KEY, JSON.stringify(s || {})); } catch (e) { }
+    const neu = Object.assign({}, s || {}, { stufe: BELOHNUNG_STAND_STUFE });
+    try { localStorage.setItem(BELOHNUNG_KEY, JSON.stringify(neu)); } catch (e) { }
 }
 
 function belohnungRuhe(villageId, ms, allgemein) {
@@ -50798,7 +50804,11 @@ function belohnungListeHolen(villageId, cb) {
                 } catch (e) { }
                 if (botschutz) { cb({ ok: false, botschutz: true, grund: "Botschutz" }); return; }
             }
-            const dialog = j && j.response && j.response.dialog;
+            // Belegt 04.10.2026 (de257, mobile Ansicht, App-Protokoll): dort
+            // steht "dialog" OHNE Huelle "response" oben im JSON
+            // ({"dialog":"<div class=\"quest-popup-container\"...}). Desktop
+            // (Mitschnitt 26.09.): {"response":{"dialog":...}}. Beides lesen.
+            const dialog = j && ((j.response && j.response.dialog) || j.dialog);
             const liste = (status === 200 && j) ? belohnungListeAusDialog(dialog) : null;
             if (liste) { cb({ ok: true, liste, weg: "quest_popup", gameData: j.game_data || null }); return; }
             const befund = belohnungBefund(status, txt, !!j, dialog);
@@ -50878,7 +50888,11 @@ function belohnungAbholen(villageId, csrf, rewardId, cb) {
                 cb({ ok: false, botschutz, grund: botschutz ? "Botschutz" : `HTTP ${status}, kein JSON` });
                 return;
             }
-            const r = j.response;
+            // Gleiche Huelle wie bei der Liste: mobil evtl. ohne "response".
+            // Massgeblich bleibt das Feld rewards als Liste - fehlt es in
+            // beiden Formen, gilt die Abholung als gescheitert.
+            const r = (j.response && Array.isArray(j.response.rewards)) ? j.response
+                : (Array.isArray(j.rewards) ? j : j.response);
             if (!r || !Array.isArray(r.rewards)) {
                 const fehler = j.error || (r && (r.error || r.message)) || null;
                 cb({ ok: false, grund: fehler ? String(fehler) : "Antwort ohne Belohnungsliste: " + String(txt).slice(0, 200) });
