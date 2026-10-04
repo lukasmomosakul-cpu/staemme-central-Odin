@@ -3359,10 +3359,14 @@ public class GameWebViewActivity extends Activity {
  // die IP, mit der die Anfragen dieses Kontos bei den Die-Staemme-Servern
  // ankommen: bei Proxy-Konten die Ausgangs-IP des Proxys (gemessen ueber
  // denselben Proxy mit denselben Zugangsdaten), sonst die Geraete-IP.
- void ipMerken(String konto,String ip,boolean proxy,String anbieter){
+ void ipMerken(String konto,String ip,boolean proxy,String anbieter){ ipMerken(konto,ip,proxy,anbieter,""); }
+ // 2.0.18: dazu die Welt, auf der das Konto mit dieser IP spielt
+ // ("ip|zeit|proxy|anbieter|welt") - die IP-Sperre gilt nur je Welt.
+ void ipMerken(String konto,String ip,boolean proxy,String anbieter,String welt){
   if(konto==null||konto.isEmpty()||ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return;
   try{ getSharedPreferences("odin_ip",MODE_PRIVATE).edit()
-        .putString(konto,ip+"|"+System.currentTimeMillis()+"|"+(proxy?"1":"0")+"|"+(anbieter==null?"":anbieter)).apply(); }catch(Exception ig){}
+        .putString(konto,ip+"|"+System.currentTimeMillis()+"|"+(proxy?"1":"0")+"|"+(anbieter==null?"":anbieter)
+          +"|"+(welt==null?"":welt.trim().toLowerCase(java.util.Locale.ROOT))).apply(); }catch(Exception ig){}
   runOnUiThread(()->{ try{ fussleisteFuellen(); }catch(Exception ig){} });
  }
  String[] ipGemerkt(String konto){
@@ -4810,7 +4814,7 @@ public class GameWebViewActivity extends Activity {
     setStatus("Proxy-Test ok: Ausgang "+ip+(geraet==null?"":" ≠ Gerät "+geraet));
     if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
     letzteProxyIp=ip;
-    ipMerken(gameAccountId,ip,true,z.host);
+    ipMerken(gameAccountId,ip,true,z.host,weltName);
    }
    String f=OdinProxy.konto(gameAccountId,weltName,z);
    if(f!=null)return f;
@@ -4824,7 +4828,7 @@ public class GameWebViewActivity extends Activity {
     if(ip!=null&&!ip.isEmpty()){
      String konflikt=ipKonflikt(ip);
      if(konflikt!=null)return konflikt+" (Konto ohne Proxy - Geräte-IP)";
-     ipMerken(gameAccountId,ip,false,"");
+     ipMerken(gameAccountId,ip,false,"",weltName);
     }
     setStatus("kein Proxy - direkte Verbindung");
     return null;
@@ -4842,14 +4846,25 @@ public class GameWebViewActivity extends Activity {
   // im Team (account_leases.ip, App und Odin PC) und die auf diesem Geraet
   // gemerkten IPs der anderen Konten (odin_ip, letzte 24 h).
   // Rueckgabe: Grund oder null.
+  // 2.0.18 (Fetteruruk 05.10.2026): Gesperrt wird nur, wenn ein Konto mit
+  // ANDEREM Namen dieselbe IP auf DERSELBEN Welt nutzt. Zwei Die-Staemme-
+  // Konten ueber eine IP auf verschiedenen Welten sind erlaubt, solange wir
+  // keine zusaetzlichen Proxy-IPs nutzen. Die Welt kommt aus game_accounts
+  // (Sperren aller Geraete) bzw. aus odin_ip (hier gemerkt, mit Welt; aeltere
+  // Eintraege ohne Welt nehmen die Welt des Kontos). Welt unbekannt = Sperre.
   String ipKonflikt(String ip){
    if(ip==null||ip.isEmpty())return null;
    String ich=kopfName.toLowerCase(java.util.Locale.ROOT);
+   String meineWelt=weltNorm(weltName);
    java.util.Map<String,String> namen=new java.util.HashMap<>();
+   java.util.Map<String,String> welten=new java.util.HashMap<>();
    try{
-    org.json.JSONArray k=new org.json.JSONArray(supaRequest("GET","game_accounts?select=id,name",null));
-    for(int i=0;i<k.length();i++){ org.json.JSONObject o=k.getJSONObject(i); namen.put(o.optString("id"),o.optString("name","").toLowerCase(java.util.Locale.ROOT)); }
+    org.json.JSONArray k=new org.json.JSONArray(supaRequest("GET","game_accounts?select=id,name,world",null));
+    for(int i=0;i<k.length();i++){ org.json.JSONObject o=k.getJSONObject(i);
+     namen.put(o.optString("id"),o.optString("name","").toLowerCase(java.util.Locale.ROOT));
+     welten.put(o.optString("id"),weltNorm(o.optString("world",""))); }
     if(namen.containsKey(gameAccountId))ich=namen.get(gameAccountId);
+    if(meineWelt.isEmpty()&&welten.containsKey(gameAccountId))meineWelt=welten.get(gameAccountId);
     // Nur aktive Sperren (in den letzten 10 Min gemeldet) - alte Zeilen
     // eines laengst beendeten Geraets sollen nicht sperren.
     java.text.SimpleDateFormat iso=new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'",java.util.Locale.ROOT);
@@ -4861,7 +4876,11 @@ public class GameWebViewActivity extends Activity {
      String kid=o.optString("account_id");
      if(kid.equals(gameAccountId)||!ip.equals(o.optString("ip")))continue;
      String n=namen.containsKey(kid)?namen.get(kid):"";
-     if(!n.equals(ich))return "Ausgangs-IP "+ip+" nutzt bereits Konto „"+n+"“ - zwei Konten über dieselbe IP sind gesperrt";
+     if(n.equals(ich))continue;
+     String w=welten.containsKey(kid)?welten.get(kid):"";
+     if(!gleicheWelt(meineWelt,w))continue;
+     return "Ausgangs-IP "+ip+" nutzt bereits Konto „"+n+"“ auf "+(w.isEmpty()?"unbekannter Welt":w)
+       +" - zwei Konten über dieselbe IP auf derselben Welt sind gesperrt";
     }
    }catch(Exception e){ android.util.Log.w("ODIN_PROXY","ipKonflikt",e); }
    try{
@@ -4874,10 +4893,25 @@ public class GameWebViewActivity extends Activity {
      long ts=0; try{ ts=Long.parseLong(t[1]); }catch(Exception ig){}
      if(jetzt-ts>86_400_000L)continue;
      String n=namen.containsKey(e.getKey())?namen.get(e.getKey()):"";
-     if(!n.isEmpty()&&!n.equals(ich))return "Ausgangs-IP "+ip+" hatte zuletzt Konto „"+n+"“ auf diesem Gerät - zwei Konten über dieselbe IP sind gesperrt";
+     if(n.isEmpty()||n.equals(ich))continue;
+     String w=t.length>4&&!t[4].isEmpty()?weltNorm(t[4]):(welten.containsKey(e.getKey())?welten.get(e.getKey()):"");
+     if(!gleicheWelt(meineWelt,w))continue;
+     return "Ausgangs-IP "+ip+" hatte zuletzt Konto „"+n+"“ auf "+(w.isEmpty()?"unbekannter Welt":w)
+       +" auf diesem Gerät - zwei Konten über dieselbe IP auf derselben Welt sind gesperrt";
     }
    }catch(Exception ignored){}
    return null;
+  }
+  // "de256", "DE256 ", "256" -> "de256". Leer bleibt leer.
+  String weltNorm(String w){
+   String x=w==null?"":w.trim().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]","");
+   if(x.matches("[0-9]+"))x="de"+x;
+   return x;
+  }
+  // Unbekannte Welt auf einer Seite zaehlt als gleich (lieber sperren).
+  boolean gleicheWelt(String a,String b){
+   if(a==null||b==null||a.isEmpty()||b.isEmpty())return true;
+   return a.equals(b);
   }
   void proxyIpMelden(OdinProxy.Zugang z){
    String ip=OdinProxy.ausgangsIp(z);
@@ -4900,7 +4934,7 @@ public class GameWebViewActivity extends Activity {
    if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
    else setStatus("Proxy-Ausgang: "+ip);
    letzteProxyIp=ip;
-   ipMerken(gameAccountId,ip,true,z.host);
+   ipMerken(gameAccountId,ip,true,z.host,weltName);
    try{
     supaRequest("POST","rpc/lease_ip_melden_konto",new org.json.JSONObject()
       .put("p_geraet",OdinService.geraetId(GameWebViewActivity.this)).put("p_konto",gameAccountId).put("p_ip",ip).toString());

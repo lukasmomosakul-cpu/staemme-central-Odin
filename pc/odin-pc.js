@@ -469,16 +469,22 @@ async function ipKonfliktPc(ip, ohneProxy) {
     try {
         var seit = new Date(Date.now() - 600000).toISOString();   // nur aktive Sperren
         var leases = await rest('GET', 'account_leases?select=account_id,ip&ip=not.is.null&gemeldet=gte.' + encodeURIComponent(seit));
-        var kont = await rest('GET', 'game_accounts?select=id,name,proxy&team_id=eq.' + encodeURIComponent(Z.team));
+        var kont = await rest('GET', 'game_accounts?select=id,name,proxy,world&team_id=eq.' + encodeURIComponent(Z.team));
         var info = {};
-        (kont || []).forEach(function (k) { info[k.id] = { proxy: !!(k.proxy && String(k.proxy).trim()), name: String(k.name || '').toLowerCase() }; });
+        // 564.2: Welt mitlesen - gesperrt wird nur bei ANDEREM Namen auf
+        // DERSELBEN Welt (unbekannte Welt zaehlt als gleich).
+        var wn = function (w) { var x = String(w || '').trim().toLowerCase().replace(/[^a-z0-9]/g, ''); return /^[0-9]+$/.test(x) ? 'de' + x : x; };
+        (kont || []).forEach(function (k) { info[k.id] = { proxy: !!(k.proxy && String(k.proxy).trim()), name: String(k.name || '').toLowerCase(), welt: wn(k.world) }; });
         var ich = String(Z.konto.name || '').toLowerCase();
+        var meine = wn(Z.konto.world || (info[Z.konto.id] && info[Z.konto.id].welt));
         for (var li = 0; li < (leases || []).length; li++) {
             var l = leases[li];
             if (l.ip !== ip || l.account_id === Z.konto.id) continue;
-            var o = info[l.account_id] || { proxy: false, name: '' };
+            var o = info[l.account_id] || { proxy: false, name: '', welt: '' };
             if (!ohneProxy && !o.proxy) return 'Ausgangs-IP ' + ip + ' ist die IP eines Kontos OHNE Proxy - der Proxy dieses Browser-Profils ist aus oder wird umgangen';
-            if (o.name !== ich) return 'IP ' + ip + ' nutzt bereits Konto „' + (o.name || '?') + '“ - zwei Konten über dieselbe IP sind gesperrt';
+            if (o.name === ich) continue;
+            if (meine && o.welt && meine !== o.welt) continue;
+            return 'IP ' + ip + ' nutzt bereits Konto „' + (o.name || '?') + '“ auf ' + (o.welt || 'unbekannter Welt') + ' - zwei Konten über dieselbe IP auf derselben Welt sind gesperrt';
         }
     } catch (e) { }
     return null;
