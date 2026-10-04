@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      563
+// @version      564
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -560,7 +560,10 @@
         return;
     }
 
-    if (!_u1()) {
+    // v564 (Fetteruruk 04.10.2026): In Odin (App und Odin PC) entfaellt die
+    // Zugangssperre - dort regeln Team-Anmeldung und Konto-Sperre den
+    // Zugang. Die Gist-Fassung im reinen Browser fragt weiter nach dem Code.
+    if (!_u1() && !odin.istApp) {
         if (document.body) {
             _g1();
         } else {
