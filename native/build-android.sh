@@ -3233,7 +3233,7 @@ public class GameWebViewActivity extends Activity {
   // ANGEZEIGTE Welt noch nicht fertig ist.
   // Nur in den ersten 40 s nach dem Laden - eine Welt, die auf der Anmelde-
   // seite haengt, soll nicht bei jedem Zurueckkehren 40 s blockiert sein.
-  if(!w.geladen&&System.currentTimeMillis()-w.ladeStart<40_000L)ladeSchichtZeigen(w.weltName); else wechselIndikatorWeg();
+  if(!w.geladen&&!w.anmeldungOffen&&System.currentTimeMillis()-w.ladeStart<40_000L)ladeSchichtZeigen(w.weltName); else wechselIndikatorWeg();
   try{ fussleisteFuellen(); }catch(Exception ig){}
   if(vorher!=w&&vorher!=null)w.setStatus("angezeigt (vorher "+vorher.kurz()+" - läuft verdeckt weiter)");
  }
@@ -4478,6 +4478,10 @@ public class GameWebViewActivity extends Activity {
   volatile long letzteAktivitaet=0L;
   volatile org.json.JSONObject godbotStand=null;
   volatile boolean leaseGesperrt=false;
+  // 2.0.16: Welt steht auf der Anmeldeseite und wartet auf eine Eingabe von
+  // Hand (keine Zugangsdaten hinterlegt oder Konto einem anderen Geraet
+  // zugewiesen). Dann darf kein Ladescreen darueber liegen.
+  volatile boolean anmeldungOffen=false;
   volatile boolean geladen=false;
   volatile boolean geschlossen=false;
   long zuletztGezeigt=0L;
@@ -4597,7 +4601,20 @@ public class GameWebViewActivity extends Activity {
  @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
    // 1.95.15/1.96.0: Spielseite steht - Ladescreen weg, wenn diese Welt
    // gerade angezeigt wird (nicht auf der Anmelde-/Zwischenseite).
-   try{ if(u!=null&&u.contains("/game.php")){ geladen=true; if(aktiv==Welt.this)wechselIndikatorWeg(); } }catch(Exception ig){}
+   try{ if(u!=null&&u.contains("/game.php")){ geladen=true; anmeldungOffen=false; if(aktiv==Welt.this)wechselIndikatorWeg(); } }catch(Exception ig){}
+   // 2.0.16: Neues Konto (oder abgelaufene Sitzung) landet auf der
+   // Anmeldeseite. Ohne hinterlegte Zugangsdaten bzw. ohne Zuweisung zu
+   // diesem Geraet meldet sich niemand automatisch an - dann muss der
+   // Ladescreen sofort weg, sonst haengt man davor fest.
+   try{ if(u!=null&&!u.contains("/game.php")&&!u.startsWith("about:")){
+    v.evaluateJavascript("(function(){try{return !!document.getElementById('login_form')||!!document.querySelector('input[type=password]');}catch(e){return false;}})()",r->{
+     if(!"true".equals(r))return;
+     boolean auto=!gameAccountId.isEmpty()&&OdinVault.vorhanden(GameWebViewActivity.this,gameAccountId)&&!leaseGesperrt;
+     if(auto)return;   // automatische Anmeldung laeuft - Ladescreen darf bleiben
+     anmeldungOffen=true;
+     if(aktiv==Welt.this){ wechselIndikatorWeg(); setStatus("Anmeldung nötig - bitte einloggen, danach geht es direkt in die Welt"); }
+    });
+   }}catch(Exception ig){}
   }
   // 2.0.0: Der LOKALE Weiterleitungs-Proxy (127.0.0.1) fragt, wer diese
   // Verbindung stellt (HTTP 407). Diese WebView antwortet mit IHRER Konto-ID
@@ -4958,6 +4975,8 @@ public class GameWebViewActivity extends Activity {
      setStatus("Keine automatische Anmeldung - Konto ist "+(h==null?"einem anderen Gerät":h)+" zugewiesen");
      OdinService.WARTET.add(k);
      leaseGesperrt=true;
+     anmeldungOffen=true;
+     if(aktiv==Welt.this)wechselIndikatorWeg();
      if(aktiv==Welt.this&&leaseKnopf!=null)leaseKnopf.setVisibility(android.view.View.VISIBLE);
     }
    });
