@@ -965,7 +965,7 @@ public class OdinService extends Service {
  }
  // Feste Nummern, damit eine Meldung die vorige ERSETZT statt sich daneben
  // zu legen. Genau daran lag die Flut einzelner Angriffsmeldungen.
- private static final int ID_ANGRIFFE=4801, ID_VORWARNUNG=4802, ID_BOTSCHUTZ=4803, ID_AUTH=4804;
+ private static final int ID_ANGRIFFE=4801, ID_VORWARNUNG=4802, ID_BOTSCHUTZ=4803, ID_AUTH=4804, ID_BEFEHLE=4805;
  // Fuenf Stunden lief der Dienst mit abgelaufenem Token, ohne dass es
  // irgendwo sichtbar wurde - nur Logzeilen, die niemand nachts liest.
  // Bleibt die Erneuerung haengen, gehoert das ins Meldungsfeld.
@@ -1036,7 +1036,7 @@ public class OdinService extends Service {
  public static void botschutzGesehen(){ botschutzGesehenAm=System.currentTimeMillis(); }
  void botschutzBeenden(String grund){
   if(botschutzSeit==0)return;
-  botschutzSeit=0L;
+  botschutzSeit=0L; botschutzFremd=false; botschutzFremdKonto="";
   try{ if(botschutzKlang!=null&&botschutzKlang.isPlaying())botschutzKlang.stop(); }catch(Exception ignored){}
   botschutzKlang=null;
   try{ getSystemService(NotificationManager.class).cancel(ID_BOTSCHUTZ); }catch(Exception ignored){}
@@ -1047,7 +1047,9 @@ public class OdinService extends Service {
   if(botschutzSeit==0)return;
   long jetzt=System.currentTimeMillis();
   // Vordergrund heisst gesehen - alles andere waere Schikane.
-  if(GameWebViewActivity.imVordergrundIrgendwo()){ botschutzBeenden("Spielansicht im Vordergrund"); return; }
+  // 2.0.20: Team-Alarm (Botschutz auf einem ANDEREN Geraet) endet nicht,
+  // nur weil hier eine Spielansicht vorn ist - das ist ein anderes Konto.
+  if(!botschutzFremd&&GameWebViewActivity.imVordergrundIrgendwo()){ botschutzBeenden("Spielansicht im Vordergrund"); return; }
   if(botschutzGesehenAm>botschutzSeit){ botschutzBeenden("quittiert"); return; }
   if(jetzt-botschutzLetzteVib>=nbBotVibSek*1000L){
    botschutzLetzteVib=jetzt;
@@ -1201,7 +1203,8 @@ public class OdinService extends Service {
  // Benachrichtigungseinstellungen des Teams. Werden beim Neusetzen der Wecker
  // mitgeladen; bis dahin gelten diese Vorgaben.
  private volatile boolean nbVorwarnAn=true, nbAngriffeGebuendelt=true, nbBotschutzAn=true;
- private volatile int nbVorwarnMin=3, nbBotVibSek=60, nbBotWeckerMin=10;
+ private volatile int nbVorwarnMin=3, nbBotVibSek=60, nbBotWeckerMin=10, nbBotTeamMin=3, nbBefehleMin=3;
+ private volatile boolean nbBefehleAn=true;
  private void einstellungenLaden(){
   try{
    JSONArray a=new JSONArray(hole("notification_settings?select=*&team_id=eq."
@@ -1214,6 +1217,9 @@ public class OdinService extends Service {
    nbBotschutzAn=o.optBoolean("botschutz_an",true);
    nbBotVibSek=Math.max(10,Math.min(3600,o.optInt("botschutz_vibration_sek",60)));
    nbBotWeckerMin=Math.max(1,Math.min(120,o.optInt("botschutz_wecker_min",10)));
+   nbBotTeamMin=Math.max(0,Math.min(60,o.optInt("botschutz_team_min",3)));
+   nbBefehleAn=o.optBoolean("befehle_warnung_an",true);
+   nbBefehleMin=Math.max(1,Math.min(30,o.optInt("befehle_vorlauf_min",3)));
   }catch(Exception e){ android.util.Log.w("ODIN_SVC","nb-einstellungen",e); }
  }
  private void faelligPruefen(){
@@ -1273,7 +1279,9 @@ public class OdinService extends Service {
    try{ ueberfaelligPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","ueberfaellig",e); }
    try{ leasePflegen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","lease",e); }
    try{ vorwarnPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","vorwarnung",e); }
+   try{ fremdBotschutzTakt(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","botschutz-team",e); }
    try{ botschutzTakt(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","botschutz",e); }
+   try{ befehlePruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","befehle",e); }
    try{ authPruefen(); }catch(Exception e){ android.util.Log.w("ODIN_SVC","auth",e); }
    // Nach ZEIT auffrischen, nicht nach Rundenzahl. Seit die Schleife vor
    // Terminen auf fuenf Sekunden taktet, waren zehn Runden nur noch 50
@@ -1408,6 +1416,7 @@ public class OdinService extends Service {
    JSONObject a=accs.getJSONObject(i);
    String id=a.optString("id",""); if(id.isEmpty())continue;
    String bez=a.optString("name","")+" · "+a.optString("world","");
+   kontoNamen.put(id,bez);
    JSONArray s=new JSONArray(hole("godbot_settings?select=value&skey=eq.tw_tabben_plan&account_id=eq."
      +java.net.URLEncoder.encode(id,"UTF-8")));
    // Accounts ohne GodBot-Daten kosten sonst drei Abfragen alle fuenf
@@ -1464,10 +1473,19 @@ public class OdinService extends Service {
  }
  private void poll() throws Exception {
   if(url.isEmpty()||token.isEmpty()||team.isEmpty())return;
-  String since=lastSeen.isEmpty()
-    ? new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss",java.util.Locale.US)
-        .format(new java.util.Date(System.currentTimeMillis()-60000))
-    : lastSeen;
+  // 2.0.20 - FEHLER BEHOBEN: Der Startwert war Ortszeit OHNE Zeitzone
+  // ("2026-10-05T22:09:16"). Supabase liest das als UTC - in Deutschland
+  // lag die Grenze damit zwei Stunden in der Zukunft, und weil lastSeen nur
+  // aus einer gelieferten Zeile kommt, blieb das so: Meldungen anderer
+  // Geraete kamen NIE an (05.10. 20:10 Botschutz Ares20 - XQ-ES54 lief,
+  // bekam nichts). Jetzt UTC mit "Z"; lastSeen ueberlebt Neustarts,
+  // hoechstens 15 Min rueckwirkend.
+  android.content.SharedPreferences pollSp=getSharedPreferences("odin_svc",Context.MODE_PRIVATE);
+  if(lastSeen.isEmpty())lastSeen=pollSp.getString("poll_seit","");
+  String lastSeenVorher=lastSeen;
+  long pollGrenze=System.currentTimeMillis()-15*60_000L, lsMs=0L;
+  try{ if(!lastSeen.isEmpty())lsMs=java.time.OffsetDateTime.parse(lastSeen).toInstant().toEpochMilli(); }catch(Exception ig){ lsMs=0L; }
+  String since=lsMs<pollGrenze?java.time.Instant.ofEpochMilli(pollGrenze).toString():lastSeen;
   String q=url+"/rest/v1/notifications?select=*&team_id=eq."+team
     +"&created_at=gt."+java.net.URLEncoder.encode(since,"UTF-8")
     +"&order=created_at.asc&limit=20";
@@ -1486,6 +1504,17 @@ public class OdinService extends Service {
    lastSeen=o.optString("created_at",lastSeen);
    // Eigene Meldungen nicht erneut anzeigen.
    if(device.equals(o.optString("source","")))continue;
+   // 2.0.20: Botschutz eines anderen Geraets (nur am TITEL erkannt - die
+   // Statistik-Zeilen nennen "Botschutz ... Entwarnung" im Text und haetten
+   // sonst Alarme ausgeloest bzw. beendet). Nicht sofort melden: erst wenn
+   // nach botschutz_team_min Minuten keine Entwarnung kam.
+   {
+    String bt=o.optString("title","");
+    if(IST_BOTSCHUTZ.matcher(bt).find()){
+     fremdBotschutz(o.optString("account_id",""),bt,o.optString("body",""),o.optString("created_at",""));
+     continue;
+    }
+   }
    // 2.0.17: Meldungen zu einem Konto, das gerade ein anderes Geraet fuehrt,
    // gehoeren dorthin - einzige Ausnahme ist der Botschutz, der ueberall
    // ankommen muss.
@@ -1498,6 +1527,98 @@ public class OdinService extends Service {
    }
    show(o.optString("title","Odin"),o.optString("body",""),o.optString("level","info"));
   }
+  if(!lastSeen.equals(lastSeenVorher))pollSp.edit().putString("poll_seit",lastSeen).apply();
+ }
+ // 2.0.20: Botschutz auf einem ANDEREN Geraet. Konto -> {seit (Zeit der
+ // Meldung), Titel, Text, schon eskaliert}.
+ private final java.util.HashMap<String,Object[]> fremdBot=new java.util.HashMap<>();
+ private volatile boolean botschutzFremd=false;
+ private volatile String botschutzFremdKonto="";
+ private final java.util.concurrent.ConcurrentHashMap<String,String> kontoNamen=new java.util.concurrent.ConcurrentHashMap<>();
+ private String kontoBez(String k){
+  String n=k==null?null:kontoNamen.get(k);
+  if(n!=null&&!n.isEmpty())return n;
+  return k==null||k.isEmpty()?"unbekanntes Konto":"Konto "+k.substring(0,Math.min(8,k.length()));
+ }
+ private void fremdBotschutz(String konto,String titel,String text,String erstellt){
+  String k=konto==null||"null".equals(konto)?"":konto;
+  if(IST_ENTWARNUNG.matcher(titel).find()){
+   Object[] alt;
+   synchronized(fremdBot){ alt=fremdBot.remove(k); }
+   if(botschutzFremd&&k.equals(botschutzFremdKonto))botschutzBeenden("Entwarnung von "+kontoBez(k));
+   else if(alt!=null&&!(Boolean)alt[3])
+    OdinLog.schreib(this,"-","info","Botschutz bei "+kontoBez(k)+" gelöst, bevor die Team-Meldung fällig war");
+   return;
+  }
+  long seit;
+  try{ seit=java.time.OffsetDateTime.parse(erstellt).toInstant().toEpochMilli(); }catch(Exception e){ seit=System.currentTimeMillis(); }
+  synchronized(fremdBot){
+   Object[] alt=fremdBot.get(k);
+   if(alt!=null&&!((Boolean)alt[3]&&botschutzSeit==0))return;
+   fremdBot.put(k,new Object[]{seit,titel,text,false});
+  }
+  OdinLog.schreib(this,"-","WICHTIG","Botschutz bei "+kontoBez(k)+" (anderes Gerät) - Meldung hier nach "
+    +nbBotTeamMin+" Min ohne Entwarnung");
+ }
+ private void fremdBotschutzTakt(){
+  if(!nbBotschutzAn)return;
+  long jetzt=System.currentTimeMillis();
+  String k=null; Object[] v=null;
+  synchronized(fremdBot){
+   for(java.util.Map.Entry<String,Object[]> e:fremdBot.entrySet()){
+    Object[] x=e.getValue();
+    if((Boolean)x[3])continue;
+    long alter=jetzt-(Long)x[0];
+    if(alter>6*3_600_000L){ x[3]=true; continue; }   // uralt, nicht mehr wecken
+    if(alter<nbBotTeamMin*60_000L)continue;
+    if(botschutzSeit>0)return;                      // Alarm laeuft schon
+    x[3]=true; k=e.getKey(); v=x; break;
+   }
+  }
+  if(k==null)return;
+  long min=(jetzt-(Long)v[0])/60000L;
+  botschutzFremd=true; botschutzFremdKonto=k;
+  botschutzStarten(kontoBez(k)+": "+v[1]+" (seit "+min+" Min ohne Entwarnung)");
+  protokoll(this,"WICHTIG","botschutz","Team-Alarm: Botschutz bei "+kontoBez(k)+" seit "+min+" Min ohne Entwarnung");
+ }
+ // 2.0.20: Abschickplaene ohne fuehrendes Geraet. Die Datenbank liefert
+ // (befehle_ohne_geraet, Migration 030) alle offenen Befehle der naechsten
+ // befehle_vorlauf_min Minuten von Konten, die KEIN Geraet gerade fuehrt:
+ // Angriffsplaner (Angriffe, Fakes, AG, Unterstuetzungen), Rausstellen,
+ // Massenunterstuetzung. Jedes Geraet im Team meldet das; je Befehl einmal.
+ private long befehleZuletzt=0L;
+ private final java.util.HashMap<String,Long> befehleGemeldet=new java.util.HashMap<>();
+ private void befehlePruefen() throws Exception {
+  if(!nbBefehleAn||url.isEmpty()||token.isEmpty()||team.isEmpty())return;
+  long jetzt=System.currentTimeMillis();
+  if(jetzt-befehleZuletzt<60_000L)return;
+  befehleZuletzt=jetzt;
+  String r=rpc(this,"befehle_ohne_geraet",new JSONObject().put("p_team",team).put("p_vorlauf_s",nbBefehleMin*60).toString());
+  if(r==null)return;
+  JSONArray a=new JSONArray(r);
+  befehleGemeldet.values().removeIf(t->t<jetzt-3_600_000L);
+  boolean neu=false;
+  java.text.SimpleDateFormat hm=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.GERMANY);
+  StringBuilder sb=new StringBuilder(); int n=a.length();
+  for(int i=0;i<n;i++){
+   JSONObject o=a.getJSONObject(i);
+   long at=o.optLong("starts_at_ms",0L);
+   String key=o.optString("account_id","")+"|"+o.optString("befehl_id","")+"|"+at;
+   if(!befehleGemeldet.containsKey(key)){ befehleGemeldet.put(key,at); neu=true; }
+   if(i<8){
+    if(sb.length()>0)sb.append("\n");
+    String von=o.optString("von",""), nach=o.optString("nach","");
+    sb.append(o.optString("konto","")).append(" · ").append(o.optString("welt","")).append(": ")
+      .append(o.optString("art","")).append(" ").append(hm.format(new java.util.Date(at)));
+    if(!von.isEmpty()||!nach.isEmpty())sb.append(" (").append(von).append(nach.isEmpty()?"":" → "+nach).append(")");
+   }
+  }
+  if(n>8)sb.append("\n+").append(n-8).append(" weitere");
+  if(!neu)return;
+  String titel=n+(n==1?" Befehl":" Befehle")+" in ≤ "+nbBefehleMin+" Min – kein Gerät eingeloggt";
+  zeigeFest(ID_BEFEHLE,CH_ALERT,titel,sb.toString(),false);
+  OdinLog.schreib(this,"-","WICHTIG",titel);
+  protokoll(this,"WICHTIG","wecker",titel+": "+sb.toString().replace("\n"," | "));
  }
  // Eingehende Angriffe kommen im Schwung. Einzelne Meldungen dafuer sind
  // unbrauchbar: dreissig Zeilen, von denen man keine liest. Stattdessen EINE
@@ -1533,9 +1654,13 @@ public class OdinService extends Service {
  }
  private void show(String title,String body,String level){
   String zusammen=(title==null?"":title)+" "+(body==null?"":body);
-  if(IST_BOTSCHUTZ.matcher(zusammen).find()&&IST_ENTWARNUNG.matcher(zusammen).find()){
+  // 2.0.20: Botschutz kommt in poll() schon vorher heraus (fremdBotschutz).
+  // Hier nur noch am Titel - die Statistik-Zeile ("Botschutz 2 Läufe,
+  // zuletzt: Entwarnung") darf keinen Alarm starten oder beenden.
+  String tt=title==null?"":title;
+  if(IST_BOTSCHUTZ.matcher(tt).find()&&IST_ENTWARNUNG.matcher(tt).find()){
    botschutzBeenden("Entwarnung von GodBot");
-  }else if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(zusammen).find())botschutzStarten(title);
+  }else if(nbBotschutzAn&&IST_BOTSCHUTZ.matcher(tt).find())botschutzStarten(title);
   if(nbAngriffeGebuendelt&&IST_ANGRIFF.matcher(zusammen).find()){ angriffSammeln(title,body); return; }
   // Routine bleibt stumm. Der Loader stuft Farmen, Raubzug, Statistiken und
   // Rohstoffe als "info" ein - dafuer eine Benachrichtigung zu bauen, ist

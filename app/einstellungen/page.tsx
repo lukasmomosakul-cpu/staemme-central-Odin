@@ -9,11 +9,13 @@ type Nb = {
   vorwarnung_an: boolean; vorwarnung_min: number;
   angriffe_gebuendelt: boolean;
   botschutz_an: boolean; botschutz_vibration_sek: number; botschutz_wecker_min: number;
+  botschutz_team_min: number; befehle_warnung_an: boolean; befehle_vorlauf_min: number;
 };
 const NB_STANDARD: Nb = {
   vorwarnung_an: true, vorwarnung_min: 3,
   angriffe_gebuendelt: true,
   botschutz_an: true, botschutz_vibration_sek: 60, botschutz_wecker_min: 10,
+  botschutz_team_min: 3, befehle_warnung_an: true, befehle_vorlauf_min: 3,
 };
 
 export default function EinstellungenSeite() {
@@ -193,8 +195,32 @@ export default function EinstellungenSeite() {
                  onChange={e => nbSetzen({ botschutz_wecker_min: Number(e.target.value) || 10 })} />
           <span className="muted">Minuten</span>
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 26 }}>
+          <span>Andere Geräte melden nach</span>
+          <input type="number" min={0} max={60} value={nb.botschutz_team_min} style={{ width: 70 }}
+                 onChange={e => nbSetzen({ botschutz_team_min: Math.max(0, Number(e.target.value) || 0) })} />
+          <span className="muted">Minuten ohne Entwarnung</span>
+        </label>
         <div className="muted" style={{ marginLeft: 26 }}>
-          Endet, sobald du das Dashboard oder die Spielansicht öffnest.
+          Endet, sobald du das Dashboard oder die Spielansicht öffnest. Botschutz auf einem anderen
+          Gerät meldet sich hier erst nach der eingestellten Zeit und nur, wenn bis dahin keine
+          Entwarnung kam; er endet mit der Entwarnung oder wenn du das Dashboard öffnest.
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14 }}>
+          <input type="checkbox" checked={nb.befehle_warnung_an}
+                 onChange={e => nbSetzen({ befehle_warnung_an: e.target.checked })} />
+          <span>Abschickpläne: warnen, wenn kein Gerät eingeloggt ist</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 26 }}>
+          <span>Vorlauf</span>
+          <input type="number" min={1} max={30} value={nb.befehle_vorlauf_min} style={{ width: 70 }}
+                 onChange={e => nbSetzen({ befehle_vorlauf_min: Number(e.target.value) || 3 })} />
+          <span className="muted">Minuten</span>
+        </label>
+        <div className="muted" style={{ marginLeft: 26 }}>
+          Angriffe, Fakes, Unterstützungen, Rausstellen und Massenunterstützung eines Kontos, das
+          gerade kein Gerät führt. Meldet sich auf allen Geräten im Team.
         </div>
 
         <div style={{ marginTop: 14, marginLeft: 26 }}>
