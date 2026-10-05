@@ -367,12 +367,25 @@ function ipMelden() {
         .then(function (ip) {
             ip = String(ip || '').trim();
             if (!/^[0-9a-fA-F:.]{3,45}$/.test(ip)) return;
-            // 2.0.5/PC: Proxy-Konten melden je Konto (lease_ip_melden laesst
-            // sie seit Migration 026 aus).
-            if (Z.proxyRoh && Z.konto) return rpc('lease_ip_melden_konto', { p_geraet: geraetId, p_konto: Z.konto.id, p_ip: ip });
-            return rpc('lease_ip_melden', { p_geraet: geraetId, p_ip: ip });
+            // 564.3: keine ungepruefte Meldung mehr - die IP kommt ueber
+            // lease_ip_pruefen (Migration 029) geprueft an die Sperre.
+            Z.letzteIp = ip;
         }).catch(function () { });
 }
+// 564.3: IP-Pruefung in der Datenbank (Migration 029). Atomar je IP: prueft
+// "anderer Name, dieselbe IP, dieselbe Welt" gegen ALLE aktiven Sperren
+// (auch App-Geraete und andere Teams) und schreibt die IP im selben Schritt
+// an die Sperre dieses Kontos. art = ok | konflikt | keine_sperre | fehler.
+async function ipServerPruefen(ip) {
+    if (!ip || !/^[0-9a-fA-F:.]{3,45}$/.test(ip)) return { art: 'fehler', text: 'Ausgangs-IP nicht messbar' };
+    try {
+        var r = await rpc('lease_ip_pruefen', { p_account: Z.konto.id, p_geraet: geraetId, p_ip: ip });
+        var o = r && r[0];
+        if (!o) return { art: 'fehler', text: 'IP-Prüfung ohne Antwort' };
+        return { art: o.art || 'fehler', text: o.konflikt || '' };
+    } catch (e) { return { art: 'fehler', text: 'IP-Prüfung in der Datenbank nicht erreichbar' }; }
+}
+var ipFehlerFolge = 0;
 // ===================================================================
 // PROXY-SPERRE (Odin PC). Ein Tampermonkey-Skript kann keinen Proxy setzen -
 // das macht das Browser-Profil (Proxy-Erweiterung). Odin PC PRUEFT aber,
@@ -502,13 +515,26 @@ function proxySperren(p) {
 // 150 s ist. Passt es nicht mehr, wird die Seite sofort
 // verlassen (about:blank) - GodBot und alle Zeitgeber sind damit weg.
 var proxyWacheTimer = null;
+// 564.3: Wache laeuft auch OHNE Proxy (IP-Wechsel des Anschlusses, z. B.
+// Handy mit anderem Konto derselben Welt im selben Netz) und prueft jede
+// Minute zusaetzlich in der Datenbank. Datenbank nicht erreichbar: nach 3
+// Fehlern in Folge beenden.
 function proxyWacheStarten() {
-    if (proxyWacheTimer || !Z.proxyRoh) return;
+    if (proxyWacheTimer) return;
     proxyWacheTimer = setInterval(async function () {
         if (Z.godbot === 'aus') return;
         var p = await proxyPruefen(true);
-        if (p.ok) { if (Date.now() - ipZuletzt > 600000) ipMelden(); return; }
-        status('PROXY-SPERRE im Betrieb: ' + p.grund + ' - GodBot wird sofort beendet', 'FEHLER');
+        if (p.ok) {
+            var sp = await ipServerPruefen(p.ip || (await ipMessen()));
+            if (sp.art === 'ok' || sp.art === 'keine_sperre') { ipFehlerFolge = 0; return; }
+            if (sp.art === 'fehler' && ++ipFehlerFolge < 3) {
+                status('IP-Prüfung im Betrieb nicht möglich (' + sp.text + ') - ' + ipFehlerFolge + '/3, danach wird GodBot beendet', 'WICHTIG');
+                return;
+            }
+            ipFehlerFolge = 0;
+            p = { ok: false, grund: sp.text || sp.art };
+        }
+        status('IP-/PROXY-SPERRE im Betrieb: ' + p.grund + ' - GodBot wird sofort beendet', 'FEHLER');
         try { if (window.__odinSyncFlush) window.__odinSyncFlush(); } catch (e) { }
         try { qSenden(); } catch (e) { }
         setTimeout(function () { location.replace('about:blank'); }, 800);
@@ -887,6 +913,16 @@ async function starten(uebernahme) {
             if (t) { Z.modus = 'tab'; Z.hinweis = 'läuft in anderem Tab'; ui(); return; }
             var e = await darfLaufen();
             if (!e.erhalten) { Z.modus = 'fremd'; Z.hinweis = 'läuft auf ' + e.halter; ui(); return; }
+        }
+        // 564.3: Erst die Geraete-Sperre, dann die IP-Pruefung in der
+        // Datenbank, erst dann GodBot. Ergebnis 60 s je Tab gemerkt (GodBot
+        // laedt oft neue Seiten). Kein Ergebnis = Sperre (fail closed).
+        var ipJetzt = pz.ip || (await ipMessen());
+        var sc = jparse(sget('odinpc_ipserver_ok'), null);
+        if (!(sc && sc.konto === Z.konto.id && sc.ip === ipJetzt && Date.now() - sc.at < 60000)) {
+            var sp = await ipServerPruefen(ipJetzt);
+            if (sp.art !== 'ok') { sdel('odinpc_ipserver_ok'); proxySperren({ grund: sp.text || sp.art }); return; }
+            sset('odinpc_ipserver_ok', JSON.stringify({ konto: Z.konto.id, ip: ipJetzt, at: Date.now() }));
         }
         // Altes GodBot-Skript in Tampermonkey noch aktiv? Dann liefe GodBot
         // doppelt - einmal mit, einmal ohne Odin.

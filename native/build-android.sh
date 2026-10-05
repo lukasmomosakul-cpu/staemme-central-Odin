@@ -570,7 +570,7 @@ public class OdinService extends Service {
  static final java.util.concurrent.ConcurrentHashMap<String,Object[]> LEASE=new java.util.concurrent.ConcurrentHashMap<>();
  // Konten, deren Ansicht auf die Sperre wartet (GodBot nicht geladen).
  static final java.util.Set<String> WARTET=java.util.concurrent.ConcurrentHashMap.newKeySet();
- private static String rpc(Context c,String fn,String body){
+ static String rpc(Context c,String fn,String body){
   ladeStatisch(c);
   if(url.isEmpty()||key.isEmpty())return null;
   for(int versuch=0;versuch<2;versuch++){
@@ -669,7 +669,8 @@ public class OdinService extends Service {
    String ip=oeffentlicheIp();
    if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return;
    boolean neu=!ip.equals(letzteIp); letzteIp=ip;
-   rpc(this,"lease_ip_melden",new JSONObject().put("p_geraet",geraetId(this)).put("p_ip",ip).toString());
+   // 2.0.19: kein ungepruefter lease_ip_melden mehr. Die IP kommt je Konto
+   // ueber lease_ip_pruefen (Migration 029) an die Sperre - geprueft.
    if(neu)OdinLog.schreib(this,"-","info","Öffentliche IP dieses Geräts: "+ip);
   }catch(Exception ignored){}
  }
@@ -3444,6 +3445,8 @@ public class GameWebViewActivity extends Activity {
      }else if(OdinProxy.hatProxy(w.gameAccountId)){
       OdinProxy.Zugang z=OdinProxy.lesen(w.gameAccountId,w.proxyRoh);
       if(z!=null)w.proxyIpMelden(z);
+     }else if(!w.leaseSeite){
+      w.ipImBetriebPruefen();
      }
     }).start();
    }
@@ -4701,14 +4704,25 @@ public class GameWebViewActivity extends Activity {
    new Thread(()->{
     // 2.0.5: Beim Laden IMMER voll pruefen (auch Neuladen/Renderer-Neuaufbau),
     // inkl. IP-Test - nicht nur beim ersten Oeffnen.
-    String fehler=proxyPruefen(true);
+    String fehler0=proxyPruefen(true);
     // 2.0.17: Fuehrt ein anderes Geraet dieses Konto, wird NICHT geladen -
     // sonst wuerde die Anmeldung (automatisch oder von Hand) das andere
     // Geraet aus dem Spiel werfen. Stattdessen fragen, ob uebernommen werden
     // soll. darfLaufen nimmt eine freie Sperre gleich fuer dieses Geraet.
-    final boolean darf=fehler!=null||gameAccountId.isEmpty()
+    final boolean darf=fehler0!=null||gameAccountId.isEmpty()
       ||OdinService.darfLaufen(getApplicationContext(),gameAccountId);
     final String halter=darf?null:OdinService.fremdHalter(gameAccountId);
+    // 2.0.19: Erst die Sperre, dann die IP-Pruefung in der Datenbank
+    // (lease_ip_pruefen, atomar, auch gegen andere Geraete/Teams), erst dann
+    // laden. Kein Ergebnis = nicht laden (fail closed).
+    String ipFehler=null;
+    if(fehler0==null&&darf&&!gameAccountId.isEmpty()){
+     String ip=OdinProxy.hatProxy(gameAccountId)&&letzteProxyIp!=null?letzteProxyIp:kontoIp();
+     String[] pr=ipServerPruefen(ip);
+     if("ok".equals(pr[0]))ipFehlerFolge=0;
+     else ipFehler=pr[1].isEmpty()?pr[0]:pr[1];
+    }
+    final String fehler=fehler0!=null?fehler0:ipFehler;
     runOnUiThread(()->{
      if(geschlossen||webView!=ziel_v)return;
      if(fehler!=null){
@@ -4717,13 +4731,13 @@ public class GameWebViewActivity extends Activity {
       // GodBot, keine einzige Anfrage an die Spielserver. Statt der Welt
       // erscheint eine Sperrseite; alle 60 s neuer Versuch.
       proxySperre=true;
-      melde("FEHLER","PROXY-SPERRE: "+fehler+" - Konto wird NICHT gestartet (neuer Versuch in 60 s)");
+      melde("FEHLER","SPERRE: "+fehler+" - Konto wird NICHT gestartet (neuer Versuch in 60 s)");
       wechselIndikatorWeg();
       sperrseiteZeigen(fehler);
       taktHandler.postDelayed(()->{ if(!geschlossen&&proxySperre&&webView==ziel_v)laden(); },60_000L);
       return;
      }
-     if(proxySperre){ proxySperre=false; melde("WICHTIG","Proxy-Sperre aufgehoben - Verbindung steht, Konto startet"); }
+     if(proxySperre){ proxySperre=false; melde("WICHTIG","Sperre aufgehoben - Prüfung ok, Konto startet"); }
      if(!darf){ leaseSeiteZeigen(halter); return; }
      leaseSeite=false;
      ziel_v.loadUrl(ziel_u);
@@ -4739,8 +4753,9 @@ public class GameWebViewActivity extends Activity {
     String g=grund==null?"":grund.replace("&","&amp;").replace("<","&lt;");
     String html="<html><head><meta name=viewport content='width=device-width'></head>"
      +"<body style='background:#111827;color:#E5E7EB;font-family:sans-serif;padding:28px;text-align:center'>"
-     +"<div style='font-size:46px'>🔒</div><h2 style='color:#F59E0B'>Proxy-Sperre</h2>"
-     +"<p><b>"+kurz()+"</b> hat einen Proxy hinterlegt, aber keine Proxy-Verbindung.</p>"
+     +"<div style='font-size:46px'>🔒</div><h2 style='color:#F59E0B'>IP-/Proxy-Sperre</h2>"
+     +"<p><b>"+kurz()+"</b> "+(OdinProxy.hatProxy(gameAccountId)||(proxyRoh!=null&&!proxyRoh.trim().isEmpty())
+        ?"hat einen Proxy hinterlegt; die Prüfung ist fehlgeschlagen.":"läuft ohne Proxy; die Prüfung der IP ist fehlgeschlagen.")+"</p>"
      +"<p>Das Konto wird nicht gestartet - es geht keine Anfrage an die Spielserver.</p>"
      +"<p style='color:#9CA3AF;font-size:13px'>Grund: "+g+"</p>"
      +"<p style='color:#9CA3AF;font-size:13px'>Neuer Versuch alle 60 Sekunden.</p></body></html>";
@@ -4920,7 +4935,7 @@ public class GameWebViewActivity extends Activity {
    if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}")){
     String kurz=ip==null?"keine Antwort":ip.replaceAll("\\s+"," ");
     if(kurz.length()>60)kurz=kurz.substring(0,60)+"…";
-    melde("WICHTIG","Proxy-Ausgang nicht lesbar ("+kurz+") - Proxy gestört?");
+    ipErgebnisImBetrieb(new String[]{"fehler","Proxy-Ausgang nicht lesbar ("+kurz+") - Proxy gestört?"});
     return;
    }
    String konflikt=ipKonflikt(ip);
@@ -4935,10 +4950,57 @@ public class GameWebViewActivity extends Activity {
    else setStatus("Proxy-Ausgang: "+ip);
    letzteProxyIp=ip;
    ipMerken(gameAccountId,ip,true,z.host,weltName);
+   ipErgebnisImBetrieb(ipServerPruefen(ip));
+  }
+  // 2.0.19: IP-Pruefung in der Datenbank (Migration 029, lease_ip_pruefen).
+  // Atomar je IP: prueft "anderer Name, dieselbe IP, dieselbe Welt" gegen
+  // ALLE aktiven Sperren (auch anderer Geraete und Teams) und schreibt die
+  // IP im selben Schritt an die Sperre dieses Kontos. Bei Konflikt nimmt
+  // die Datenbank die IP dieses Kontos heraus, damit das andere Konto
+  // nicht seinerseits gesperrt wird.
+  // Rueckgabe {art, text}; art = ok | konflikt | keine_sperre | fehler.
+  String[] ipServerPruefen(String ip){
+   if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return new String[]{"fehler","Ausgangs-IP nicht messbar"};
    try{
-    supaRequest("POST","rpc/lease_ip_melden_konto",new org.json.JSONObject()
-      .put("p_geraet",OdinService.geraetId(GameWebViewActivity.this)).put("p_konto",gameAccountId).put("p_ip",ip).toString());
-   }catch(Exception e){ android.util.Log.w("ODIN_PROXY","ip melden",e); }
+    String r=OdinService.rpc(getApplicationContext(),"lease_ip_pruefen",new org.json.JSONObject()
+      .put("p_account",gameAccountId).put("p_geraet",OdinService.geraetId(GameWebViewActivity.this))
+      .put("p_ip",ip).toString());
+    if(r==null)return new String[]{"fehler","IP-Prüfung in der Datenbank nicht erreichbar"};
+    org.json.JSONArray a=new org.json.JSONArray(r);
+    if(a.length()==0)return new String[]{"fehler","IP-Prüfung ohne Antwort"};
+    org.json.JSONObject o=a.getJSONObject(0);
+    return new String[]{o.optString("art","fehler"),o.isNull("konflikt")?"":o.optString("konflikt","")};
+   }catch(Exception e){ return new String[]{"fehler","IP-Prüfung fehlgeschlagen: "+e.getMessage()}; }
+  }
+  // Ausgangs-IP dieses Kontos: Proxy-Ausgang bzw. Geraete-IP (frisch gemessen).
+  String kontoIp(){
+   if(OdinProxy.hatProxy(gameAccountId)){
+    OdinProxy.Zugang z=OdinProxy.lesen(gameAccountId,proxyRoh);
+    return z==null?null:OdinProxy.ausgangsIp(z);
+   }
+   String ip=OdinService.oeffentlicheIp();
+   if(ip!=null&&ip.matches("[0-9a-fA-F:.]{3,45}"))OdinService.letzteIp=ip;
+   return ip;
+  }
+  // 2.0.19: Konten OHNE Proxy werden im 10-Min-Takt ebenfalls geprueft
+  // (vorher nur beim Laden) - z. B. Handy kommt ins Heim-WLAN des PCs.
+  volatile int ipFehlerFolge=0;
+  void ipImBetriebPruefen(){ ipErgebnisImBetrieb(ipServerPruefen(kontoIp())); }
+  // Konflikt -> sofort anhalten. Pruefung nicht moeglich -> nach 3 Fehlern
+  // in Folge (30 Min) anhalten, damit ein kurzer Netzaussetzer nicht alles
+  // stoppt. keine_sperre = Konto laeuft hier gerade nicht (Sperre woanders).
+  void ipErgebnisImBetrieb(String[] p){
+   if("ok".equals(p[0])||"keine_sperre".equals(p[0])){ ipFehlerFolge=0; return; }
+   if("fehler".equals(p[0])){
+    ipFehlerFolge++;
+    if(ipFehlerFolge<3){ melde("WICHTIG","IP-Prüfung im Betrieb nicht möglich ("+p[1]+") - "+ipFehlerFolge+"/3, danach wird angehalten"); return; }
+   }
+   ipFehlerFolge=0;
+   final String grund=p[1].isEmpty()?p[0]:p[1];
+   proxySperre=true;
+   melde("FEHLER","IP-SPERRE im Betrieb: "+grund+" - Konto wird angehalten");
+   runOnUiThread(()->{ try{ if(webView!=null&&!geschlossen){ webView.stopLoading(); sperrseiteZeigen(grund);
+     taktHandler.postDelayed(()->{ if(!geschlossen&&proxySperre)laden(); },60_000L); } }catch(Exception ig){} });
   }
   private void ladeSchichtZeigenWennAngezeigt(){ if(aktiv==this)ladeSchichtZeigen(weltName); }
   // Leiste der Ansicht zeigt nur den Stand der angezeigten Welt; der Stand
