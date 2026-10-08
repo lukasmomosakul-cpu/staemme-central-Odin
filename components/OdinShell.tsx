@@ -12,6 +12,7 @@ const SEITEN: [string, string][] = [
   ['Vorlagen', '/vorlagen/'],
   ['Statistik', '/statistik/'],
   ['Protokoll', '/protokoll/'],
+  ['IP-Wächter', '/ipwaechter/'],
   ['Team', '/team/'],
   ['Scripts', '/scripts/'],
   ['Einstellungen', '/einstellungen/'],
@@ -27,6 +28,7 @@ const FUSS: [string, string, string][] = [
   ['📋', 'Protokoll', '/protokoll/'],
 ];
 const MEHR: [string, string, string][] = [
+  ['🛡', 'IP-Wächter', '/ipwaechter/'],
   ['👥', 'Accounts', '/#accounts'],
   ['🤝', 'Team', '/team/'],
   ['📐', 'Vorlagen', '/vorlagen/'],

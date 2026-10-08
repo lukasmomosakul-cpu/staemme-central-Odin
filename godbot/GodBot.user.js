@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      564
+// @version      565
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -6393,6 +6393,9 @@ function botMarkerSichtbar() {
     }
 
     function fetchWorldTextFile(url, onDone) {
+        // v565: zentral geschuetzt - die Aufrufer pruefen den Botschutz nur
+        // vor dem ERSTEN Abruf, nicht vor den verketteten weiteren.
+        if (isBotProtectionActive()) { onDone(null, "Botschutz aktiv"); return; }
         twCountRequest(url, "auto", "weltdaten");
         fetch(url, { credentials: "same-origin" })
             .then(r => r.ok ? r.text() : Promise.reject(new Error("HTTP " + r.status)))
@@ -23668,6 +23671,8 @@ function captchaAutoOpenGrund() {
         }
 
         function returnToOverview() {
+            // v565: bei Botschutz keine weitere Seite laden.
+            if (isBotProtectionActive()) { haltAllAutomation("returnToOverview"); return; }
             if (document.getElementById("tw-dim-overlay")) {
                 localStorage.setItem("tw_dim_was_active", "1");
             }
@@ -51629,6 +51634,18 @@ function distributeWaveBudget(groupSizes, waveCount) {
     return shares;
 }
 
+// WENIGER WELLEN BEI GLEICHER BEUTE (v565, 08.10.2026)
+// ------------------------------------------------------------------
+// Gemessen (Anfragezaehler der App, Ares20, 7 Tage): 120 Anfragen je
+// Stunde an den Spielserver, davon 73 scavenge_api:send_squads - jede
+// Welle ist genau ein Sendevorgang ("Sendungen: 33 (33 Wellen)"). Das
+// Wellenbudget (massMode.waves, dort 12 je Slot) wurde immer voll
+// ausgeschoepft, auch wenn weniger Wellen fast dieselbe Kapazitaet
+// schicken. Jetzt wird das kleinste Budget genommen, das hoechstens
+// WAVE_TOLERANZ (3 %) weniger Kapazitaet sendet als das volle Budget.
+// Der Rest bleibt im Dorf und steht dem naechsten Slot zur Verfuegung.
+const WAVE_TOLERANZ = 0.03;
+
 function buildWavesForSlot(plans, waveCount) {
     if (!plans.length) return { waves: [], idealTotal: 0, actualTotal: 0, coverage: 0 };
 
@@ -51640,6 +51657,30 @@ function buildWavesForSlot(plans, waveCount) {
     });
 
     const groupList = Array.from(groups.values());
+    const sendbar = r => r.waves.filter(w => w.sendable).length;
+    const voll = buildWavesForBudget(plans, groupList, waveCount);
+    let best = voll;
+    if (voll.actualTotal > 0) {
+        for (let b = Math.max(1, groupList.length); b < waveCount; b++) {
+            const r = buildWavesForBudget(plans, groupList, b);
+            if (r.actualTotal >= voll.actualTotal * (1 - WAVE_TOLERANZ) && sendbar(r) < sendbar(best)) {
+                best = r;
+                break;
+            }
+        }
+    }
+    if (best !== voll) {
+        best.wellenGespart = sendbar(voll) - sendbar(best);
+        const pz = voll.actualTotal > 0 ? Math.round((1 - best.actualTotal / voll.actualTotal) * 1000) / 10 : 0;
+        console.log(
+            `[TW] Raubzug: ${sendbar(best)} statt ${sendbar(voll)} Wellen - ${best.wellenGespart} Sendevorgang/` +
+            `Sendevorgänge gespart, ${pz}% weniger Kapazität (Grenze ${WAVE_TOLERANZ * 100}%).`
+        );
+    }
+    return best;
+}
+
+function buildWavesForBudget(plans, groupList, waveCount) {
     const shares = distributeWaveBudget(groupList.map(g => g.length), waveCount);
 
     let waves = [];

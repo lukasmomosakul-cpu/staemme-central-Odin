@@ -142,6 +142,8 @@ function stufeVon(m) {
     return 'info';
 }
 function bereichVon(m) {
+    // 564.5: IP-Waechter (Dashboard-Seite und Protokollfilter "ip").
+    if (/^IP-|IP-Prüfung|IP-\/PROXY|WebRTC|Proxy-Sperre|PROXY-SPERRE/.test(m)) return 'ip';
     if (m.indexOf('Anmeldung') >= 0) return 'anmeldung';
     if (m.indexOf('Abgleich') >= 0 || m.indexOf('Einstellungen') >= 0 || m.indexOf('gesichert') >= 0) return 'abgleich';
     if (m.indexOf('Sperre') >= 0) return 'sperre';
@@ -382,6 +384,11 @@ async function ipServerPruefen(ip) {
         var r = await rpc('lease_ip_pruefen', { p_account: Z.konto.id, p_geraet: geraetId, p_ip: ip });
         var o = r && r[0];
         if (!o) return { art: 'fehler', text: 'IP-Prüfung ohne Antwort' };
+        // 564.5: jede NEUE geprueft-gute IP ins Protokoll (nicht jede Minute).
+        if (o.art === 'ok' && ip !== sget('odinpc_ip_ok_' + Z.konto.id)) {
+            sset('odinpc_ip_ok_' + Z.konto.id, ip);
+            status('IP-Wächter: ' + (Z.proxyRoh ? 'Proxy-Ausgang ' : 'Anschluss-IP ') + ip + ' geprüft - kein Konflikt', 'info');
+        }
         return { art: o.art || 'fehler', text: o.konflikt || '' };
     } catch (e) { return { art: 'fehler', text: 'IP-Prüfung in der Datenbank nicht erreichbar' }; }
 }
@@ -429,6 +436,9 @@ async function rtcGeprueft(proxyIp, erzwingen) {
     var r = await rtcPruefen(proxyIp);
     if (r.ok) sset('odinpc_rtc_ok', JSON.stringify({ konto: Z.konto.id, ip: proxyIp, at: Date.now() }));
     else sdel('odinpc_rtc_ok');
+    // 564.5: Befund an die Sperre (IP-Waechter im Dashboard) und ins Protokoll.
+    rpc('lease_rtc_melden', { p_account: Z.konto.id, p_geraet: geraetId, p_befund: r.ok ? 'ok: ' + (r.info || '') : r.grund }).catch(function () { });
+    status('WebRTC-Prüfung: ' + (r.ok ? 'keine fremde IP (' + (r.info || 'ok') + ')' : r.grund), r.ok ? 'info' : 'FEHLER');
     return r;
 }
 // ===================================================================

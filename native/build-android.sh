@@ -3344,6 +3344,9 @@ public class GameWebViewActivity extends Activity {
  }
  String apkVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "?";}}
  private static String bereichVon(String m){
+  // 2.0.22: IP-Waechter (Dashboard-Seite und Protokollfilter "ip").
+  if(m.startsWith("IP-")||m.contains("IP-SPERRE")||m.contains("IP-Prüfung")||m.contains("WebRTC")
+     ||m.contains("Netzwechsel")||m.startsWith("SPERRE: "))return "ip";
   if(m.contains("Anmeldung"))return "anmeldung";
   if(m.contains("Wecker"))return "wecker";
   if(m.contains("Abgleich")||m.contains("Einstellungen"))return "abgleich";
@@ -5302,6 +5305,11 @@ public class GameWebViewActivity extends Activity {
   void rtcBefundVerarbeiten(String b){
    String x=b==null?"":b.trim();
    if(x.length()>200)x=x.substring(0,200);
+   // 2.0.22: Befund an die Sperre (IP-Waechter im Dashboard).
+   final String befund=x;
+   new Thread(()->{ try{ OdinService.rpc(getApplicationContext(),"lease_rtc_melden",new org.json.JSONObject()
+     .put("p_account",gameAccountId).put("p_geraet",OdinService.geraetId(GameWebViewActivity.this))
+     .put("p_befund",befund).toString()); }catch(Exception ig){} },"odin-rtc").start();
    if(x.equals("ok")||x.equals("kein")){ melde("info","WebRTC-Prüfung: keine IP sichtbar"); return; }
    if(x.startsWith("fehler")){ melde("WICHTIG","WebRTC-Prüfung nicht auswertbar: "+x); return; }
    rtcLeck=true;
@@ -5317,7 +5325,14 @@ public class GameWebViewActivity extends Activity {
     org.json.JSONArray a=new org.json.JSONArray(r);
     if(a.length()==0)return new String[]{"fehler","IP-Prüfung ohne Antwort"};
     org.json.JSONObject o=a.getJSONObject(0);
-    return new String[]{o.optString("art","fehler"),o.isNull("konflikt")?"":o.optString("konflikt","")};
+    String art=o.optString("art","fehler");
+    // 2.0.22: IP-Waechter - jede NEUE geprueft-gute IP ins Protokoll (nicht
+    // jede Pruefung, sonst alle 10 Min eine Zeile je Konto).
+    if("ok".equals(art)&&!ip.equals(letzteOkIp)){
+     letzteOkIp=ip;
+     melde("info","IP-Wächter: "+(OdinProxy.hatProxy(gameAccountId)?"Proxy-Ausgang ":"Geräte-IP ")+ip+" geprüft - kein Konflikt");
+    }
+    return new String[]{art,o.isNull("konflikt")?"":o.optString("konflikt","")};
    }catch(Exception e){ return new String[]{"fehler","IP-Prüfung fehlgeschlagen: "+e.getMessage()}; }
   }
   // Ausgangs-IP dieses Kontos: Proxy-Ausgang bzw. Geraete-IP (frisch gemessen).
@@ -5333,6 +5348,7 @@ public class GameWebViewActivity extends Activity {
   // 2.0.19: Konten OHNE Proxy werden im 10-Min-Takt ebenfalls geprueft
   // (vorher nur beim Laden) - z. B. Handy kommt ins Heim-WLAN des PCs.
   volatile int ipFehlerFolge=0;
+  volatile String letzteOkIp="";
   void ipImBetriebPruefen(){ ipErgebnisImBetrieb(ipServerPruefen(kontoIp())); }
   // Konflikt -> sofort anhalten. Pruefung nicht moeglich -> nach 3 Fehlern
   // in Folge (30 Min) anhalten, damit ein kurzer Netzaussetzer nicht alles
