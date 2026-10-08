@@ -553,13 +553,13 @@ new = ''' private void loadEnabledScripts(WebView v){
      if(o==null||!o.optBoolean("an",true))continue;
      String sid=o.optString("id",""), snam=o.optString("name","");
      if(OdinSkripte.istGodBotEintrag(sid,o.optString("url","")))continue;
-     String q="code".equals(o.optString("quelle","url"))?o.optString("code",""):OdinSkripte.holeGecacht(o.optString("url",""));
+     String q="code".equals(o.optString("quelle","url"))?o.optString("code",""):OdinSkripte.holeGecacht(o.optString("url",""),gameAccountId);
      if(q==null||q.trim().isEmpty()){ setStatus("Skript nicht ladbar: "+snam); continue; }
      // @match/@include/@exclude wie bei Tampermonkey
      if(!OdinSkripte.passt(q,seite)){ uebergangen++; continue; }
      boolean ok=true;
      for(String req:OdinSkripte.meta(q,"require")){
-      String rq=OdinSkripte.holeGecacht(req);
+      String rq=OdinSkripte.holeGecacht(req,gameAccountId);
       if(rq==null||rq.isEmpty()){ setStatus(snam+": @require nicht ladbar"); ok=false; break; }
       teile.add(rq.getBytes("UTF-8"));
      }

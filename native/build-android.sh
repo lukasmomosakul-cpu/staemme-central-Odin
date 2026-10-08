@@ -2391,7 +2391,14 @@ public final class OdinSkripte {
  private static final long URL_MAX_ALTER_MS=60L*60L*1000L;
  private static final java.util.Map<String,String> URL_TEXT=new java.util.HashMap<>();
  private static final java.util.Map<String,Long> URL_ZEIT=new java.util.HashMap<>();
+ // 2.0.21: Ohne Konto (alter Aufruf) keine Netzabfrage mehr - nur der
+ // Zwischenspeicher. Abgerufen wird nur noch mit Konto, damit Spiel-Adressen
+ // ueber dessen Weg laufen (OdinProxy.abrufen).
  public static String holeGecacht(String adresse){
+  if(adresse==null)return null;
+  synchronized(URL_TEXT){ return URL_TEXT.get(adresse); }
+ }
+ public static String holeGecacht(String adresse,String konto){
   if(adresse==null||!adresse.startsWith("https://"))return null;
   long jetzt=System.currentTimeMillis();
   synchronized(URL_TEXT){
@@ -2400,11 +2407,8 @@ public final class OdinSkripte {
   }
   String t=null;
   try{
-   java.net.HttpURLConnection c=(java.net.HttpURLConnection)new java.net.URL(adresse).openConnection();
-   c.setInstanceFollowRedirects(true); c.setConnectTimeout(15000); c.setReadTimeout(30000);
-   c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");
-   int st=c.getResponseCode();
-   if(st>=200&&st<300)t=new String(alles(c.getInputStream()),"UTF-8");
+   OdinProxy.Antwort a=OdinProxy.abrufen(konto,adresse);
+   if(a.code>=200&&a.code<300)t=new String(a.daten,"UTF-8");
   }catch(Exception e){ android.util.Log.w("ODIN","holeGecacht "+adresse,e); }
   synchronized(URL_TEXT){
    if(t!=null&&!t.isEmpty()){ URL_TEXT.put(adresse,t); URL_ZEIT.put(adresse,jetzt); return t; }
@@ -2857,7 +2861,9 @@ final class OdinProxy {
     androidx.webkit.ProxyConfig cfg=new androidx.webkit.ProxyConfig.Builder()
       .addProxyRule("http://"+LOKAL+":"+server.getLocalPort())
       .addBypassRule("*.die-staemme.de").addBypassRule("die-staemme.de")
-      .addBypassRule("*.innogamescdn.com").addBypassRule("*.innogames.com")
+      .addBypassRule("*.innogamescdn.com").addBypassRule("*.innogames.com").addBypassRule("innogames.com")
+      // 2.0.21: auch die .de-Adressen von InnoGames ueber den Konto-Weg.
+      .addBypassRule("*.innogames.de").addBypassRule("innogames.de")
       // 2.0.8: Botschutz-Captcha (hCaptcha, GodBot erkennt dessen iframe) -
       // sonst loeste ein Proxy-Konto das Captcha ueber die Geraete-IP,
       // waehrend das Spiel die Proxy-IP sieht.
@@ -3024,6 +3030,136 @@ final class OdinProxy {
   try{ OutputStream o=ziel.getOutputStream(); while((n=in.read(b))!=-1){ o.write(b,0,n); o.flush(); } }
   catch(Exception ignored){}
  }
+ // ---- 2.0.21: Abrufe der APP SELBST (Zusatzskripte, @require,
+ // GM_xmlhttpRequest) ---------------------------------------------------------
+ // Liefen bisher per HttpURLConnection DIREKT ueber die Geraete-IP - auch bei
+ // Proxy-Konten. Ein Zusatzskript von media.innogamescdn.com oder ein
+ // GM_xmlhttpRequest an die Welt verriet so die Geraete-IP an InnoGames.
+ // Jetzt: Spiel-/InnoGames-Adressen nur ueber den Weg DIESES Kontos (sein
+ // Proxy oder direkt, genau wie die Spielansicht), mit derselben
+ // Welt-Pruefung wie der lokale Proxy. Weiterleitungen werden einzeln
+ // verfolgt, damit auch ein Umweg ueber eine fremde Adresse zurueck zu
+ // InnoGames nicht direkt laeuft. Fail closed: geht es nicht, kein Abruf.
+ private static final java.util.regex.Pattern WELT_HOST=java.util.regex.Pattern.compile("^([a-z]{2,3}[0-9]+[a-z]?)\\.die-staemme\\.de$");
+ static boolean istSpielHost(String h){
+  if(h==null)return false;
+  h=h.toLowerCase(java.util.Locale.ROOT);
+  return h.equals("die-staemme.de")||h.endsWith(".die-staemme.de")
+    ||h.equals("innogamescdn.com")||h.endsWith(".innogamescdn.com")
+    ||h.equals("innogames.com")||h.endsWith(".innogames.com")
+    ||h.equals("innogames.de")||h.endsWith(".innogames.de");
+ }
+ // Rohe TCP-Verbindung zu host:port auf dem Weg des Kontos.
+ private static Socket verbinden(String konto,String host,int port) throws IOException {
+  if(konto==null||konto.isEmpty())throw new IOException("ohne Konto kein Abruf von "+host);
+  String w=WELT.get(konto);
+  if(w==null)throw new IOException("Konto "+kurz(konto)+" nicht angemeldet");
+  java.util.regex.Matcher m=WELT_HOST.matcher(host);
+  if(m.matches()&&!w.isEmpty()&&!m.group(1).equals(w)){
+   log("FEHLER","BLOCKIERT: App-Abruf von Konto "+kurz(konto)+" (Welt "+w+") zu "+host+" - Trennung der Konten verletzt");
+   throw new IOException("falsche Welt: "+host);
+  }
+  Zugang p=PROXY.get(konto);
+  Socket s=new Socket();
+  try{
+   if(p==null){ s.connect(new InetSocketAddress(host,port),15_000); return s; }
+   s.connect(new InetSocketAddress(p.host,p.port),15_000);
+   s.setSoTimeout(30_000);
+   String pauth=p.user.isEmpty()?"":"Proxy-Authorization: Basic "+android.util.Base64.encodeToString((p.user+":"+p.pass).getBytes("UTF-8"),android.util.Base64.NO_WRAP)+"\r\n";
+   OutputStream o=s.getOutputStream();
+   o.write(("CONNECT "+host+":"+port+" HTTP/1.1\r\nHost: "+host+":"+port+"\r\n"+pauth+"\r\n").getBytes("ISO-8859-1")); o.flush();
+   InputStream zi=s.getInputStream();   // ungepuffert: nach dem Kopf beginnt TLS
+   String st=zeileLesen(zi); String h;
+   while((h=zeileLesen(zi))!=null&&!h.isEmpty()){}
+   if(st==null||!st.matches("HTTP/1\\.[01] 200.*"))throw new IOException("Proxy lehnt "+host+" ab: "+st);
+   return s;
+  }catch(IOException e){ try{ s.close(); }catch(Exception ig){} throw e; }
+ }
+ static final class Antwort { int code; String ort; byte[] daten=new byte[0]; }
+ private static byte[] bisEnde(InputStream in,long max) throws IOException {
+  ByteArrayOutputStream b=new ByteArrayOutputStream(); byte[] t=new byte[16384]; int n;
+  while((n=in.read(t))!=-1){ b.write(t,0,n); if(b.size()>max)throw new IOException("Antwort zu groß"); }
+  return b.toByteArray();
+ }
+ private static byte[] genau(InputStream in,long n) throws IOException {
+  if(n>10_000_000L)throw new IOException("Antwort zu groß");
+  byte[] b=new byte[(int)n]; int o=0;
+  while(o<n){ int r=in.read(b,o,(int)n-o); if(r<0)throw new IOException("Antwort abgeschnitten"); o+=r; }
+  return b;
+ }
+ private static byte[] stuecke(InputStream in) throws IOException {
+  ByteArrayOutputStream b=new ByteArrayOutputStream();
+  while(true){
+   String z=zeileLesen(in); if(z==null)throw new IOException("Antwort abgeschnitten");
+   int i=z.indexOf(';'); int n=Integer.parseInt((i>=0?z.substring(0,i):z).trim(),16);
+   if(n==0){ String h; while((h=zeileLesen(in))!=null&&!h.isEmpty()){} break; }
+   b.write(genau(in,n)); zeileLesen(in);
+   if(b.size()>10_000_000)throw new IOException("Antwort zu groß");
+  }
+  return b.toByteArray();
+ }
+ // Genau EINE GET-Anfrage (ohne Weiterleitung) an eine Spiel-Adresse, immer
+ // https, ueber den Weg des Kontos.
+ private static Antwort spielGet(String konto,URL u) throws IOException {
+  String host=u.getHost().toLowerCase(java.util.Locale.ROOT);
+  int port="https".equalsIgnoreCase(u.getProtocol())&&u.getPort()>0?u.getPort():443;
+  Socket roh=verbinden(konto,host,port);
+  javax.net.ssl.SSLSocket ssl=null;
+  try{
+   ssl=(javax.net.ssl.SSLSocket)((javax.net.ssl.SSLSocketFactory)javax.net.ssl.SSLSocketFactory.getDefault()).createSocket(roh,host,port,true);
+   ssl.setSoTimeout(30_000);
+   ssl.startHandshake();
+   if(!javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host,ssl.getSession()))
+    throw new IOException("Zertifikat passt nicht zu "+host);
+   String pfad=(u.getFile()==null||u.getFile().isEmpty())?"/":u.getFile();
+   OutputStream o=ssl.getOutputStream();
+   o.write(("GET "+pfad+" HTTP/1.1\r\nHost: "+host+(port==443?"":":"+port)+"\r\nUser-Agent: Mozilla/5.0 (Android) Odin\r\n"
+     +"Accept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n").getBytes("ISO-8859-1"));
+   o.flush();
+   InputStream in=new BufferedInputStream(ssl.getInputStream());
+   String st=zeileLesen(in); if(st==null)throw new IOException("keine Antwort von "+host);
+   String[] t=st.split(" ");
+   Antwort a=new Antwort();
+   try{ a.code=Integer.parseInt(t[1]); }catch(Exception e){ throw new IOException("ungültige Antwort: "+st); }
+   boolean chunked=false, gzip=false; long laenge=-1; String h;
+   while((h=zeileLesen(in))!=null&&!h.isEmpty()){
+    int i=h.indexOf(':'); if(i<=0)continue;
+    String k=h.substring(0,i).trim().toLowerCase(java.util.Locale.ROOT), v=h.substring(i+1).trim();
+    if(k.equals("location"))a.ort=v;
+    else if(k.equals("transfer-encoding")&&v.toLowerCase(java.util.Locale.ROOT).contains("chunked"))chunked=true;
+    else if(k.equals("content-encoding")&&v.toLowerCase(java.util.Locale.ROOT).contains("gzip"))gzip=true;
+    else if(k.equals("content-length"))try{ laenge=Long.parseLong(v); }catch(Exception ig){}
+   }
+   byte[] d=chunked?stuecke(in):(laenge>=0?genau(in,laenge):bisEnde(in,10_000_000L));
+   if(gzip)d=bisEnde(new java.util.zip.GZIPInputStream(new ByteArrayInputStream(d)),10_000_000L);
+   a.daten=d;
+   return a;
+  }finally{
+   try{ if(ssl!=null)ssl.close(); else roh.close(); }catch(Exception ig){}
+  }
+ }
+ // Genau EINE GET-Anfrage an eine fremde Adresse, direkt (wie bisher).
+ private static Antwort fremdGet(URL u) throws IOException {
+  java.net.HttpURLConnection c=(java.net.HttpURLConnection)u.openConnection();
+  try{
+   c.setInstanceFollowRedirects(false); c.setConnectTimeout(15000); c.setReadTimeout(30000);
+   c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");
+   Antwort a=new Antwort(); a.code=c.getResponseCode(); a.ort=c.getHeaderField("Location");
+   InputStream in=a.code>=200&&a.code<400?c.getInputStream():c.getErrorStream();
+   if(in!=null)a.daten=bisEnde(in,10_000_000L);
+   return a;
+  }finally{ c.disconnect(); }
+ }
+ // GET mit Weiterleitungen (hoechstens 5), jede Stufe auf dem passenden Weg.
+ static Antwort abrufen(String konto,String adresse) throws IOException {
+  URL u=new URL(adresse);
+  for(int i=0;i<6;i++){
+   Antwort a=istSpielHost(u.getHost())?spielGet(konto,u):fremdGet(u);
+   if(a.code>=300&&a.code<400&&a.ort!=null&&!a.ort.isEmpty()){ u=new URL(u,a.ort); continue; }
+   return a;
+  }
+  throw new IOException("zu viele Weiterleitungen: "+adresse);
+ }
  // Ausgangs-IP ueber den Proxy eines Kontos (Kontrolle vor dem Laden).
  static String ausgangsIp(Zugang z){
   java.net.HttpURLConnection h=null;
@@ -3079,6 +3215,9 @@ import android.annotation.SuppressLint; import android.app.Activity; import andr
 // schreibt alle 10 Minuten eine Takt-Zeile (erwartet ~120). Eine verdeckte
 // Welt mit deutlich weniger bei vorn liegender Ansicht ist ein Befund.
 public class GameWebViewActivity extends Activity {
+ // 2.0.21: WebRTC-Schutz (vor jeder Seite, jeder Rahmen) und Gegenprobe.
+ static final String RTC_SCHUTZ="(function(){'use strict';\nvar done=new WeakSet();\nfunction cfg(c){var r={};if(c&&typeof c==='object'){for(var k in c){r[k]=c[k];}}r.iceServers=[];r.iceTransportPolicy='relay';return r;}\nfunction fix(w){try{\n if(!w||done.has(w))return;done.add(w);\n var O=w.RTCPeerConnection||w.webkitRTCPeerConnection;\n if(typeof O!=='function')return;\n var P=new Proxy(O,{construct:function(t,a,n){a=Array.prototype.slice.call(a);a[0]=cfg(a[0]);return Reflect.construct(t,a,n);}});\n var pr=O.prototype,sc=pr.setConfiguration;\n if(typeof sc==='function'){Object.defineProperty(pr,'setConfiguration',{value:new Proxy(sc,{apply:function(t,s,a){a=Array.prototype.slice.call(a);a[0]=cfg(a[0]);return Reflect.apply(t,s,a);}}),writable:true,configurable:true,enumerable:true});}\n Object.defineProperty(pr,'constructor',{value:P,writable:true,configurable:true,enumerable:false});\n ['RTCPeerConnection','webkitRTCPeerConnection'].forEach(function(n){if(Object.prototype.hasOwnProperty.call(w,n)){Object.defineProperty(w,n,{value:P,writable:true,configurable:true,enumerable:false});}});\n}catch(e){}}\nfix(window);\ntry{var F=HTMLIFrameElement.prototype;['contentWindow','contentDocument'].forEach(function(p){\n var d=Object.getOwnPropertyDescriptor(F,p);if(!d||typeof d.get!=='function')return;\n Object.defineProperty(F,p,{get:new Proxy(d.get,{apply:function(t,s,a){var r=Reflect.apply(t,s,a);try{fix(p==='contentWindow'?r:(r&&r.defaultView));}catch(e){}return r;}}),set:d.set,enumerable:d.enumerable,configurable:true});\n});}catch(e){}\ntry{new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){var ns=ms[i].addedNodes;for(var j=0;j<ns.length;j++){var n=ns[j];if(n&&n.tagName==='IFRAME'){try{fix(n.contentWindow);}catch(e){}}}}}).observe(document,{childList:true,subtree:true});}catch(e){}\n})();";
+ static final String RTC_TEST="(function(){var B=window['__BRIDGE__'];function s(x){try{B.rtcBefund(String(x).slice(0,300));}catch(e){}}\ntry{var P=window.RTCPeerConnection;if(typeof P!=='function'){s('kein');return;}\nvar ips=[],pc=new P({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});\npc.onicecandidate=function(e){var c=e&&e.candidate&&e.candidate.candidate;if(!c)return;var m=/ ([0-9a-fA-F.:]+) \\d+ typ (\\w+)/.exec(c);if(m)ips.push(m[2]+' '+m[1]);};\npc.createDataChannel('o');\npc.createOffer().then(function(o){return pc.setLocalDescription(o);}).catch(function(e){s('fehler: '+e);});\nsetTimeout(function(){try{pc.close();}catch(e){}s(ips.length?ips.join(', '):'ok');},4000);\n}catch(e){s('fehler: '+e);}})();";
  private TextView statusView;
  private TextView kopfTitel;
  // Teamliste der Zusatzskripte: fuenf Minuten gueltig. Vorher kostete jeder
@@ -3109,6 +3248,43 @@ public class GameWebViewActivity extends Activity {
  private volatile boolean imVordergrund=false;
  private Welt weltVon(String konto){
   synchronized(WELTEN){ return WELTEN.get(konto==null?"":konto); }
+ }
+ // 2.0.21: Netzwechsel (WLAN <-> mobil, neue Adresse) sofort pruefen, nicht
+ // erst im 10-Min-Takt. Nur Konten OHNE Proxy - deren IP ist die des
+ // Geraets. Kostet keine Spielanfrage (ipify + Datenbank).
+ private android.net.ConnectivityManager.NetworkCallback netzRueckruf=null;
+ private volatile long netzWechselAm=0L;
+ private void netzBeobachten(){
+  try{
+   android.net.ConnectivityManager cm=getSystemService(android.net.ConnectivityManager.class);
+   netzRueckruf=new android.net.ConnectivityManager.NetworkCallback(){
+    @Override public void onAvailable(android.net.Network n){ netzGewechselt("neues Netz"); }
+    @Override public void onLinkPropertiesChanged(android.net.Network n,android.net.LinkProperties lp){ netzGewechselt("Netzadresse geändert"); }
+   };
+   cm.registerDefaultNetworkCallback(netzRueckruf);
+  }catch(Exception e){ netzRueckruf=null; android.util.Log.w("ODIN","netz beobachten",e); }
+ }
+ private void netzLoesen(){
+  try{ if(netzRueckruf!=null)getSystemService(android.net.ConnectivityManager.class).unregisterNetworkCallback(netzRueckruf); }catch(Exception ig){}
+  netzRueckruf=null;
+ }
+ private void netzGewechselt(final String warum){
+  final long t=System.currentTimeMillis();
+  netzWechselAm=t;
+  // Ein Wechsel loest mehrere Rueckrufe aus: 4 s nach dem letzten pruefen.
+  taktHandler.postDelayed(()->{
+   if(netzWechselAm!=t)return;
+   new Thread(()->{
+    for(Welt w:alleWelten()){
+     try{
+      if(w.geschlossen||w.webView==null||w.leaseSeite||w.proxySperre||w.gameAccountId.isEmpty())continue;
+      if(OdinProxy.hatProxy(w.gameAccountId))continue;
+      w.melde("info","Netzwechsel ("+warum+") - IP wird sofort geprüft");
+      w.ipImBetriebPruefen();
+     }catch(Exception ig){}
+    }
+   },"odin-netz").start();
+  },4000L);
  }
  private java.util.List<Welt> alleWelten(){
   synchronized(WELTEN){ return new java.util.ArrayList<>(WELTEN.values()); }
@@ -3260,6 +3436,7 @@ public class GameWebViewActivity extends Activity {
    finish(); return;
   }
   HOST=this;
+  netzBeobachten();
   OdinProxy.init(this);
   supaUrl=nz(getIntent().getStringExtra("supaUrl")); supaKey=nz(getIntent().getStringExtra("supaKey"));
   supaToken=nz(getIntent().getStringExtra("supaToken")); supaTeam=nz(getIntent().getStringExtra("supaTeam"));
@@ -4527,6 +4704,7 @@ public class GameWebViewActivity extends Activity {
  }
  @Override protected void onDestroy(){
   taktHandler.removeCallbacksAndMessages(null);
+  netzLoesen();
   if(HOST==this){ HOST=null; try{ OdinFloat.hideRahmen(GRUPPE); }catch(Exception ig){} }
   // Alle Welten dieser Ansicht beenden, Geraete-Sperren sofort freigeben
   // (sonst wartet ein anderes Geraet die 3 Minuten Frist ab). Auch WebViews
@@ -4649,6 +4827,9 @@ public class GameWebViewActivity extends Activity {
   volatile String letzteProxyIp=null;
   // Fail closed: Welt wurde wegen Proxy-Fehler nicht geladen/angehalten.
   volatile boolean proxySperre=false;
+  // 2.0.21: WebRTC-Schutz (RTC_SCHUTZ) in dieser WebView aktiv? Pruefung
+  // in dieser Ladung erledigt? Leck festgestellt (bleibt bis App-Neustart)?
+  volatile boolean rtcSchutz=false, rtcGeprueft=false, rtcLeck=false;
   Welt(String id,String name,String welt){
    gameAccountId=nz(id);
    kopfName=nz(name).isEmpty()?gameAccountId:nz(name);
@@ -4700,6 +4881,19 @@ public class GameWebViewActivity extends Activity {
   @SuppressLint("SetJavaScriptEnabled") void webViewBauen(){
    webView=new WebView(GameWebViewActivity.this);
    profilSetzen(webView,gameAccountId);
+   // 2.0.21: WebRTC baut UDP-Verbindungen (STUN) AM PROXY VORBEI auf - ein
+   // Skript der Seite oder des Captchas koennte so die Geraete-IP lesen.
+   // WebView hat dafuer keine Einstellung; deshalb ein Skript, das vor
+   // jeder Seite und in jedem Rahmen laeuft und WebRTC auf "nur Relay, keine
+   // Server" festlegt: es entstehen keine Kandidaten, also keine IP. Die
+   // Schnittstelle bleibt vorhanden (kein auffaelliges Fehlen).
+   rtcSchutz=false;
+   try{
+    if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)){
+     androidx.webkit.WebViewCompat.addDocumentStartJavaScript(webView,RTC_SCHUTZ,java.util.Collections.singleton("*"));
+     rtcSchutz=true;
+    }else melde("WICHTIG","WebRTC-Schutz nicht möglich (WebView zu alt) - Proxy-Konten werden nicht geladen");
+   }catch(Throwable t){ rtcSchutz=false; melde("FEHLER","WebRTC-Schutz nicht aktiv: "+t); }
    wieMobilerBrowser(webView);WebSettings s=webView.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(true);webView.setWebChromeClient(new WebChromeClient(){@Override public boolean onConsoleMessage(ConsoleMessage m){Log.d("ODIN_JS",m.message()+" @"+m.lineNumber()+" "+m.sourceId());return true;}
  // Ohne diese Rueckgabe verschluckt die WebView alert/confirm der Bestaetigungsseite.
  @Override public boolean onJsAlert(WebView v,String u,String msg,JsResult res){res.confirm();return true;}
@@ -4716,6 +4910,15 @@ public class GameWebViewActivity extends Activity {
     void raus(WebView w,String u){
      if(weg||u==null||u.isEmpty()||"about:blank".equals(u))return;
      weg=true;
+     // 2.0.21: Der Browser des Geraets ginge DIREKT (Geraete-IP) zu InnoGames.
+     try{
+      String h=android.net.Uri.parse(u).getHost();
+      if(OdinProxy.istSpielHost(h)&&OdinProxy.hatProxy(gameAccountId)){
+       OdinService.protokoll(GameWebViewActivity.this,"WICHTIG","app","nicht extern geöffnet (Proxy-Konto, Spiel-Adresse): "+u);
+       try{ w.stopLoading(); w.destroy(); }catch(Exception e){}
+       return;
+      }
+     }catch(Exception ig){}
      try{
       startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
       OdinService.protokoll(GameWebViewActivity.this,"info","app","extern geöffnet: "+u);
@@ -4759,6 +4962,9 @@ public class GameWebViewActivity extends Activity {
    // 1.95.15/1.96.0: Spielseite steht - Ladescreen weg, wenn diese Welt
    // gerade angezeigt wird (nicht auf der Anmelde-/Zwischenseite).
    try{ if(u!=null&&u.contains("/game.php")){ geladen=true; anmeldungOffen=false; if(aktiv==Welt.this)wechselIndikatorWeg(); } }catch(Exception ig){}
+   // 2.0.21: Einmal je Ladung (Proxy-Konto) nachpruefen, dass WebRTC wirklich
+   // keine IP liefert - nicht nur annehmen, dass der Schutz greift.
+   try{ if(u!=null&&u.contains("/game.php")&&!rtcGeprueft&&OdinProxy.hatProxy(gameAccountId)){ rtcGeprueft=true; v.evaluateJavascript(RTC_TEST.replace("__BRIDGE__",bridgeName),null); } }catch(Exception ig){}
    // 2.0.16: Neues Konto (oder abgelaufene Sitzung) landet auf der
    // Anmeldeseite. Ohne hinterlegte Zugangsdaten bzw. ohne Zuweisung zu
    // diesem Geraet meldet sich niemand automatisch an - dann muss der
@@ -4830,6 +5036,11 @@ public class GameWebViewActivity extends Activity {
     // 2.0.5: Beim Laden IMMER voll pruefen (auch Neuladen/Renderer-Neuaufbau),
     // inkl. IP-Test - nicht nur beim ersten Oeffnen.
     String fehler0=proxyPruefen(true);
+    rtcGeprueft=false;
+    if(fehler0==null&&OdinProxy.hatProxy(gameAccountId)){
+     if(!rtcSchutz)fehler0="WebRTC-Schutz fehlt (WebView zu alt) - Proxy-Konto wird nicht geladen";
+     else if(rtcLeck)fehler0="WebRTC-Leck festgestellt - Konto bleibt gesperrt bis zum Neustart der App";
+    }
     // 2.0.17: Fuehrt ein anderes Geraet dieses Konto, wird NICHT geladen -
     // sonst wuerde die Anmeldung (automatisch oder von Hand) das andere
     // Geraet aus dem Spiel werfen. Stattdessen fragen, ob uebernommen werden
@@ -5084,6 +5295,18 @@ public class GameWebViewActivity extends Activity {
   // die Datenbank die IP dieses Kontos heraus, damit das andere Konto
   // nicht seinerseits gesperrt wird.
   // Rueckgabe {art, text}; art = ok | konflikt | keine_sperre | fehler.
+  // 2.0.21: Befund der WebRTC-Pruefung. "ok"/"kein" = keine IP sichtbar.
+  // Jede gelieferte IP (auch eine lokale) heisst: Schutz greift nicht ->
+  // Konto sofort anhalten und bis zum App-Neustart gesperrt lassen (sonst
+  // wuerde der 60-s-Neuversuch die Spielseite immer wieder laden).
+  void rtcBefundVerarbeiten(String b){
+   String x=b==null?"":b.trim();
+   if(x.length()>200)x=x.substring(0,200);
+   if(x.equals("ok")||x.equals("kein")){ melde("info","WebRTC-Prüfung: keine IP sichtbar"); return; }
+   if(x.startsWith("fehler")){ melde("WICHTIG","WebRTC-Prüfung nicht auswertbar: "+x); return; }
+   rtcLeck=true;
+   ipErgebnisImBetrieb(new String[]{"konflikt","WebRTC liefert IP-Adressen am Proxy vorbei ("+x+")"});
+  }
   String[] ipServerPruefen(String ip){
    if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return new String[]{"fehler","Ausgangs-IP nicht messbar"};
    try{
@@ -5561,7 +5784,11 @@ public class GameWebViewActivity extends Activity {
     }catch(Exception e){ setStatus("Befehl bestätigen fehlgeschlagen: "+e.getMessage()); }
    }).start();
   }
-  @JavascriptInterface public String httpGet(String u){try{HttpURLConnection c=(HttpURLConnection)new URL(u).openConnection();c.setRequestMethod("GET");c.setInstanceFollowRedirects(true);c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setRequestProperty("User-Agent","Mozilla/5.0 (Android) Odin");int st=c.getResponseCode();InputStream in=(st>=200&&st<400)?c.getInputStream():c.getErrorStream();if(in==null)throw new IOException("HTTP "+st);BufferedReader r=new BufferedReader(new InputStreamReader(in));StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l).append("\n");r.close();if(st<200||st>=400)throw new IOException("HTTP "+st);return b.toString();}catch(Exception e){throw new RuntimeException(e);}}}
+  // 2.0.21: Spiel-Adressen ueber den Weg dieses Kontos (OdinProxy.abrufen),
+  // nicht mehr direkt ueber die Geraete-IP.
+  @JavascriptInterface public String httpGet(String u){try{OdinProxy.Antwort a=OdinProxy.abrufen(gameAccountId,u);if(a.code<200||a.code>=400)throw new IOException("HTTP "+a.code);return new String(a.daten,"UTF-8");}catch(Exception e){throw new RuntimeException(e);}}
+  // 2.0.21: Ergebnis der WebRTC-Pruefung (RTC_TEST).
+  @JavascriptInterface public void rtcBefund(String b){ rtcBefundVerarbeiten(b); }}
  } // Ende Welt
 }
 EOF

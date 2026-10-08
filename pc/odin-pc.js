@@ -386,6 +386,51 @@ async function ipServerPruefen(ip) {
     } catch (e) { return { art: 'fehler', text: 'IP-Prüfung in der Datenbank nicht erreichbar' }; }
 }
 var ipFehlerFolge = 0;
+// 564.4: WebRTC (UDP/STUN) laeuft am Proxy des Browser-Profils VORBEI und kann
+// die echte IP verraten. Odin PC kann WebRTC im Browser nicht sicher
+// abschalten (es laeuft erst nach der Seite) - es PRUEFT deshalb: liefert
+// WebRTC eine oeffentliche IP, die nicht die Proxy-IP ist, startet GodBot
+// nicht bzw. wird beendet. Nur bei Konten MIT Proxy (ohne Proxy ist die
+// WebRTC-IP ohnehin die Anschluss-IP). Ergebnis 30 Min gemerkt.
+function oeffentlicheIpAdr(ip) {
+    if (/:/.test(ip)) return !/^(fe80|fc|fd|::1$)/i.test(ip);
+    var p = ip.split('.').map(Number);
+    if (p.length !== 4 || p.some(isNaN)) return false;
+    return !(p[0] === 0 || p[0] === 10 || p[0] === 127 || (p[0] === 169 && p[1] === 254)
+        || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && p[1] === 168)
+        || (p[0] === 100 && p[1] >= 64 && p[1] <= 127));
+}
+var RTC_ABHILFE = 'WebRTC im Browser abschalten: Firefox about:config media.peerconnection.enabled = false; '
+    + 'Chrome/Edge: Erweiterung „WebRTC Network Limiter“ (Google) → „Use my proxy server (if present)“';
+function rtcPruefen(proxyIp) {
+    return new Promise(function (fertig) {
+        var P = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+        if (typeof P !== 'function') { fertig({ ok: true, info: 'WebRTC aus' }); return; }
+        var ips = [], pc;
+        try { pc = new P({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }); }
+        catch (e) { fertig({ ok: true, info: 'WebRTC gesperrt' }); return; }
+        pc.onicecandidate = function (e) {
+            var c = e && e.candidate && e.candidate.candidate; if (!c) return;
+            var m = / ([0-9a-fA-F.:]+) \d+ typ (\w+)/.exec(c); if (m) ips.push(m[1]);
+        };
+        try { pc.createDataChannel('o'); pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function () { }); } catch (e) { }
+        setTimeout(function () {
+            try { pc.close(); } catch (e) { }
+            var fremd = ips.filter(function (ip) { return oeffentlicheIpAdr(ip) && ip !== proxyIp; });
+            if (fremd.length) fertig({ ok: false, grund: 'WebRTC verrät die IP ' + fremd[0] + ' am Proxy vorbei - ' + RTC_ABHILFE });
+            else fertig({ ok: true, info: ips.length ? 'nur Proxy-/lokale Adressen' : 'keine Kandidaten' });
+        }, 4000);
+    });
+}
+async function rtcGeprueft(proxyIp, erzwingen) {
+    if (!Z.proxyRoh) return { ok: true };
+    var rk = jparse(sget('odinpc_rtc_ok'), null);
+    if (!erzwingen && rk && rk.konto === Z.konto.id && rk.ip === proxyIp && Date.now() - rk.at < 1800000) return { ok: true };
+    var r = await rtcPruefen(proxyIp);
+    if (r.ok) sset('odinpc_rtc_ok', JSON.stringify({ konto: Z.konto.id, ip: proxyIp, at: Date.now() }));
+    else sdel('odinpc_rtc_ok');
+    return r;
+}
 // ===================================================================
 // PROXY-SPERRE (Odin PC). Ein Tampermonkey-Skript kann keinen Proxy setzen -
 // das macht das Browser-Profil (Proxy-Erweiterung). Odin PC PRUEFT aber,
@@ -525,8 +570,14 @@ function proxyWacheStarten() {
         if (Z.godbot === 'aus') return;
         var p = await proxyPruefen(true);
         if (p.ok) {
-            var sp = await ipServerPruefen(p.ip || (await ipMessen()));
-            if (sp.art === 'ok' || sp.art === 'keine_sperre') { ipFehlerFolge = 0; return; }
+            var ipW = p.ip || (await ipMessen());
+            var sp = await ipServerPruefen(ipW);
+            if (sp.art === 'ok' || sp.art === 'keine_sperre') {
+                ipFehlerFolge = 0;
+                var rw = await rtcGeprueft(ipW, false);   // alle 30 Min neu
+                if (rw.ok) return;
+                sp = { art: 'konflikt', text: rw.grund };
+            }
             if (sp.art === 'fehler' && ++ipFehlerFolge < 3) {
                 status('IP-Prüfung im Betrieb nicht möglich (' + sp.text + ') - ' + ipFehlerFolge + '/3, danach wird GodBot beendet', 'WICHTIG');
                 return;
@@ -918,6 +969,8 @@ async function starten(uebernahme) {
         // Datenbank, erst dann GodBot. Ergebnis 60 s je Tab gemerkt (GodBot
         // laedt oft neue Seiten). Kein Ergebnis = Sperre (fail closed).
         var ipJetzt = pz.ip || (await ipMessen());
+        var rs = await rtcGeprueft(ipJetzt, false);
+        if (!rs.ok) { proxySperren({ grund: rs.grund }); return; }
         var sc = jparse(sget('odinpc_ipserver_ok'), null);
         if (!(sc && sc.konto === Z.konto.id && sc.ip === ipJetzt && Date.now() - sc.at < 60000)) {
             var sp = await ipServerPruefen(ipJetzt);
