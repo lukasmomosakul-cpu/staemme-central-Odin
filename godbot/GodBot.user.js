@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      575
+// @version      576
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51137,7 +51137,7 @@ function belohnungListeHolen(villageId, cb, questIdVorgabe) {
                     : (r.response && typeof r.response.dialog === "string" ? r.response.dialog : null));
             } catch (e) { dialog = null; }
             const liste = a.ok ? belohnungListeAusDialog(dialog) : null;
-            if (liste) { cb({ ok: true, liste, weg: "TribalWars.get", gameData: null }); return; }
+            if (liste) { cb({ ok: true, liste, weg: "TribalWars.get", gameData: null, roh: dialog }); return; }
             let roh = "";
             try { roh = JSON.stringify(a.r); } catch (e) { roh = String(a.r); }
             const befund = `TribalWars.get ${a.ok ? "ok" : (a.timeout ? "ohne Antwort (15 s)" : "Fehler")}, ` +
@@ -51168,7 +51168,7 @@ function belohnungListeHolen(villageId, cb, questIdVorgabe) {
             // (Mitschnitt 26.09.): {"response":{"dialog":...}}. Beides lesen.
             const dialog = j && ((j.response && j.response.dialog) || j.dialog);
             const liste = (status === 200 && j) ? belohnungListeAusDialog(dialog) : null;
-            if (liste) { cb({ ok: true, liste, weg: "quest_popup", gameData: j.game_data || null }); return; }
+            if (liste) { cb({ ok: true, liste, weg: "quest_popup", gameData: j.game_data || null, roh: dialog }); return; }
             // v567: Umleitung statt Dialog und noch ohne Quest-Kennung
             // gefragt -> einmal mit Kennung (siehe oben).
             if (status === 200 && j && j.redirect && (!questId || questId === "0") && !isBotProtectionActive()) {
@@ -51298,6 +51298,22 @@ function belohnungVorrat(gameData, villageId) {
 
 // Naechste Belohnung, die ganz in den Speicher passt (mit Rand). Unter
 // mehreren die groesste - kleinere passen spaeter eher noch dazu.
+let belohnungUnbekanntAt = 0;
+function belohnungUnbekannteMelden(dorf, liste, roh) {
+    const sichtbar = (liste && liste.sichtbar) || [];
+    const fremd = sichtbar.filter(x => x && !(x.status === "unlocked" && x.reward && x.building &&
+        BELOHNUNG_RES.some(k => parseInt(x.reward[k], 10) > 0)));
+    if (!fremd.length || Date.now() - belohnungUnbekanntAt < 60 * 60 * 1000) return;
+    belohnungUnbekanntAt = Date.now();
+    const kurz = fremd.slice(0, 8).map(x => {
+        try { return JSON.stringify(x).slice(0, 220); } catch (e) { return String(x); }
+    }).join(" | ");
+    const t = `Belohnungen ${dorf}: ${fremd.length} Eintrag/Einträge in unbekannter Form - nicht abgeholt: ${kurz}`;
+    console.warn("[TW] " + t);
+    try { odin.protokoll(t); } catch (e) { }
+    try { belohnungRohSichern("belohnung-unbekannt", "quest_popup", 200, roh || JSON.stringify(liste), t); } catch (e) { }
+}
+
 function belohnungPassend(sichtbar, vorrat) {
     const grenze = vorrat.storageMax - Math.ceil(vorrat.storageMax * BELOHNUNG_RAND_ANTEIL);
     let best = null;
@@ -51365,6 +51381,13 @@ function belohnungDauerlauf() {
         }
         let liste = r.liste;
         let vorrat = belohnungVorrat(r.gameData, villageId);
+        // v576 (Ares20 de261, 09.10.): Belohnungen offen, GodBot holt nichts
+        // und meldet nichts. Belegt ist nur die Form der Ausbau-Belohnung
+        // ({building, building_level, status:"unlocked", reward:{wood,stone,
+        // iron}}, Seitenquelle 13). Alles andere (z. B. aus Aufgaben) wurde
+        // stumm uebergangen. Jetzt: einmal je Stunde ins Protokoll, mit
+        // Rohdaten im Seitenmitschnitt - ohne zusaetzliche Anfrage.
+        try { belohnungUnbekannteMelden(dorf, r.liste, r.roh); } catch (e) { }
         const schritt = () => {
             const offen = (liste.sichtbar || []).filter(x => x && x.status === "unlocked");
             if (!offen.length) {
@@ -51607,7 +51630,15 @@ function aufgabeDauerlauf() {
         aufgabePost(url, "h=" + encodeURIComponent(csrf), (a) => {
             if (!a.ok) {
                 if (a.botschutz) { haltAllAutomation("aufgabe:abschliessen"); ende("", false); return; }
-                ende(`„${titel}“ nicht abgeschlossen - ${a.grund}.`, true);
+                // v576: "Failed to fetch" (Ares20 16:09:01) sperrte die
+                // Aufgabe 12 Std. - jetzt neuer Versuch nach 10 Min.
+                try {
+                    const st2 = aufgabeStandLaden();
+                    st2.fertig = st2.fertig || {};
+                    st2.fertig[n.q.id] = Date.now() - AUFGABE_SPERRE_MS + 10 * 60 * 1000;
+                    aufgabeStandSpeichern(st2);
+                } catch (e) { }
+                ende(`„${titel}“ nicht abgeschlossen - ${a.grund}. Neuer Versuch in 10 Min.`, true);
                 return;
             }
             const r = a.j.response;
@@ -51616,6 +51647,10 @@ function aufgabeDauerlauf() {
                 return;
             }
             const belohnung = (r && r.reward) ? ` Belohnung: ${String(r.reward).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 100)}.` : "";
+            // v576: Aufgaben-Belohnungen landen im Reiter "Belohnungen"
+            // (Aufgabentext 1115, belegt) - also gleich nachsehen statt
+            // bis zu 1 Std. Ruhe abzuwarten.
+            try { belohnungFaelligMerken(1); } catch (e) { }
             ende(`„${titel}“ abgeschlossen.${belohnung}`, true);
         });
     };
