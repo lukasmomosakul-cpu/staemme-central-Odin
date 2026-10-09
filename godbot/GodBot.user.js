@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      576
+// @version      577
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51609,8 +51609,19 @@ function aufgabeDauerlauf() {
             }
             const r = a.j.response || a.j;
             if (r && r.success === true) {
+                // v577 (FetterOrk de261, 09.10.): "Zu deinen Diensten!" bekam
+                // 3 Speere (14:19, 15:03, 15:35) - die Aufgabe steht erst nach
+                // der Ausbildung und einem neuen Seitenstand auf fertig, die
+                // 30-Min-Sperre war zu kurz. Nach einem bestaetigten Auftrag
+                // jetzt 6 Std. kein weiterer Speer fuer dieselbe Aufgabe.
+                try {
+                    const st3 = aufgabeStandLaden();
+                    st3.rekrut = st3.rekrut || {};
+                    st3.rekrut[n.q.id] = Date.now() + 6 * 60 * 60 * 1000 - AUFGABE_REKRUT_SPERRE_MS;
+                    aufgabeStandSpeichern(st3);
+                } catch (e) { }
                 ende(`„${titel}“: 1 Speer rekrutiert (${String(r.msg || "").slice(0, 60)}). ` +
-                    `Abschließen beim nächsten Seitenstand.`, true);
+                    `Abschließen, sobald die Aufgabe fertig gemeldet wird.`, true);
             } else {
                 const f = (r && (r.error || r.msg)) || a.j.error || String(a.txt).slice(0, 150);
                 ende(`„${titel}“: 1 Speer abgelehnt - ${f}. Neuer Versuch in 30 Min.`, true);
