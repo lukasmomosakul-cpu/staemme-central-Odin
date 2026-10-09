@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      571
+// @version      572
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -54150,6 +54150,22 @@ function massSelectCells(villageIds, slotId, callback, gen) {
         // Die geladene Seite ist die Wahrheit, nicht der Slot-Cache.
         // Der Slot wird zusaetzlich als belegt zurueckgeschrieben, damit
         // die naechste Runde ihn nicht sofort wieder freigibt.
+        // v572: gesperrte / in Freischaltung befindliche Option (Klassen
+        // belegt in Seitenquelle 17) - nie anhaken, als gesperrt merken.
+        if (cell && cell.classList &&
+            (cell.classList.contains("option-locked") || cell.classList.contains("option-unlocking"))) {
+            blocked.push(villageId);
+            try {
+                const view = getMassSlotView();
+                if (!view[villageId]) view[villageId] = { name: String(villageId), slots: {} };
+                if (!view[villageId].slots) view[villageId].slots = {};
+                view[villageId].slots[slotId] = { locked: true, busy: false, returnTime: null };
+            } catch (e) { }
+            console.warn(`[TW] Slot ${slotId}: Dorf ${villageId} laut Seite gesperrt - uebersprungen.`);
+            setTimeout(next, humanDelay(40, 120));
+            return;
+        }
+
         if (cell && cell.classList && cell.classList.contains("option-unavailable")) {
             blocked.push(villageId);
             unavailable.push(villageId);
@@ -54312,6 +54328,34 @@ function massClickSend(callback, gen, ctx) {
     }, humanDelay(300, 700));
 }
 
+// v572: Klasse der Slot-Zelle auf der Sammelseite (leer, wenn nicht da).
+function slotZelleKlasse(doc, villageId, slotId) {
+    try {
+        const row = doc && doc.querySelector(`#scavenge_village_${villageId}`);
+        const td = row ? row.querySelector(`td.option.option-${slotId}`) : null;
+        return td ? String(td.className || "") : "";
+    } catch (e) { return ""; }
+}
+
+// v572: Rohdaten je Slot einmal je Stunde ins Protokoll - damit die
+// naechste Diagnose zeigt, was die Seite wirklich liefert, statt dass
+// wieder vermutet werden muss.
+let slotRohdatenAt = 0;
+let slotRohdatenPuffer = [];
+function slotRohdatenMerken(v, slotId, opt, zelle, gesperrt) {
+    try {
+        if (Date.now() - slotRohdatenAt < 60 * 60 * 1000) return;
+        slotRohdatenPuffer.push(`${slotId}:${opt ? `is_locked=${JSON.stringify(opt.is_locked)},` +
+            `unlock_time=${JSON.stringify(opt.unlock_time)},squad=${opt.scavenging_squad ? "ja" : "nein"}` : "Option fehlt"}` +
+            `,Zelle="${zelle || "-"}" -> ${gesperrt ? "gesperrt" : "frei/belegt"}`);
+        if (slotId === 4) {
+            slotRohdatenAt = Date.now();
+            console.log(`[TW] Raubzug-Rohdaten Dorf ${v.village_id}: ${slotRohdatenPuffer.join(" | ")}`);
+            slotRohdatenPuffer = [];
+        }
+    } catch (e) { }
+}
+
 function parseScavengeMassDoc(doc) {
     const scripts = [...doc.scripts]
         .map(s => s.textContent)
@@ -54398,8 +54442,23 @@ function parseScavengeMassDoc(doc) {
                     });
                 }
 
+                // v572 (Ares20 de261, 09.10.): neues Konto, nur Slot 1
+                // freigeschaltet - GodBot fuehrte 1:F 2:F 3:F 4:F und
+                // schickte "in Slot 4". Gesperrt war bisher NUR
+                // is_locked === true; fehlt die Option oder das Feld,
+                // galt der Slot als frei. Jetzt gesperrt, wenn:
+                //  - die Option fehlt,
+                //  - is_locked nicht ausdruecklich false ist,
+                //  - eine Freischaltung laeuft (unlock_time gesetzt; belegt
+                //    Seitenquelle 17: is_locked true + unlock_time),
+                //  - die Zelle der Seite option-locked / option-unlocking
+                //    traegt (belegt Seitenquelle 17).
+                const zelle = slotZelleKlasse(doc, v.village_id, slotId);
+                const gesperrt = !opt || opt.is_locked !== false || !!opt.unlock_time ||
+                    /\boption-(locked|unlocking)\b/.test(zelle);
+                slotRohdatenMerken(v, slotId, opt, zelle, gesperrt);
                 slots[slotId] = {
-                    locked: !!opt?.is_locked,
+                    locked: gesperrt,
                     busy: !!squad,
                     returnTime: squad?.return_time || null,
                     awayUnits
