@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      569
+// @version      570
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -50797,13 +50797,13 @@ function belohnungSetzen(aenderung) {
 // (faellig) aus Stufe 562 bleiben erhalten.
 // v569: Die Fehler-Ruhe von 10:14:08 (v567, Stufe 567) hat v568 komplett
 // stillgelegt - deshalb erneut verwerfen, faellig bleibt.
-const BELOHNUNG_STAND_STUFE = 569;
+const BELOHNUNG_STAND_STUFE = 570;
 
 function belohnungStandLaden() {
     try {
         const s = JSON.parse(localStorage.getItem(BELOHNUNG_KEY) || "{}");
         if (!s || typeof s !== "object") return {};
-        if ((s.stufe === 562 || s.stufe === 567) && Array.isArray(s.faellig)) return { faellig: s.faellig };
+        if ((s.stufe === 562 || s.stufe === 567 || s.stufe === 569) && Array.isArray(s.faellig)) return { faellig: s.faellig };
         if (s.stufe !== BELOHNUNG_STAND_STUFE) return {};
         return s;
     } catch (e) { return {}; }
@@ -51062,6 +51062,20 @@ function belohnungDesktop() {
 // Fehlt TribalWars.get, bleibt es beim fetch-Weg.
 const BELOHNUNG_TW_TIMEOUT_MS = 15000;
 
+// v570 BELEGT (Mitschnitt 09.10. 10:54:00 und 10:58:13, de261 desktop,
+// Kopfzeilen der Spiel-XHR auf quest_popup):
+//   Accept: application/json, text/javascript, */*; q=0.01
+//   TribalWars-Ajax: 1
+//   X-Requested-With: XMLHttpRequest
+// GodBots fetch schickte nur X-Requested-With - und bekam am Desktop
+// fuer quest_popup UND claim_reward (10:54:00) nur {"redirect":...}.
+// Diese drei Kopfzeilen gelten jetzt fuer beide Belohnungs-Anfragen.
+const BELOHNUNG_KOPF = {
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "TribalWars-Ajax": "1",
+    "X-Requested-With": "XMLHttpRequest"
+};
+
 function belohnungTwGet(url, cb) {
     let TW = null;
     try {
@@ -51108,7 +51122,7 @@ function belohnungListeHolen(villageId, cb, questIdVorgabe) {
         if (gestartet) { twCountRequest(url, "auto", "belohnung-liste"); return; }
     }
     twCountRequest(url, "auto", "belohnung-liste");
-    fetch(url, { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } })
+    fetch(url, { credentials: "same-origin", headers: Object.assign({}, BELOHNUNG_KOPF) })
         .then(r => r.text().then(txt => ({ status: r.status, txt })))
         .then(({ status, txt }) => {
             let j = null;
@@ -51196,10 +51210,7 @@ function belohnungAbholen(villageId, csrf, rewardId, cb) {
     fetch(url, {
         method: "POST",
         credentials: "same-origin",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "X-Requested-With": "XMLHttpRequest"
-        },
+        headers: Object.assign({ "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, BELOHNUNG_KOPF),
         body: "reward_id=" + encodeURIComponent(rewardId) + "&h=" + encodeURIComponent(csrf)
     })
         .then(r => r.text().then(txt => ({ status: r.status, txt })))
