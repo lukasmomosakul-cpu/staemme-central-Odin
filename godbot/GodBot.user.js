@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      573
+// @version      574
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19742,6 +19742,16 @@ function botMarkerSichtbar() {
     // gehen ohnehin nur an Doerfer der geladenen Seite); die Zusammen-
     // fassung wird addiert und EINMAL an den Abschluss gegeben.
     function massRaubzugAlleSeiten(onFertig, onFehler) {
+        // v574: ohne Premium kein Massenraubzug - Slotdaten von der
+        // Einzelseite auffrischen, nichts verschicken.
+        if (raubzugPremiumAktiv() === false) {
+            raubzugOhnePremiumMelden();
+            einzelSlotsHolen(() => onFertig({
+                sent: 0, waves: 0, blocked: 0, rejected: 0, idealTotal: 0, actualTotal: 0,
+                plannedSlots: 0, sentSlots: 0, coverage: 0
+            }));
+            return;
+        }
         const basis = "/game.php?village=" + game_data.village.id +
             "&screen=place&mode=scavenge_mass&group=0";
         const MAX_SEITEN = 10;
@@ -38823,7 +38833,7 @@ const SCAVENGE_SLOTS_AT_KEY = "tw_scavenge_slots_at";
 // gelten nur noch als frisch, wenn sie mit dem aktuellen Parser gelesen
 // wurden; sonst wird die Sammelseite neu eingelesen.
 const SCAVENGE_SLOTS_PARSER_KEY = "tw_scavenge_slots_parser";
-const SCAVENGE_SLOTS_PARSER = "572";
+const SCAVENGE_SLOTS_PARSER = "574";
 
 function scavengeSlotsFetchedAt() {
     try {
@@ -53105,6 +53115,17 @@ function computeMassPreview(waveCount, callback) {
 }
 
 function runMassScavenge(onFinished) {
+    // v574: Sicherung auch fuer den Start direkt auf der Massenseite.
+    if (raubzugPremiumAktiv() === false) {
+        raubzugOhnePremiumMelden();
+        try {
+            if (typeof onFinished === "function") onFinished({
+                sent: 0, waves: 0, blocked: 0, rejected: 0, idealTotal: 0, actualTotal: 0,
+                plannedSlots: 0, sentSlots: 0, coverage: 0
+            });
+        } catch (e) { }
+        return;
+    }
     if (massRunInProgress) {
         console.log("[TW] Massen-Raubzug laeuft bereits.");
         return;
@@ -54759,6 +54780,120 @@ function scavengeSlotsBeimLadenNoetig() {
     } catch (e) { return true; }
 }
 
+// === RAUBZUG OHNE PREMIUM (v574, 09.10.2026) ==========================
+//
+// Fetteruruk: "Massenraubzug geht nur, wenn Premium aktiv ist." Belegt
+// am selben Dorf (de261, 17417, Premium.active=false, 09.10.):
+//   Massenseite (scavenge_mass): alle 4 Optionen is_locked=false,
+//     Zellen "option option-N option-inactive"  -> FALSCH
+//   Einzelseite (place&mode=scavenge, 11:52/11:53, mobil + desktop):
+//     var village = {...,"options":{"1":{...,"is_locked":true,...},...}}
+//     und je Option ".locked-view" mit "Freischalten"   -> RICHTIG
+// Ohne Premium kommen die Slotdaten deshalb von der Einzelseite (reiner
+// Abruf, der JSON-Block steht im Quelltext) und der Massen-Versand ist
+// gesperrt. Premium-Kennung: game_data.features.Premium.active.
+function raubzugPremiumAktiv() {
+    try {
+        const p = game_data && game_data.features && game_data.features.Premium;
+        if (p && typeof p.active === "boolean") return p.active;
+    } catch (e) { }
+    return null;
+}
+
+// Einzelseite -> gleiche Form wie parseScavengeMassDoc (ein Dorf).
+function parseScavengeEinzelText(text) {
+    const t = String(text || "");
+    const p = t.indexOf("var village = {");
+    if (p < 0) return null;
+    const w = belohnungJsonWertLesen(t, p + "var village = ".length);
+    if (!w) return null;
+    let v = null;
+    try { v = JSON.parse(w.roh); } catch (e) { return null; }
+    if (!v || !v.village_id || !v.options) return null;
+    const homeUnits = {};
+    Object.keys(v.unit_counts_home || {}).forEach(u => {
+        const n = parseInt(v.unit_counts_home[u], 10) || 0;
+        if (n > 0) homeUnits[u] = n;
+    });
+    const slots = {};
+    [1, 2, 3, 4].forEach(slotId => {
+        const opt = v.options[String(slotId)];
+        const squad = opt && opt.scavenging_squad || null;
+        let awayUnits = null;
+        if (squad && squad.unit_counts) {
+            awayUnits = {};
+            Object.keys(squad.unit_counts).forEach(u => {
+                const n = parseInt(squad.unit_counts[u], 10) || 0;
+                if (n > 0) awayUnits[u] = n;
+            });
+        }
+        slots[slotId] = {
+            locked: !opt || opt.is_locked !== false || !!opt.unlock_time,
+            busy: !!squad,
+            returnTime: squad && squad.return_time || null,
+            awayUnits
+        };
+    });
+    const out = {};
+    out[v.village_id] = {
+        name: v.village_name,
+        carryFactor: (typeof v.unit_carry_factor === "number" && v.unit_carry_factor > 0) ? v.unit_carry_factor : 1,
+        homeUnits,
+        slots
+    };
+    return out;
+}
+
+function einzelSlotsHolen(callback) {
+    const ids = [];
+    const dazu = (x) => { const s = String(x || ""); if (/^\d+$/.test(s) && ids.indexOf(s) < 0) ids.push(s); };
+    try { dazu(game_data.village.id); } catch (e) { }
+    try { Object.keys(JSON.parse(localStorage.getItem("tw_scavenge_slots") || "{}")).forEach(dazu); } catch (e) { }
+    const ergebnis = {};
+    let i = 0;
+    const weiter = () => {
+        if (i >= ids.length || i >= 30) {
+            const n = Object.keys(ergebnis).length;
+            if (n) storeScavengeSlots(ergebnis, "Einzelseite, ohne Premium");
+            if (callback) callback(n > 0);
+            return;
+        }
+        if (isBotProtectionActive()) { haltAllAutomation("raubzug:einzelseite"); if (callback) callback(false); return; }
+        const vid = ids[i++];
+        const url = "/game.php?village=" + encodeURIComponent(vid) + "&screen=place&mode=scavenge";
+        twCountRequest(url, "auto", "raubzug-einzel");
+        fetch(url, { credentials: "same-origin" })
+            .then(r => r.text())
+            .then(txt => {
+                const r = parseScavengeEinzelText(txt);
+                if (r) { Object.assign(ergebnis, r); }
+                else {
+                    let blockiert = false;
+                    try { blockiert = frameDocBlocked(new DOMParser().parseFromString(String(txt), "text/html"), "raubzug:einzelseite"); } catch (e) { }
+                    if (blockiert) { if (callback) callback(false); return; }
+                    console.warn(`[TW] Raubzug: Einzelseite von Dorf ${vid} ohne Dorfdaten.`);
+                }
+                setTimeout(weiter, humanDelay(900, 1800));
+            })
+            .catch(e => {
+                console.warn(`[TW] Raubzug: Einzelseite von Dorf ${vid} nicht abrufbar.`, e);
+                setTimeout(weiter, humanDelay(900, 1800));
+            });
+    };
+    weiter();
+}
+
+let raubzugOhnePremiumGemeldetAt = 0;
+function raubzugOhnePremiumMelden() {
+    if (Date.now() - raubzugOhnePremiumGemeldetAt < 60 * 60 * 1000) return;
+    raubzugOhnePremiumGemeldetAt = Date.now();
+    const t = "Raubzug: Premium ist nicht aktiv - der Massenraubzug ist damit nicht nutzbar, es wird " +
+        "nichts verschickt. Die Slotdaten kommen von der Einzelseite (Sperren richtig). Der Versand " +
+        "über die Einzelseite folgt, sobald ein echter Versand dort mitgeschnitten ist.";
+    console.warn("[TW] " + t);
+    try { odin.protokoll(t); } catch (e) { }
+}
+
 function fetchScavengeSlotsViaIframe(callback) {
     // Die Frischepruefung aus v422 bleibt VOR der Warteschlange: sie
     // ist der Grund, warum aus 31 Abrufen 10 wurden, und darf nicht
@@ -54794,6 +54929,9 @@ function fetchScavengeSlotsViaIframeNow(callback) {
         if (callback) callback(true);
         return;
     }
+
+    // v574: ohne Premium stimmen die Sperren der Massenseite nicht.
+    if (raubzugPremiumAktiv() === false) { einzelSlotsHolen(callback); return; }
 
     const iframe = document.createElement("iframe");
     iframe.style.cssText = "position:fixed; width:0; height:0; border:0; visibility:hidden;";

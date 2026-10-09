@@ -36,3 +36,5 @@ Neue Mitschnitte: an Claude geben - er haengt sie an.
 ## Belegte Anfragen (Teil C der Diagnosepakete)
 
 Siehe ANFRAGEN.md.
+| 25 | place/scavenge (Einzelseite) | de261 | mobil | 9.10.2026, 11:52:34 | var village (is_locked true x4), .locked-view, unlock-button, ohne Premium | godbot-seite-place_2026-10-09_1152.txt |
+| 26 | place/scavenge (Einzelseite) | de261 | desktop | 9.10.2026, 11:53:16 | wie 25 | godbot-seite-place_2026-10-09_1153.txt |
