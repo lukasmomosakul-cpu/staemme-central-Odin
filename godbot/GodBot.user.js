@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      570
+// @version      571
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19477,6 +19477,15 @@ function botMarkerSichtbar() {
             return;
         }
 
+        // v571: abschliessbare Aufgaben / Rekrutier-Aufgabe (1 Speer) -
+        // vor den Belohnungen, damit die Kette (Truppen-Belohnung) laeuft.
+        if (!owner && !farmDue && !scavengeDue && !bauLaufAktiv &&
+            !automationOnHold() && aufgabeDauerFaellig()) {
+            try { aufgabeDauerlauf(); } catch (e) {
+                aufgabeLaufAktiv = false;
+                console.warn("[TW] Aufgaben: Lauf fehlgeschlagen.", e);
+            }
+        } else
         // v561: Belohnungen abholen, solange Platz im Speicher ist -
         // unabhaengig vom Bauautomaten. Nur wenn nichts anderes laeuft.
         if (!owner && !farmDue && !scavengeDue && !bauLaufAktiv &&
@@ -51387,6 +51396,219 @@ function belohnungDauerlauf() {
         };
         schritt();
     });
+}
+
+// === AUFGABEN ABSCHLIESSEN + REKRUTIER-AUFGABEN (v571, 09.10.2026) ======
+//
+// Fetteruruk: "erster Spike ist Kaserne bauen, 1 Einheit rekrutieren und
+// dadurch Truppen fuer Farmrunden bekommen" - und die vorherigen Aufgaben
+// muessen dafuer abgeschlossen sein. Ohne "Aufgabe abschliessen" laeuft
+// die Kette nicht weiter und die Truppen kommen nie.
+//
+// BELEGT:
+//  - Zustand je Aufgabe steht im Kopf JEDER Spielseite (mobil + desktop):
+//      Quests.setQuestData({"1200":{...,"goals_completed":1,"goals_total":1,
+//        "finished":true,"state":"active",...}})
+//    Abschliessbar = finished:true und state "active" (Seitenquellen 05,
+//    07, 08, 13, 15: 1200, 1215, 1220, 1065, 7005, 7010).
+//  - Abschliessen (de258 26.09. 1205; de261 09.10. 10:10:15 1115):
+//      POST /game.php?village=V&screen=api&ajaxaction=quest_complete
+//           &quest=ID&skip=false    Rumpf h=<csrf>
+//      -> {"response":{"reward":"","detailed":[]}, "game_data":...}
+//  - Vorher oeffnet das Spiel die Aufgabe (mark_opened, Rumpf quest_id=ID
+//    &h=). Nur wenn "opened" false ist, schickt GodBot das ebenfalls -
+//    ein Mensch klickt nie auf "abschliessen", ohne sie geoeffnet zu haben.
+//  - Rekrutier-Aufgaben: 1205 "Zu deinen Diensten!" (de258 26.09.: erst
+//    units[spear]=1, Sekunden spaeter quest_complete 1205) und 1220 "Der
+//    Beginn einer Armee" ("Rekrutiere eine weitere Einheit", 10 Speer +
+//    10 Schwert). Rekrutiert wird GENAU 1 Speer:
+//      POST /game.php?village=V&screen=barracks&ajaxaction=train&mode=train&
+//           Rumpf units%5Bspear%5D=1&h=<csrf>
+//  - Kopfzeilen wie das Spiel (BELOHNUNG_KOPF, belegt 10:54/10:58).
+// NICHT gemacht: questline_complete (am 26.09. einmal gesehen, Antwort und
+// Zweck nicht belegt) und Aufgaben mit Auswahl (z. B. Startreliquie) -
+// diese stehen erst nach der Wahl auf finished.
+const AUFGABE_KEY = "tw_aufgaben_stand";
+const AUFGABE_SPERRE_MS = 12 * 60 * 60 * 1000;     // je Aufgabe: nicht doppelt senden
+const AUFGABE_REKRUT_SPERRE_MS = 30 * 60 * 1000;   // je Rekrutier-Aufgabe
+const AUFGABE_REKRUT_IDS = ["1205", "1220"];
+const AUFGABE_SPEER_KOSTEN = { wood: 50, stone: 30, iron: 10 };
+let aufgabeLaufAktiv = false;
+
+function aufgabeStandLaden() {
+    try {
+        const s = JSON.parse(localStorage.getItem(AUFGABE_KEY) || "{}");
+        return (s && typeof s === "object") ? s : {};
+    } catch (e) { return {}; }
+}
+
+function aufgabeStandSpeichern(s) {
+    const jetzt = Date.now();
+    ["fertig", "rekrut"].forEach(k => {
+        const m = s[k] || {};
+        Object.keys(m).forEach(id => { if (!(m[id] > jetzt - 7 * 24 * 3600 * 1000)) delete m[id]; });
+        s[k] = m;
+    });
+    try { localStorage.setItem(AUFGABE_KEY, JSON.stringify(s)); } catch (e) { }
+}
+
+// Aufgaben der offenen Seite (keine Anfrage).
+function aufgabenDerSeite() {
+    try {
+        if (typeof document === "undefined" || !document.scripts) return null;
+        for (let i = 0; i < document.scripts.length; i++) {
+            const t = document.scripts[i].textContent || "";
+            const p = t.indexOf("Quests.setQuestData(");
+            if (p < 0) continue;
+            const w = belohnungJsonWertLesen(t, p + "Quests.setQuestData(".length);
+            if (!w) continue;
+            const d = JSON.parse(w.roh);
+            if (!d || typeof d !== "object") continue;
+            const liste = Array.isArray(d) ? d : Object.keys(d).map(k => d[k]);
+            return liste.filter(q => q && /^\d+$/.test(String(q.id)));
+        }
+    } catch (e) { }
+    return null;
+}
+
+function aufgabeIstRekrut(q) {
+    if (AUFGABE_REKRUT_IDS.indexOf(String(q.id)) >= 0) return true;
+    try {
+        return (q.goals_html || []).some(g => /^Rekrutiere\b/i.test(String(g && g.summary || "")));
+    } catch (e) { return false; }
+}
+
+// Was ist JETZT zu tun? { art: "abschliessen"|"rekrutieren", q } oder null.
+function aufgabeNaechste() {
+    const liste = aufgabenDerSeite();
+    if (!liste || !liste.length) return null;
+    const st = aufgabeStandLaden();
+    const jetzt = Date.now();
+    const fertig = st.fertig || {}, rekrut = st.rekrut || {};
+    const ab = liste.find(q => q.finished === true && q.state === "active" &&
+        !(fertig[q.id] > jetzt - AUFGABE_SPERRE_MS));
+    if (ab) return { art: "abschliessen", q: ab };
+    const rk = liste.find(q => q.finished !== true && q.state === "active" && aufgabeIstRekrut(q) &&
+        !(rekrut[q.id] > jetzt - AUFGABE_REKRUT_SPERRE_MS));
+    if (rk && aufgabeRekrutMoeglich()) return { art: "rekrutieren", q: rk };
+    return null;
+}
+
+function aufgabeRekrutMoeglich() {
+    try {
+        const v = game_data.village;
+        const b = v.buildings || {};
+        if (!(parseInt(b.barracks, 10) >= 1)) return false;
+        if (!(Number(v.pop) < Number(v.pop_max))) return false;
+        return Number(v.wood) >= AUFGABE_SPEER_KOSTEN.wood && Number(v.stone) >= AUFGABE_SPEER_KOSTEN.stone &&
+            Number(v.iron) >= AUFGABE_SPEER_KOSTEN.iron;
+    } catch (e) { return false; }
+}
+
+function aufgabeDauerFaellig() {
+    if (aufgabeLaufAktiv || belohnungLaufAktiv || !belohnungCfg().enabled) return false;
+    try {
+        if (typeof game_data === "undefined" || !game_data.village || !game_data.csrf) return false;
+        return !!aufgabeNaechste();
+    } catch (e) { return false; }
+}
+
+function aufgabePost(url, body, cb) {
+    twCountRequest(url, "auto", "aufgabe");
+    fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: Object.assign({ "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, BELOHNUNG_KOPF),
+        body
+    })
+        .then(r => r.text().then(txt => ({ status: r.status, txt })))
+        .then(({ status, txt }) => {
+            let j = null;
+            try { j = JSON.parse(txt); } catch (e) { }
+            if (status !== 200 || !j) {
+                let botschutz = false;
+                try {
+                    botschutz = frameDocBlocked(new DOMParser().parseFromString(String(txt), "text/html"), "aufgabe");
+                } catch (e) { }
+                cb({ ok: false, botschutz, grund: botschutz ? "Botschutz" : `HTTP ${status}, kein JSON` });
+                return;
+            }
+            cb({ ok: true, j, txt });
+        })
+        .catch(err => cb({ ok: false, grund: "Anfrage nicht möglich: " + (err && err.message ? err.message : err) }));
+}
+
+function aufgabeDauerlauf() {
+    if (aufgabeLaufAktiv) return;
+    const n = aufgabeNaechste();
+    if (!n) return;
+    if (isBotProtectionActive()) return;
+    aufgabeLaufAktiv = true;
+    const vid = String(game_data.village.id);
+    const csrf = game_data.csrf;
+    const titel = String(n.q.title || n.q.id);
+    const st = aufgabeStandLaden();
+    const ende = (text, protokoll) => {
+        aufgabeLaufAktiv = false;
+        if (!text) return;
+        console.log("[TW] Aufgaben: " + text);
+        if (protokoll) { try { odin.protokoll("Aufgaben: " + text); } catch (e) { } }
+    };
+
+    if (n.art === "rekrutieren") {
+        st.rekrut = st.rekrut || {};
+        st.rekrut[n.q.id] = Date.now();
+        aufgabeStandSpeichern(st);
+        const url = "/game.php?village=" + encodeURIComponent(vid) + "&screen=barracks&ajaxaction=train&mode=train&";
+        aufgabePost(url, "units%5Bspear%5D=1&h=" + encodeURIComponent(csrf), (a) => {
+            if (!a.ok) {
+                if (a.botschutz) { haltAllAutomation("aufgabe:rekrutieren"); ende("", false); return; }
+                ende(`„${titel}“: 1 Speer nicht rekrutiert - ${a.grund}. Neuer Versuch in 30 Min.`, true);
+                return;
+            }
+            const r = a.j.response || a.j;
+            if (r && r.success === true) {
+                ende(`„${titel}“: 1 Speer rekrutiert (${String(r.msg || "").slice(0, 60)}). ` +
+                    `Abschließen beim nächsten Seitenstand.`, true);
+            } else {
+                const f = (r && (r.error || r.msg)) || a.j.error || String(a.txt).slice(0, 150);
+                ende(`„${titel}“: 1 Speer abgelehnt - ${f}. Neuer Versuch in 30 Min.`, true);
+            }
+        });
+        return;
+    }
+
+    // abschliessen
+    st.fertig = st.fertig || {};
+    st.fertig[n.q.id] = Date.now();
+    aufgabeStandSpeichern(st);
+    const abschliessen = () => {
+        if (isBotProtectionActive()) { ende("", false); return; }
+        const url = "/game.php?village=" + encodeURIComponent(vid) +
+            "&screen=api&ajaxaction=quest_complete&quest=" + encodeURIComponent(n.q.id) + "&skip=false";
+        aufgabePost(url, "h=" + encodeURIComponent(csrf), (a) => {
+            if (!a.ok) {
+                if (a.botschutz) { haltAllAutomation("aufgabe:abschliessen"); ende("", false); return; }
+                ende(`„${titel}“ nicht abgeschlossen - ${a.grund}.`, true);
+                return;
+            }
+            const r = a.j.response;
+            if (a.j.error || (r && r.error) || a.j.redirect || r === undefined) {
+                ende(`„${titel}“ nicht abgeschlossen - Antwort: ${String(a.txt).slice(0, 160)}`, true);
+                return;
+            }
+            const belohnung = (r && r.reward) ? ` Belohnung: ${String(r.reward).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 100)}.` : "";
+            ende(`„${titel}“ abgeschlossen.${belohnung}`, true);
+        });
+    };
+    if (n.q.opened === false) {
+        const url = "/game.php?village=" + encodeURIComponent(vid) + "&screen=new_quests&ajax=mark_opened";
+        aufgabePost(url, "quest_id=" + encodeURIComponent(n.q.id) + "&h=" + encodeURIComponent(csrf), () => {
+            setTimeout(abschliessen, humanDelay(2500, 6000));
+        });
+        return;
+    }
+    abschliessen();
 }
 
 function bauSchrittAusfuehren(win, doc, villageId, callback) {
