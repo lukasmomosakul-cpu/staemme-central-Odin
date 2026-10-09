@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      567
+// @version      568
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51032,8 +51032,13 @@ function belohnungDesktop() {
     try { return typeof game_data !== "undefined" && game_data.device === "desktop"; } catch (e) { return false; }
 }
 
+// v568 BELEGT (Mitschnitt FetterOrk de261 desktop, 09.10. 10:10:16): das
+// Spiel selbst oeffnet den Dialog mit Questlines.showDialog(0, 'main-tab')
+// -> GET ...&ajax=quest_popup&tab=main-tab&quest=0 -> {"response":{"dialog":
+// ...}} mit Reiter "Belohnung (1)". Also zuerst quest=0 - genau der Aufruf
+// des Spiels; die Kennung aus Quests.setQuestData bleibt nur Rueckfall.
 function belohnungListeHolen(villageId, cb, questIdVorgabe) {
-    const questId = questIdVorgabe || (belohnungDesktop() ? belohnungQuestIdLesen() : null);
+    const questId = questIdVorgabe || (belohnungDesktop() ? "0" : null);
     const url = "/game.php?village=" + encodeURIComponent(villageId) +
         "&screen=new_quests&ajax=quest_popup&tab=main-tab" +
         (questId ? "&quest=" + encodeURIComponent(questId) : "");
@@ -51060,9 +51065,9 @@ function belohnungListeHolen(villageId, cb, questIdVorgabe) {
             if (liste) { cb({ ok: true, liste, weg: "quest_popup", gameData: j.game_data || null }); return; }
             // v567: Umleitung statt Dialog und noch ohne Quest-Kennung
             // gefragt -> einmal mit Kennung (siehe oben).
-            if (status === 200 && j && j.redirect && !questId && !isBotProtectionActive()) {
-                const id = belohnungQuestIdLesen();
-                if (id) {
+            if (status === 200 && j && j.redirect && (!questId || questId === "0") && !isBotProtectionActive()) {
+                const id = !questId ? "0" : belohnungQuestIdLesen();
+                if (id && id !== questId) {
                     console.log(`[TW] Belohnungen: quest_popup leitet um - neuer Versuch mit quest=${id}.`);
                     setTimeout(() => belohnungListeHolen(villageId, cb, id), humanDelay(900, 1800));
                     return;
