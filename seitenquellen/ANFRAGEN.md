@@ -230,3 +230,9 @@ Adresse:   /game.php?village=38859&screen=new_quests&mode=quest&quest_id=1215
 
 text=Zusätzliches Einkommen | onclick= | html=<a href="/game.php?village=38859&amp;screen=new_quests&amp;mode=quest&amp;quest_id=1215">Zusätzliches Einkommen</a>
 ```
+
+## scavenge_api send_squads (Einzelseite, ohne Premium) - belegt 09.10.2026 13:19:22, de261 FetterOrk
+POST /game.php?village=17417&screen=scavenge_api&ajaxaction=send_squads
+Kopf: Content-Type: application/x-www-form-urlencoded; charset=UTF-8 | Accept: application/json, text/javascript, */*; q=0.01 | TribalWars-Ajax: 1 | X-Requested-With: XMLHttpRequest
+Rumpf: squad_requests[0][village_id]=17417, squad_requests[0][candidate_squad][unit_counts][spear|sword|axe|archer|light|marcher|heavy|knight]=N (alle acht), squad_requests[0][candidate_squad][carry_max]=100 (1 Paladin), squad_requests[0][option_id]=1, squad_requests[0][use_premium]=false, h=<csrf>
+Antwort: HTTP 200 {"response":{"invalid_village_ids":[],"villages":{"17417":{... wie var village der Einzelseite, options["1"].scavenging_squad gesetzt}}}, "game_data":...}

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      574
+// @version      575
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19746,10 +19746,7 @@ function botMarkerSichtbar() {
         // Einzelseite auffrischen, nichts verschicken.
         if (raubzugPremiumAktiv() === false) {
             raubzugOhnePremiumMelden();
-            einzelSlotsHolen(() => onFertig({
-                sent: 0, waves: 0, blocked: 0, rejected: 0, idealTotal: 0, actualTotal: 0,
-                plannedSlots: 0, sentSlots: 0, coverage: 0
-            }));
+            einzelRaubzugLauf(onFertig);
             return;
         }
         const basis = "/game.php?village=" + game_data.village.id +
@@ -54809,6 +54806,12 @@ function parseScavengeEinzelText(text) {
     if (!w) return null;
     let v = null;
     try { v = JSON.parse(w.roh); } catch (e) { return null; }
+    return parseScavengeVillageObj(v);
+}
+
+// v575: dieselbe Form liefert auch die Antwort von send_squads
+// (response.villages[id], belegt 09.10. 13:19:22).
+function parseScavengeVillageObj(v) {
     if (!v || !v.village_id || !v.options) return null;
     const homeUnits = {};
     Object.keys(v.unit_counts_home || {}).forEach(u => {
@@ -54883,13 +54886,160 @@ function einzelSlotsHolen(callback) {
     weiter();
 }
 
+// === RAUBZUG-VERSAND OHNE PREMIUM (v575) ================================
+// BELEGT (Formular-Mitschnitt FetterOrk de261, 09.10. 13:19:22, Einzelseite,
+// Premium aus, von Hand "Faule Sammler" mit 1 Paladin):
+//   POST /game.php?village=17417&screen=scavenge_api&ajaxaction=send_squads
+//   Kopf: Content-Type x-www-form-urlencoded; charset=UTF-8, Accept json,
+//         TribalWars-Ajax: 1, X-Requested-With: XMLHttpRequest
+//   Rumpf: squad_requests[0][village_id]=17417
+//          squad_requests[0][candidate_squad][unit_counts][spear|sword|axe|
+//            archer|light|marcher|heavy|knight]=N   (alle acht, auch 0)
+//          squad_requests[0][candidate_squad][carry_max]=100
+//          squad_requests[0][option_id]=1
+//          squad_requests[0][use_premium]=false
+//          h=<csrf>
+//   Antwort HTTP 200: {"response":{"invalid_village_ids":[],"villages":
+//     {"17417":{... wie "var village" der Einzelseite, options["1"].
+//     scavenging_squad = {unit_counts,...} ...}}}}
+// Gesendet wird genau das, je Dorf und Slot eine Anfrage (nur Index 0 ist
+// belegt). Erfolg zaehlt NUR, wenn die Antwort fuer Dorf und Option einen
+// scavenging_squad liefert - kein "gesendet" mehr ohne Bestaetigung.
+// Geplant wird mit demselben Planer wie beim Massenraubzug.
+const RAUBZUG_EINZEL_EINHEITEN = ["spear", "sword", "axe", "archer", "light", "marcher", "heavy", "knight"];
+
+function raubzugEinzelSenden(vid, slotId, units, carryFactor, cb) {
+    const k = (x) => "squad_requests%5B0%5D" + x;
+    let carry = 0;
+    const teile = [k("%5Bvillage_id%5D=") + encodeURIComponent(vid)];
+    RAUBZUG_EINZEL_EINHEITEN.forEach(u => {
+        const n = Math.max(0, parseInt(units && units[u], 10) || 0);
+        carry += n * ((UNIT_STATS[u] && UNIT_STATS[u].loot) || 0);
+        teile.push(k("%5Bcandidate_squad%5D%5Bunit_counts%5D%5B" + u + "%5D=") + n);
+    });
+    const cf = (typeof carryFactor === "number" && carryFactor > 0) ? carryFactor : 1;
+    teile.push(k("%5Bcandidate_squad%5D%5Bcarry_max%5D=") + Math.round(carry * cf));
+    teile.push(k("%5Boption_id%5D=") + encodeURIComponent(slotId));
+    teile.push(k("%5Buse_premium%5D=false"));
+    teile.push("h=" + encodeURIComponent(game_data.csrf));
+    const url = "/game.php?village=" + encodeURIComponent(vid) + "&screen=scavenge_api&ajaxaction=send_squads";
+    twCountRequest(url, "auto", "raubzug-einzel-senden");
+    fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: Object.assign({ "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, BELOHNUNG_KOPF),
+        body: teile.join("&")
+    })
+        .then(r => r.text().then(txt => ({ status: r.status, txt })))
+        .then(({ status, txt }) => {
+            let j = null;
+            try { j = JSON.parse(txt); } catch (e) { }
+            if (status !== 200 || !j) {
+                let botschutz = false;
+                try { botschutz = frameDocBlocked(new DOMParser().parseFromString(String(txt), "text/html"), "raubzug:send_squads"); } catch (e) { }
+                cb({ ok: false, botschutz, grund: botschutz ? "Botschutz" : `HTTP ${status}, kein JSON` });
+                return;
+            }
+            const r = j.response || {};
+            const ungueltig = Array.isArray(r.invalid_village_ids) &&
+                r.invalid_village_ids.map(String).indexOf(String(vid)) >= 0;
+            const v = r.villages && r.villages[String(vid)];
+            const opt = v && v.options && v.options[String(slotId)];
+            if (!ungueltig && opt && opt.scavenging_squad) {
+                cb({ ok: true, village: v, squad: opt.scavenging_squad });
+                return;
+            }
+            const fehler = j.error || r.error || (ungueltig ? "Dorf als ungültig gemeldet" : "kein Trupp in der Antwort");
+            cb({ ok: false, village: v || null, grund: String(Array.isArray(fehler) ? fehler.join(" ") : fehler).slice(0, 160) });
+        })
+        .catch(e => cb({ ok: false, grund: "Anfrage nicht möglich: " + (e && e.message ? e.message : e) }));
+}
+
+function einzelRaubzugLauf(onFertig) {
+    const summary = {
+        sent: 0, waves: 0, blocked: 0, rejected: 0, idealTotal: 0, actualTotal: 0,
+        plannedSlots: 0, sentSlots: 0, coverage: 0
+    };
+    const ende = () => {
+        summary.coverage = summary.idealTotal > 0 ? Math.round((summary.actualTotal / summary.idealTotal) * 100) : 0;
+        console.log(`[TW] Raubzug ohne Premium beendet: ${JSON.stringify(summary)}`);
+        onFertig(summary);
+    };
+    einzelSlotsHolen((ok) => {
+        if (!ok || isBotProtectionActive()) { ende(); return; }
+        ensureScavengeOptionsConfig((optionsConfig) => {
+            let slotStatus = {};
+            try { slotStatus = JSON.parse(localStorage.getItem("tw_scavenge_slots") || "{}"); } catch (e) { }
+            const profiles = loadMassProfiles();
+            if (!profiles.length) { ende(); return; }
+            const settings = Object.assign({}, DEFAULT_SETTINGS, loadSettings());
+            const waveCount = Math.max(1, Math.min(20, parseInt(settings.massMode?.waves, 10) || 8));
+            const claimed = new Set();
+            const auftraege = [];
+            let pi = 0;
+            const senden = () => {
+                let i = 0;
+                const naechster = () => {
+                    if (i >= auftraege.length || isBotProtectionActive()) { ende(); return; }
+                    const a = auftraege[i++];
+                    raubzugEinzelSenden(a.vid, a.slotId, a.units, slotStatus[a.vid] && slotStatus[a.vid].carryFactor, (res) => {
+                        const was = Object.entries(a.units).filter(([, n]) => n > 0).map(([u, n]) => `${n} ${u}`).join(", ");
+                        if (res.ok) {
+                            summary.sent++; summary.sentSlots++;
+                            try { storeScavengeSlots(parseScavengeVillageObj(res.village), "Versand ohne Premium"); } catch (e) { }
+                            const zurueck = res.squad.return_time
+                                ? new Date(res.squad.return_time * 1000).toLocaleTimeString("de-DE") : "?";
+                            const t = `Raubzug: Dorf ${a.vid} Slot ${a.slotId} gesendet (${was}), zurück ${zurueck} - vom Server bestätigt.`;
+                            console.log("[TW] " + t);
+                            try { odin.protokoll(t); } catch (e) { }
+                        } else if (res.botschutz) {
+                            haltAllAutomation("raubzug:einzel-senden");
+                            ende();
+                            return;
+                        } else {
+                            summary.rejected++;
+                            console.warn(`[TW] Raubzug: Dorf ${a.vid} Slot ${a.slotId} NICHT gesendet (${was}) - ${res.grund}.`);
+                            if (res.village) { try { storeScavengeSlots(parseScavengeVillageObj(res.village), "Versand ohne Premium"); } catch (e) { } }
+                        }
+                        setTimeout(naechster, humanDelay(1500, 3500));
+                    });
+                };
+                naechster();
+            };
+            const nextProfile = () => {
+                if (pi >= profiles.length) { senden(); return; }
+                const profile = profiles[pi++];
+                fetchVillagesForProfile(profile, profile.units || null, (villages) => {
+                    try {
+                        if (!villages || !villages.length) { nextProfile(); return; }
+                        const plan = buildMassPlanForProfile(profile, villages, slotStatus, optionsConfig, waveCount, claimed);
+                        summary.idealTotal += plan.idealTotal;
+                        summary.actualTotal += plan.actualTotal;
+                        plan.slotPlans.forEach(sp => sp.waves.forEach(w => {
+                            if (!w.sendable) return;
+                            summary.waves++;
+                            w.members.forEach(m => {
+                                summary.plannedSlots++;
+                                auftraege.push({ vid: String(m.villageId), slotId: sp.slotId, units: Object.assign({}, w.units) });
+                            });
+                        }));
+                    } catch (e) {
+                        console.warn("[TW] Raubzug ohne Premium: Planung fehlgeschlagen.", e);
+                    }
+                    nextProfile();
+                });
+            };
+            nextProfile();
+        });
+    });
+}
+
 let raubzugOhnePremiumGemeldetAt = 0;
 function raubzugOhnePremiumMelden() {
     if (Date.now() - raubzugOhnePremiumGemeldetAt < 60 * 60 * 1000) return;
     raubzugOhnePremiumGemeldetAt = Date.now();
-    const t = "Raubzug: Premium ist nicht aktiv - der Massenraubzug ist damit nicht nutzbar, es wird " +
-        "nichts verschickt. Die Slotdaten kommen von der Einzelseite (Sperren richtig). Der Versand " +
-        "über die Einzelseite folgt, sobald ein echter Versand dort mitgeschnitten ist.";
+    const t = "Raubzug: Premium ist nicht aktiv - Massenraubzug nicht nutzbar. Slotdaten und Versand " +
+        "laufen über die Einzelseite (send_squads je Dorf und Slot, mit Bestätigung vom Server).";
     console.warn("[TW] " + t);
     try { odin.protokoll(t); } catch (e) { }
 }
