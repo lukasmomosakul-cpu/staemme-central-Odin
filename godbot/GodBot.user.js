@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      568
+// @version      569
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -48384,15 +48384,25 @@ function amMitschnittEinhaengen() {
         XHR.prototype.open = function (methode, url) {
             this.__twUrl = url;
             this.__twMethode = methode;
+            this.__twKopf = [];
             return open.apply(this, arguments);
+        };
+        // v569: Kopfzeilen mitschreiben - am 09.10. unterschied sich die
+        // XHR des Spiels von GodBots fetch nur darin (gleiche Adresse,
+        // andere Antwort). Nur Namen und Werte, nichts wird veraendert.
+        const setKopf = XHR.prototype.setRequestHeader;
+        XHR.prototype.setRequestHeader = function (name, wert) {
+            try { (this.__twKopf = this.__twKopf || []).push(`${name}: ${wert}`); } catch (e) { }
+            return setKopf.apply(this, arguments);
         };
         XHR.prototype.send = function (body) {
             try {
                 if (amMitschnittErfassen(this.__twMethode, this.__twUrl)) {
                     amMitschnittMerken("XHR", this.__twUrl,
-                        (body instanceof FormData)
+                        ((this.__twKopf && this.__twKopf.length) ? `[Kopf: ${this.__twKopf.join(" | ")}] ` : "") +
+                        ((body instanceof FormData)
                             ? [...body.entries()].map(([k, v]) => `${k}=${v}`).join("&")
-                            : body);
+                            : (body || "")));
                 }
             } catch (e) { console.warn("[TW] Mitschnitt XHR fehlgeschlagen.", e); }
 
@@ -50785,13 +50795,15 @@ function belohnungSetzen(aenderung) {
 // v567: dasselbe fuer den Desktop-Lesefehler (quest_popup ohne quest=
 // -> redirect, 6 Std. Fehler-Ruhe). Die vorgemerkten Fertig-Zeitpunkte
 // (faellig) aus Stufe 562 bleiben erhalten.
-const BELOHNUNG_STAND_STUFE = 567;
+// v569: Die Fehler-Ruhe von 10:14:08 (v567, Stufe 567) hat v568 komplett
+// stillgelegt - deshalb erneut verwerfen, faellig bleibt.
+const BELOHNUNG_STAND_STUFE = 569;
 
 function belohnungStandLaden() {
     try {
         const s = JSON.parse(localStorage.getItem(BELOHNUNG_KEY) || "{}");
         if (!s || typeof s !== "object") return {};
-        if (s.stufe === 562 && Array.isArray(s.faellig)) return { faellig: s.faellig };
+        if ((s.stufe === 562 || s.stufe === 567) && Array.isArray(s.faellig)) return { faellig: s.faellig };
         if (s.stufe !== BELOHNUNG_STAND_STUFE) return {};
         return s;
     } catch (e) { return {}; }
@@ -51037,11 +51049,64 @@ function belohnungDesktop() {
 // -> GET ...&ajax=quest_popup&tab=main-tab&quest=0 -> {"response":{"dialog":
 // ...}} mit Reiter "Belohnung (1)". Also zuerst quest=0 - genau der Aufruf
 // des Spiels; die Kennung aus Quests.setQuestData bleibt nur Rueckfall.
+// v569 BELEGT (Mitschnitt 09.10. 10:14:05/10:14:06, de261 desktop):
+// DIESELBE Adresse ...quest_popup&tab=main-tab&quest=0 ergibt per fetch
+// {"redirect":"...overview"}, als XHR des Spiels (Questlines.showDialog)
+// 1,7 s spaeter den Dialog. Nicht die Adresse entscheidet, sondern die
+// Art der Anfrage. Deshalb am Desktop ueber den Weg des Spiels selbst:
+// TribalWars.get - dieselbe Familie wie TribalWars.post, das GodBot im
+// Farmversand mit voller Adresse als erstem Argument nutzt (post(url,
+// null, daten, ok, fehler)); get hat kein daten-Argument. Die Erfolgs-
+// Rueckgabe ist der Inhalt von "response" (wie r.success beim Farmen).
+// Den Vorrat liest belohnungVorrat dann aus game_data der Seite.
+// Fehlt TribalWars.get, bleibt es beim fetch-Weg.
+const BELOHNUNG_TW_TIMEOUT_MS = 15000;
+
+function belohnungTwGet(url, cb) {
+    let TW = null;
+    try {
+        const w = seitenWin(window) || window;
+        TW = w.TribalWars || (typeof unsafeWindow !== "undefined" ? seitenWin(unsafeWindow).TribalWars : null);
+    } catch (e) { TW = null; }
+    if (!TW || typeof TW.get !== "function") return false;
+    let fertig = false;
+    const einmal = (r) => { if (fertig) return; fertig = true; cb(r); };
+    try {
+        TW.get(url, null,
+            (r) => einmal({ ok: true, r }),
+            (r) => einmal({ ok: false, r }));
+    } catch (e) {
+        return false;
+    }
+    setTimeout(() => einmal({ ok: false, r: null, timeout: true }), BELOHNUNG_TW_TIMEOUT_MS);
+    return true;
+}
+
 function belohnungListeHolen(villageId, cb, questIdVorgabe) {
     const questId = questIdVorgabe || (belohnungDesktop() ? "0" : null);
     const url = "/game.php?village=" + encodeURIComponent(villageId) +
         "&screen=new_quests&ajax=quest_popup&tab=main-tab" +
         (questId ? "&quest=" + encodeURIComponent(questId) : "");
+    if (belohnungDesktop() && !questIdVorgabe) {
+        const gestartet = belohnungTwGet(url, (a) => {
+            let dialog = null;
+            try {
+                const r = a.r;
+                dialog = r && (typeof r.dialog === "string" ? r.dialog
+                    : (r.response && typeof r.response.dialog === "string" ? r.response.dialog : null));
+            } catch (e) { dialog = null; }
+            const liste = a.ok ? belohnungListeAusDialog(dialog) : null;
+            if (liste) { cb({ ok: true, liste, weg: "TribalWars.get", gameData: null }); return; }
+            let roh = "";
+            try { roh = JSON.stringify(a.r); } catch (e) { roh = String(a.r); }
+            const befund = `TribalWars.get ${a.ok ? "ok" : (a.timeout ? "ohne Antwort (15 s)" : "Fehler")}, ` +
+                `dialog ${dialog ? dialog.length + " Zeichen" : "fehlt"}, Anfang „${String(roh || "").slice(0, 80)}“`;
+            console.warn(`[TW] Belohnungen: ${befund} - weiter mit fetch.`);
+            belohnungRohSichern("belohnung-twget", url, a.ok ? 200 : 0, roh, befund);
+            setTimeout(() => belohnungListeHolen(villageId, cb, questId), humanDelay(900, 1800));
+        });
+        if (gestartet) { twCountRequest(url, "auto", "belohnung-liste"); return; }
+    }
     twCountRequest(url, "auto", "belohnung-liste");
     fetch(url, { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } })
         .then(r => r.text().then(txt => ({ status: r.status, txt })))
