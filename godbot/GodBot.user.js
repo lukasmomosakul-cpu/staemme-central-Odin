@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      566
+// @version      567
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -50782,12 +50782,17 @@ function belohnungSetzen(aenderung) {
 
 // v562: Ruhezeiten aus aelteren Fassungen stammen vom Lesefehler der
 // mobilen Antwort - beim ersten Lesen einmalig verwerfen.
-const BELOHNUNG_STAND_STUFE = 562;
+// v567: dasselbe fuer den Desktop-Lesefehler (quest_popup ohne quest=
+// -> redirect, 6 Std. Fehler-Ruhe). Die vorgemerkten Fertig-Zeitpunkte
+// (faellig) aus Stufe 562 bleiben erhalten.
+const BELOHNUNG_STAND_STUFE = 567;
 
 function belohnungStandLaden() {
     try {
         const s = JSON.parse(localStorage.getItem(BELOHNUNG_KEY) || "{}");
-        if (!s || typeof s !== "object" || s.stufe !== BELOHNUNG_STAND_STUFE) return {};
+        if (!s || typeof s !== "object") return {};
+        if (s.stufe === 562 && Array.isArray(s.faellig)) return { faellig: s.faellig };
+        if (s.stufe !== BELOHNUNG_STAND_STUFE) return {};
         return s;
     } catch (e) { return {}; }
 }
@@ -50988,9 +50993,50 @@ function belohnungBefund(status, txt, json, dialog) {
         `reward-tab ${t.indexOf("reward-tab") >= 0 ? "ja" : "nein"}, Anfang „${anfang}“`;
 }
 
-function belohnungListeHolen(villageId, cb) {
+// v567 (Diagnose FetterOrk de261 PC, 09.10. 09:20): Am DESKTOP liefert
+// quest_popup OHNE quest= nur {"redirect":"...screen=overview"} - die
+// Questseite leitet ebenso auf die Uebersicht um. Belegt mit Dialog ist
+// am Desktop nur der Aufruf MIT Quest-Kennung (Mitschnitt 26.09., de258,
+// device=desktop: ...&ajax=quest_popup&tab=main-tab&quest=1205). Mobil
+// (de257, 04.10.) klappt es ohne - dort bleibt alles wie gehabt.
+// Die Kennung steht ohne Anfrage im Seitenkopf jeder Spielseite:
+// Quests.setQuestData({"1020":{...,"state":"active"},...}).
+function belohnungQuestIdLesen(text) {
+    try {
+        const quellen = [];
+        if (text) quellen.push(String(text));
+        else if (typeof document !== "undefined" && document.scripts) {
+            for (let i = 0; i < document.scripts.length; i++) {
+                const t = document.scripts[i].textContent || "";
+                if (t.indexOf("Quests.setQuestData(") >= 0) quellen.push(t);
+            }
+        }
+        for (let q = 0; q < quellen.length; q++) {
+            const t = quellen[q];
+            const p = t.indexOf("Quests.setQuestData(");
+            if (p < 0) continue;
+            const w = belohnungJsonWertLesen(t, p + "Quests.setQuestData(".length);
+            if (!w) continue;
+            const daten = JSON.parse(w.roh);
+            if (!daten || typeof daten !== "object" || Array.isArray(daten)) continue;
+            const ids = Object.keys(daten).filter(k => /^\d+$/.test(k));
+            const aktiv = ids.filter(k => daten[k] && daten[k].state === "active");
+            const id = aktiv[0] || ids[0];
+            if (id) return id;
+        }
+    } catch (e) { }
+    return null;
+}
+
+function belohnungDesktop() {
+    try { return typeof game_data !== "undefined" && game_data.device === "desktop"; } catch (e) { return false; }
+}
+
+function belohnungListeHolen(villageId, cb, questIdVorgabe) {
+    const questId = questIdVorgabe || (belohnungDesktop() ? belohnungQuestIdLesen() : null);
     const url = "/game.php?village=" + encodeURIComponent(villageId) +
-        "&screen=new_quests&ajax=quest_popup&tab=main-tab";
+        "&screen=new_quests&ajax=quest_popup&tab=main-tab" +
+        (questId ? "&quest=" + encodeURIComponent(questId) : "");
     twCountRequest(url, "auto", "belohnung-liste");
     fetch(url, { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } })
         .then(r => r.text().then(txt => ({ status: r.status, txt })))
@@ -51012,7 +51058,17 @@ function belohnungListeHolen(villageId, cb) {
             const dialog = j && ((j.response && j.response.dialog) || j.dialog);
             const liste = (status === 200 && j) ? belohnungListeAusDialog(dialog) : null;
             if (liste) { cb({ ok: true, liste, weg: "quest_popup", gameData: j.game_data || null }); return; }
-            const befund = belohnungBefund(status, txt, !!j, dialog);
+            // v567: Umleitung statt Dialog und noch ohne Quest-Kennung
+            // gefragt -> einmal mit Kennung (siehe oben).
+            if (status === 200 && j && j.redirect && !questId && !isBotProtectionActive()) {
+                const id = belohnungQuestIdLesen();
+                if (id) {
+                    console.log(`[TW] Belohnungen: quest_popup leitet um - neuer Versuch mit quest=${id}.`);
+                    setTimeout(() => belohnungListeHolen(villageId, cb, id), humanDelay(900, 1800));
+                    return;
+                }
+            }
+            const befund = belohnungBefund(status, txt, !!j, dialog) + (questId ? `, quest=${questId}` : ", ohne quest");
             belohnungRohSichern("belohnung-quest_popup", url, status, txt, befund);
             setTimeout(() => belohnungSeiteProben(villageId, befund, cb), humanDelay(900, 1800));
         })
