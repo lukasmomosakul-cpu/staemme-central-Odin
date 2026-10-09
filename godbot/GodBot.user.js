@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      565
+// @version      566
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -42796,6 +42796,9 @@ function bauGruppenNachladen(gids, callback) {
 // Sperre sofort ab, wenn ein zeitkritischer Vorgang sie braucht.
 const BAU_LOOP_KEY = "tw_build_loop_active";
 const BAU_SCAN_KEY = "tw_next_build_scan_at";
+// v566: Ende der letzten Bau-Runde - bauScanVorziehen haelt damit die
+// Untergrenze von 6-9 Min aus planeNaechstenBauScan ein.
+const BAU_RUNDE_ENDE_KEY = "tw_build_last_round_end";
 
 // Zwischen zwei Doerfern - ein Dorf pro Sekunde, wie ueberall sonst.
 const BAU_TAKT_MIN_MS = 1000;
@@ -43235,22 +43238,75 @@ const BAU_AUFTRAG_ABSTAND_MAX_MS = 4000;
 // Der erste Auftrag mit einer solchen Restzeit ist der laufende. Findet
 // sich nichts, wird NICHT geschaetzt - der Aufrufer nimmt dann seine
 // eigene Frist.
-function bauSchleifeRestMs(doc) {
-    if (!doc) return null;
+//
+// v566 (09.10.2026, Protokoll FetterOrk de261 PC 08:51-09:09): Gelesen
+// wurde nur [data-order] - das gibt es nur MOBIL. Am Desktop heissen die
+// Zeilen tr[class*="buildorder_"] in #buildqueue (so kennt sie
+// readBuildState/readBuildQueueOrders schon). Am PC kam deshalb immer
+// null heraus: "Bauschleife voll" wartete pauschal 15 Min (08:52:25 ->
+// 09:07:25, frei war der Platz gegen 08:54:35), und die Belohnung nach
+// fertiger Stufe (v563) bekam nie einen Zeitpunkt.
+// Desktop-Markup der Bauschleife ist NICHT an einer echten Seite belegt
+// (kein Desktop-main in seitenquellen/) - deshalb zwei Lesewege:
+// data-endtime (Serverzeit in Sekunden), sonst die erste H:MM:SS-Angabe.
+function bauSchleifeZeilen(doc) {
+    if (!doc) return [];
     const wurzel = doc.querySelector("#buildqueue_wrap") || doc.querySelector("#buildqueue") || doc;
-    const zeilen = wurzel.querySelectorAll("[data-order]");
+    let liste = Array.prototype.slice.call(wurzel.querySelectorAll("[data-order]"));
+    // Verschachtelte [data-order] nur einmal zaehlen (aeusserstes gilt).
+    liste = liste.filter(z => !liste.some(o => o !== z && o.contains && o.contains(z)));
+    if (!liste.length) {
+        liste = Array.prototype.slice.call(wurzel.querySelectorAll('tr[class*="buildorder_"]'));
+    }
+    return liste;
+}
 
-    for (let i = 0; i < zeilen.length; i++) {
-        const spans = zeilen[i].querySelectorAll("span");
-        for (let j = 0; j < spans.length; j++) {
-            const m = (spans[j].textContent || "").trim().match(/^(\d+):([0-5]\d):([0-5]\d)$/);
-            if (!m) continue;
-            const ms = ((parseInt(m[1], 10) * 3600) + (parseInt(m[2], 10) * 60) +
-                parseInt(m[3], 10)) * 1000;
-            return ms > 0 ? ms : null;
+// { ms, absolut } - absolut = Restzeit bis zu einem festen Endzeitpunkt
+// (data-endtime), sonst die in der Zeile stehende Zeitangabe (beim
+// laufenden Auftrag die Restzeit, bei wartenden die Dauer).
+function bauSchleifeZeileMs(zeile) {
+    if (!zeile || !zeile.querySelectorAll) return null;
+    try {
+        const mitEnde = (zeile.getAttribute && zeile.getAttribute("data-endtime"))
+            ? zeile : zeile.querySelector("[data-endtime]");
+        if (mitEnde) {
+            const sek = parseInt(mitEnde.getAttribute("data-endtime"), 10);
+            if (sek > 0) {
+                const ms = sek * 1000 - serverNowMs();
+                if (ms > 0 && ms < 30 * 24 * 3600 * 1000) return { ms: ms, absolut: true };
+            }
         }
+    } catch (e) { }
+    const teile = zeile.querySelectorAll("span, td");
+    for (let j = 0; j < teile.length; j++) {
+        const m = (teile[j].textContent || "").trim().match(/^(\d+):([0-5]\d):([0-5]\d)$/);
+        if (!m) continue;
+        const ms = ((parseInt(m[1], 10) * 3600) + (parseInt(m[2], 10) * 60) +
+            parseInt(m[3], 10)) * 1000;
+        return ms > 0 ? { ms: ms, absolut: false } : null;
     }
     return null;
+}
+
+// Restzeit bis zum Ende JEDES Auftrags: laufender Auftrag = seine
+// Restzeit, jeder weitere = Ende des vorigen + eigene Dauer. Ohne Zeit
+// am laufenden Auftrag wird nichts geschaetzt ([]).
+function bauSchleifeEndenMs(doc) {
+    const zeilen = bauSchleifeZeilen(doc);
+    const enden = [];
+    for (let i = 0; i < zeilen.length; i++) {
+        const z = bauSchleifeZeileMs(zeilen[i]);
+        if (!z) break;
+        if (i === 0 || z.absolut) enden.push(z.ms);
+        else enden.push(enden[i - 1] + z.ms);
+    }
+    return enden;
+}
+
+function bauSchleifeRestMs(doc) {
+    if (!doc) return null;
+    const enden = bauSchleifeEndenMs(doc);
+    return enden.length ? enden[0] : null;
 }
 
 // === EIGENER AUSLOESER FUER DEN BAUERNHOF-TAUSCH (04.09.2026) ======
@@ -43931,6 +43987,7 @@ function starteBauLauf() {
             } catch (e) { console.warn("[TW] Bauautomat liess sich nicht zurueckschalten.", e); }
         }
 
+        try { localStorage.setItem(BAU_RUNDE_ENDE_KEY, String(Date.now())); } catch (e) { }
         const naechster = planeNaechstenBauScan();
         console.log(`[TW] Bauautomat: ${gebaut} Auftrag/Auftraege eingereiht, ` +
             `${geprueft} von ${gesamt} Dorf/Doerfern geprueft - naechste Runde um ` +
@@ -50781,6 +50838,40 @@ function belohnungFaelligMerken(restMs) {
     return true;
 }
 
+// v566: alle Enden der Bauschleife vormerken, nicht nur das laufende -
+// sonst ging z.B. die Eisenmine hinter dem laufenden Auftrag verloren.
+// Keine zusaetzliche Anfrage, gelesen wird die schon geladene Seite.
+function belohnungEndenMerken(doc) {
+    let n = 0;
+    try {
+        bauSchleifeEndenMs(doc).forEach(ms => { if (belohnungFaelligMerken(ms)) n++; });
+    } catch (e) { }
+    return n;
+}
+
+// v566: Nach abgeholten Belohnungen wurde nur der Dorf-Termin geloescht -
+// tw_next_build_scan_at blieb stehen, und bis zu 30 Min wurde nicht
+// gebaut. Jetzt wird die naechste Runde vorgezogen: frueh (40-100 s),
+// aber NIE vor der Untergrenze von 6-9 Min nach der letzten Runde
+// (Botschutz-Messung 24.09.) und nie nach hinten.
+function bauScanVorziehen(grund) {
+    try {
+        if (!bauLoopAn() || !Object.keys(ladeBauPlaene()).length) return false;
+        const jetzt = Date.now();
+        let ziel = jetzt + humanDelay(40 * 1000, 100 * 1000);
+        const letzte = parseInt(localStorage.getItem(BAU_RUNDE_ENDE_KEY), 10) || 0;
+        if (letzte) ziel = Math.max(ziel, letzte + humanDelay(6 * 60 * 1000, 9 * 60 * 1000));
+        const bisher = parseInt(localStorage.getItem(BAU_SCAN_KEY), 10) || 0;
+        if (bisher && bisher <= ziel) return false;
+        localStorage.setItem(BAU_SCAN_KEY, String(Math.round(ziel)));
+        const t = `Bauautomat: ${grund} - nächste Runde vorgezogen auf ` +
+            `${new Date(ziel).toLocaleTimeString("de-DE")}.`;
+        console.log("[TW] " + t);
+        try { odin.protokoll(t); } catch (e) { }
+        return true;
+    } catch (e) { return false; }
+}
+
 function belohnungStufeFertig() {
     const s = belohnungStandLaden();
     const jetzt = Date.now();
@@ -51083,6 +51174,7 @@ function belohnungDauerlauf() {
         if (ruheMs) belohnungRuhe(villageId, ruheMs, allgemein);
         if (geholt.length) {
             try { bauTerminLoeschen(villageId); } catch (e) { }
+            try { bauScanVorziehen("Belohnungen abgeholt"); } catch (e) { }
             const t = `Belohnungen ${dorf}: ${geholt.length} abgeholt (${geholt.join(", ")}), ` +
                 `+${summe.wood}/${summe.stone}/${summe.iron}. ${text}`;
             console.log("[TW] " + t);
@@ -51242,6 +51334,7 @@ function bauSchrittAusfuehren(win, doc, villageId, callback) {
             // ein Dorf sonst still stehen, obwohl der Platz laengst frei
             // war - nur wenn sich nichts lesen laesst, bleibt es dabei.
             const rest = bauSchleifeRestMs(doc);
+            belohnungEndenMerken(doc);
             merkeBauTermin(villageId,
                 Date.now() + (rest !== null ? rest + 5000 : 15 * 60 * 1000),
                 rest !== null ? `${schritt.grund} Nächster Platz in ${Math.round(rest / 60000)} min.`
@@ -51271,7 +51364,7 @@ function bauSchrittAusfuehren(win, doc, villageId, callback) {
             try {
                 if (antwort.queueHtml) {
                     const qd = new DOMParser().parseFromString(String(antwort.queueHtml), "text/html");
-                    belohnungFaelligMerken(bauSchleifeRestMs(qd));
+                    belohnungEndenMerken(qd);
                 }
             } catch (e) { }
             merkeBauErgebnis(villageId, "ok", schritt.grund +
