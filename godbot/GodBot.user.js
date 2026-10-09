@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      572
+// @version      573
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -38817,7 +38817,18 @@ function scavengeRunStartedRecently() {
 
 const SCAVENGE_SLOTS_AT_KEY = "tw_scavenge_slots_at";
 
+// v573 (Ares20 de261, 09.10. 11:30): v572 griff nicht, weil die mit dem
+// alten Parser gelesenen Slotdaten (11:26, "4 frei") als frisch galten -
+// "Slotdaten sind 244 s alt - Abruf der Sammelseite gespart". Slotdaten
+// gelten nur noch als frisch, wenn sie mit dem aktuellen Parser gelesen
+// wurden; sonst wird die Sammelseite neu eingelesen.
+const SCAVENGE_SLOTS_PARSER_KEY = "tw_scavenge_slots_parser";
+const SCAVENGE_SLOTS_PARSER = "572";
+
 function scavengeSlotsFetchedAt() {
+    try {
+        if (localStorage.getItem(SCAVENGE_SLOTS_PARSER_KEY) !== SCAVENGE_SLOTS_PARSER) return 0;
+    } catch (e) { return 0; }
     const raw = localStorage.getItem(SCAVENGE_SLOTS_AT_KEY);
     const n = raw ? (parseInt(raw, 10) || 0) : 0;
     return n > 0 ? n : 0;
@@ -54691,6 +54702,7 @@ function storeScavengeSlots(result, quelle) {
 
     localStorage.setItem("tw_scavenge_slots", JSON.stringify(neu));
     localStorage.setItem(SCAVENGE_SLOTS_AT_KEY, String(now));
+    try { localStorage.setItem(SCAVENGE_SLOTS_PARSER_KEY, SCAVENGE_SLOTS_PARSER); } catch (e) { }
 
     console.log(
         `[TW] Slotdaten (${quelle}): ${ids.length} Dorf/Doerfer aktualisiert` +
@@ -61474,7 +61486,9 @@ if (location.href.includes("mode=scavenge_mass")) {
     function scavengeReloadBeimOeffnen(root) {
         let alter = Infinity;
         try {
-            const at = parseInt(localStorage.getItem("tw_scavenge_slots_at") || "0", 10) || 0;
+            // v573: ueber scavengeSlotsFetchedAt - mit altem Parser
+            // gelesene Daten gelten nicht als frisch.
+            const at = scavengeSlotsFetchedAt();
             if (at) alter = Date.now() - at;
         } catch (e) {
             console.warn("[TW] Raubzug-Fenster: Standzeit nicht lesbar.", e);
