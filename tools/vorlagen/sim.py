@@ -14,9 +14,10 @@ B={ # base cost w,s,i ; factors ; pop base, pop factor ; build base seconds
 'hide':((50,60,50),(1.25,1.25,1.25),2,1.17,1800),
 'wall':((50,100,20),(1.26,1.275,1.26),5,1.17,3600),
 'place':((10,40,30),(1.26,1.275,1.26),0,1,10860),
+'garage':((300,240,260),(1.26,1.28,1.26),8,1.17,6000),
 'snob':((15000,25000,10000),(2,2,2),80,1.17,586994),
 }
-REQ={'barracks':{'main':3},'market':{'main':3,'storage':2},'smith':{'main':5,'barracks':1},'stable':{'main':10,'barracks':5,'smith':5},'wall':{'barracks':1},'snob':{'main':20,'smith':20,'market':10}}
+REQ={'barracks':{'main':3},'market':{'main':3,'storage':2},'smith':{'main':5,'barracks':1},'stable':{'main':10,'barracks':5,'smith':5},'wall':{'barracks':1},'snob':{'main':20,'smith':20,'market':10},'garage':{'main':10,'smith':10}}
 def cost(b,l): base,f,*_=B[b]; return [round(base[k]*f[k]**(l-1)) for k in range(3)]
 def pop(b,l):
     _,_,p,pf,_=B[b]
