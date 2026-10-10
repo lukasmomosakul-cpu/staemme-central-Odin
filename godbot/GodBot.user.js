@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      578
+// @version      579
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -46212,8 +46212,75 @@ function rekrutFehlbestand(seite, soll, einheit) {
 // Investition, und ein Dorf, das seine Kaserne leerkauft, baut nie
 // wieder etwas. Die Kosten stehen im Bauplan des Dorfes, dort abgelegt
 // beim letzten Besuch der Bauseite.
+// === TRUPPEN-VORRANG (v579, 10.10.2026) ================================
+// Fetteruruk: "erst eine gute Grundlage an LKav, danach trotzdem weiter
+// aufbauen bis 200". Umsetzung:
+//  - Gilt fuer jedes Dorf, dessen Truppen-Soll die Einheit enthaelt
+//    (Standard: light). Das Soll selbst (z. B. 200) kommt wie bisher aus
+//    der zugewiesenen Truppenvorlage - die Rekrutierung haelt es ein.
+//  - Bis zum GRUNDSTOCK (Standard 50, hoechstens das Soll) haben Truppen
+//    Vorrang: der Bauautomat baut nur Bauernhof (Bauernhof-Wacht zieht
+//    ihn vor, wenn der Platz knapp wird) und Speicher, ausserdem alles,
+//    wenn ein Rohstoff bei >= 90 % des Speichers steht (nichts laeuft
+//    ueber). Die Rekrutierung haelt dann KEINE Rohstoffe fuer den
+//    naechsten Bauauftrag zurueck.
+//  - Ab dem Grundstock gilt wieder das Bisherige: Bau hat Vorrang, die
+//    Rekrutierung nimmt den Rest - bis zum Soll.
+// Gezaehlt wird "insgesamt" (Dorf + unterwegs) plus die Schleife, belegt
+// von der Rekrutierseite (Anzeige "im Dorf/insgesamt", rekrutSeiteLesen).
+const TRUPPEN_VORRANG_KEY = "tw_truppen_vorrang";
+const TRUPPEN_STAND_KEY = "tw_truppen_stand";
+
+function truppenVorrangCfg() {
+    let c = {};
+    try { c = JSON.parse(localStorage.getItem(TRUPPEN_VORRANG_KEY) || "{}") || {}; } catch (e) { c = {}; }
+    return {
+        an: c.an !== false,
+        einheit: typeof c.einheit === "string" && c.einheit ? c.einheit : "light",
+        grundstock: Math.max(0, parseInt(c.grundstock, 10) || 50)
+    };
+}
+
+function truppenStandMerken(villageId, seite) {
+    if (!seite || !seite.bestand) return;
+    let alle = {};
+    try { alle = JSON.parse(localStorage.getItem(TRUPPEN_STAND_KEY) || "{}") || {}; } catch (e) { alle = {}; }
+    const d = alle[String(villageId)] || {};
+    Object.keys(seite.bestand).forEach(u => {
+        const b = seite.bestand[u];
+        if (!b || typeof b.gesamt !== "number") return;
+        const inSchleife = (seite.schlange || []).filter(o => o.einheit === u)
+            .reduce((n, o) => n + (o.anzahl || 0), 0);
+        d[u] = { gesamt: b.gesamt, schleife: inSchleife, at: Date.now() };
+    });
+    alle[String(villageId)] = d;
+    try { localStorage.setItem(TRUPPEN_STAND_KEY, JSON.stringify(alle)); } catch (e) { }
+}
+
+// null = kein Vorrang fuer dieses Dorf; sonst { aktiv, zahl, grenze, einheit }
+function truppenVorrangLage(villageId) {
+    const cfg = truppenVorrangCfg();
+    if (!cfg.an || !cfg.grundstock) return null;
+    const plan = ladeTruppenPlaene()[String(villageId)];
+    const soll = parseInt(plan && plan.einheiten && plan.einheiten[cfg.einheit], 10) || 0;
+    if (!soll) return null;
+    const grenze = Math.min(cfg.grundstock, soll);
+    let zahl = null;
+    try {
+        const d = (JSON.parse(localStorage.getItem(TRUPPEN_STAND_KEY) || "{}") || {})[String(villageId)];
+        const e = d && d[cfg.einheit];
+        if (e && typeof e.gesamt === "number") zahl = e.gesamt + (e.schleife || 0);
+    } catch (e) { }
+    return { aktiv: zahl === null || zahl < grenze, zahl, grenze, soll, einheit: cfg.einheit };
+}
+
 function rekrutFreieRohstoffe(villageId, res) {
     const frei = { wood: res.wood, stone: res.stone, iron: res.iron };
+    // v579: Truppen-Vorrang bis zum Grundstock - nichts fuer den Bau zurueckhalten.
+    try {
+        const lage = truppenVorrangLage(villageId);
+        if (lage && lage.aktiv) return { frei: frei, reserve: null };
+    } catch (e) { }
     const p = ladeBauPlaene()[String(villageId)];
     const r = p && p.reserve;
     if (!r || !bauLoopAn()) return { frei: frei, reserve: null };
@@ -46485,6 +46552,7 @@ function rekrutGebaeudeBesuchen(villageId, gebaeude, fertig) {
         try {
             seite = rekrutSeiteLesen(iframe.contentWindow, iframe.contentDocument);
             merkeRekrutSchlange(villageId, gebaeude, seite.schlange);
+            try { truppenStandMerken(villageId, seite); } catch (e) { }
             schritt = naechsterRekrutSchritt(villageId, gebaeude, seite, soll);
         } catch (e) {
             console.warn(`[TW] Rekrutierung ${dorf}/${gebaeude}: Auswertung fehlgeschlagen.`, e);
@@ -51744,6 +51812,30 @@ function bauSchrittAusfuehren(win, doc, villageId, callback) {
     }
 
     // v561: Belohnungen laufen unabhaengig vom Bauen (belohnungDauerlauf).
+
+    // v579: Truppen-Vorrang bis zum Grundstock (siehe truppenVorrangLage).
+    if (schritt.art === "bauen" || schritt.art === "vormerken") {
+        let lage = null;
+        try { lage = truppenVorrangLage(villageId); } catch (e) { lage = null; }
+        if (lage && lage.aktiv && schritt.gebaeude !== "farm" && schritt.gebaeude !== "storage") {
+            let voll = false;
+            try {
+                const v = (win && win.game_data && win.game_data.village) || {};
+                const cap = Number(v.storage_max) || 0;
+                voll = cap > 0 && ["wood", "stone", "iron"].some(k => Number(v[k]) >= cap * 0.9);
+            } catch (e) { }
+            if (!voll) {
+                const grund = `Truppen-Vorrang: ${lage.zahl === null ? "?" : lage.zahl}/${lage.grenze} ` +
+                    `${lage.einheit === "light" ? "LKav" : lage.einheit} - ${BAU_NAMEN[schritt.gebaeude] || schritt.gebaeude} wartet ` +
+                    `(nur Bauernhof/Speicher oder bei vollem Speicher).`;
+                console.log(`[TW] Bauen ${dorf}: ${grund}`);
+                merkeBauTermin(villageId, Date.now() + 30 * 60 * 1000, grund);
+                merkeBauErgebnis(villageId, "warten", grund, stand, bauSchleifeRestMs(doc), null);
+                fertig("warten", grund);
+                return;
+            }
+        }
+    }
 
     if (schritt.art !== "bauen") {
         console.log(`[TW] Bauen ${dorf}: ${schritt.art} - ${schritt.grund}`);
