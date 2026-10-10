@@ -4961,6 +4961,14 @@ public class GameWebViewActivity extends Activity {
    return false;}
  @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){
    anfrageZaehlen(r);WebResourceResponse x=odinIntercept(r);return x!=null?x:super.shouldInterceptRequest(v,r);}
+ // 2.0.32: Neuer Seitenaufbau (auch location.reload() mit gleicher Adresse,
+ // z. B. nach "Einstellungen speichern") - die Merkadresse aus
+ // loadEnabledScripts vergessen. Sonst galt die neu geladene Seite als
+ // "schon bedient", GodBot kam nicht hinein und die GodBot-Leiste lief ins
+ // Leere, bis eine andere Spielseite geoeffnet wurde. Ankerwechsel
+ // (Karte) loesen kein onPageStarted aus; doppelt laden verhindert
+ // ausserdem H.__boot in der Seite.
+ @Override public void onPageStarted(WebView v,String u,android.graphics.Bitmap f){ try{ v.setTag(0x0D1A0001,null); v.setTag(0x0D1A0002,null); }catch(Exception ig){} super.onPageStarted(v,u,f); }
  @Override public void onPageFinished(WebView v,String u){injectManagedScripts(v);anmeldenWennNoetig(v);loadEnabledScripts(v);
    // 1.95.15/1.96.0: Spielseite steht - Ladescreen weg, wenn diese Welt
    // gerade angezeigt wird (nicht auf der Anmelde-/Zwischenseite).
