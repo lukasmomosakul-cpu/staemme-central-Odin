@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      577
+// @version      578
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51512,11 +51512,15 @@ function aufgabenDerSeite() {
     return null;
 }
 
+// v578 (Fetteruruk 10.10.): "bei Ares wurden dauerhaft Speere gebaut".
+// Ursache: jede Aufgabe, deren Ziel mit "Rekrutiere" beginnt, galt als
+// Rekrutier-Aufgabe - auch "Stadtwache", "Räuber!" u. a. (Stand de260:
+// 1800, 1810, 1915), die mehr als einen Speer oder andere Einheiten
+// verlangen. Sie wurden nie fertig, also kam alle 30 Min (v576) bzw.
+// 6 Std (v577) wieder ein Speer. Jetzt NUR noch die zwei belegten
+// 1-Einheit-Aufgaben 1205 und 1220 - keine sonstigen Truppen.
 function aufgabeIstRekrut(q) {
-    if (AUFGABE_REKRUT_IDS.indexOf(String(q.id)) >= 0) return true;
-    try {
-        return (q.goals_html || []).some(g => /^Rekrutiere\b/i.test(String(g && g.summary || "")));
-    } catch (e) { return false; }
+    return AUFGABE_REKRUT_IDS.indexOf(String(q && q.id)) >= 0;
 }
 
 // Was ist JETZT zu tun? { art: "abschliessen"|"rekrutieren", q } oder null.
