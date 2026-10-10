@@ -3924,6 +3924,12 @@ public class GameWebViewActivity extends Activity {
   boolean frisch=jetzt-st.optLong("at",0)<30000L;
   for(String[] b:GODBOT_BEREICHE){
    TextView c=godbotChips.get(b[0]); if(c==null)continue;
+   // 2.0.33: im GodBot-Bedienfeld ausgeblendete Bereiche (z. B. Raubzug auf
+   // einer Farmwelt) auch hier ausblenden - dieselbe Einstellung.
+   boolean aus=false;
+   try{ org.json.JSONArray ab=st.optJSONArray("ausgeblendet"); if(ab!=null)for(int ai=0;ai<ab.length();ai++)if(b[0].equals(ab.optString(ai)))aus=true; }catch(Exception ig){}
+   c.setVisibility(aus?android.view.View.GONE:android.view.View.VISIBLE);
+   if(aus)continue;
    String name=b[1]; int punkt=0, grund=0xFF2A3342, rand=0xFF3A4556, schrift=0xFFC9D4E3; String zusatz="";
    boolean istLauf=!b[2].isEmpty()&&b[2].equals(laeuft);
    // Problem wie das rote "!" der Kachel im Spiel (Vorlage fehlt, kein

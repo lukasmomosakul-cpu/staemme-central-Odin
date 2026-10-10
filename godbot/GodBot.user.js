@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      579
+// @version      580
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -62883,6 +62883,15 @@ if (location.href.includes("mode=scavenge_mass")) {
 
     function odinSteuerstand() {
         const out = { schalter: {}, werte: {} };
+        // v580 (Fetteruruk 10.10.): de260 ist Farmwelt ohne Raubzug. Was im
+        // Bedienfeld ausgeblendet ist (Einstellungen > Allgemein >
+        // Bedienfeld, settings.hub.show*), blendet auch die App-Leiste aus.
+        try {
+            const hub = Object.assign({}, DEFAULT_SETTINGS.hub, (loadSettings() || {}).hub || {});
+            out.ausgeblendet = [["showScavenge", "raubzug"], ["showFarm", "farmen"],
+                ["showResources", "rohstoffe"], ["showStats", "statistik"]]
+                .filter(([k]) => hub[k] === false).map(([, b]) => b);
+        } catch (e) { out.ausgeblendet = []; }
         Object.keys(ODIN_SCHALTER).forEach(k => {
             try { out.schalter[k] = !!ODIN_SCHALTER[k].an(); } catch (e) { out.schalter[k] = null; }
         });
