@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      581
+// @version      582
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51747,6 +51747,80 @@ function aufgabeDauerlauf() {
     abschliessen();
 }
 
+// === ZIEL-STAND AUS BERICHTEN (v582, 11.10.2026) ======================
+// Grundlage fuer Karte + Katapult-Markierung (Fetteruruk: "Doerfer mit
+// Verlusten markieren, damit sie mit Katapulten angelaufen werden").
+// BELEGT an Seitenquelle 28 (Spaeherbericht de260, 11.10. 09:25):
+//  - Ziel: #attack_info_def .village_anchor[data-id], Text "(x|y)"
+//  - Gebaeude: <input id="attack_spy_building_data" value="[{name,id,level}]">
+//  - eigene Verluste: #attack_info_att_units, Zeile "Verluste:",
+//    td.unit-item-<einheit>
+//  - Kampfzeit: Zeile "Kampfzeit" -> "11.10.26 04:12:44"
+// Wird beim Oeffnen eines Berichts gelesen - keine zusaetzliche Anfrage.
+const ZIEL_STAND_KEY = "tw_ziel_stand";
+
+function berichtZielLesen(doc) {
+    if (!doc || !doc.querySelector) return null;
+    const anker = doc.querySelector("#attack_info_def .village_anchor[data-id]");
+    if (!anker) return null;
+    const out = { id: String(anker.getAttribute("data-id")), spieler: String(anker.getAttribute("data-player") || "0") };
+    const m = (anker.textContent || "").match(/\((\d{1,3})\|(\d{1,3})\)/);
+    if (m) { out.x = parseInt(m[1], 10); out.y = parseInt(m[2], 10); }
+    try {
+        const inp = doc.querySelector("#attack_spy_building_data");
+        if (inp && inp.value) {
+            const arr = JSON.parse(inp.value);
+            if (Array.isArray(arr)) {
+                out.gebaeude = {};
+                arr.forEach(b => { if (b && b.id) out.gebaeude[b.id] = parseInt(b.level, 10) || 0; });
+            }
+        }
+    } catch (e) { }
+    try {
+        const zeilen = doc.querySelectorAll("#attack_info_att_units tr");
+        zeilen.forEach(tr => {
+            const erste = tr.querySelector("td");
+            if (!erste || !/Verluste/i.test(erste.textContent || "")) return;
+            let summe = 0;
+            tr.querySelectorAll("td.unit-item").forEach(td => { summe += parseInt((td.textContent || "").trim(), 10) || 0; });
+            out.verluste = summe;
+        });
+    } catch (e) { }
+    try {
+        doc.querySelectorAll("tr").forEach(tr => {
+            const tds = tr.querySelectorAll("td");
+            if (tds.length >= 2 && /^\s*Kampfzeit\s*$/.test(tds[0].textContent || "")) {
+                const z = (tds[1].textContent || "").trim().match(/(\d\d)\.(\d\d)\.(\d\d)\s+(\d\d):(\d\d):(\d\d)/);
+                if (z) out.zeit = new Date(2000 + parseInt(z[3], 10), parseInt(z[2], 10) - 1, parseInt(z[1], 10),
+                    parseInt(z[4], 10), parseInt(z[5], 10), parseInt(z[6], 10)).getTime();
+            }
+        });
+    } catch (e) { }
+    return out;
+}
+
+function zielStandMerken(z, berichtId) {
+    if (!z || !z.id) return;
+    let alle = {};
+    try { alle = JSON.parse(localStorage.getItem(ZIEL_STAND_KEY) || "{}") || {}; } catch (e) { alle = {}; }
+    const alt = alle[z.id] || {};
+    // Nur neuere Berichte ueberschreiben (Kampfzeit), Gebaeude nur, wenn
+    // dieser Bericht welche enthaelt.
+    if (alt.zeit && z.zeit && z.zeit < alt.zeit) return;
+    const neu = Object.assign({}, alt, {
+        x: z.x, y: z.y, spieler: z.spieler, zeit: z.zeit || Date.now(), bericht: berichtId || alt.bericht,
+        verluste: typeof z.verluste === "number" ? z.verluste : alt.verluste
+    });
+    if (z.gebaeude) { neu.gebaeude = z.gebaeude; neu.gebaeudeZeit = z.zeit || Date.now(); }
+    alle[z.id] = neu;
+    // Hoechstens 3000 Ziele, aelteste zuerst raus.
+    const ids = Object.keys(alle);
+    if (ids.length > 3000) ids.sort((a, b) => (alle[a].zeit || 0) - (alle[b].zeit || 0)).slice(0, ids.length - 3000).forEach(i => delete alle[i]);
+    try { localStorage.setItem(ZIEL_STAND_KEY, JSON.stringify(alle)); } catch (e) { }
+    const g = z.gebaeude ? Object.keys(z.gebaeude).map(k => `${k} ${z.gebaeude[k]}`).join(", ") : "keine Gebäude im Bericht";
+    console.log(`[TW] Ziel-Stand ${z.x}|${z.y} (${z.id}): Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}, ${g}.`);
+}
+
 function bauSchrittAusfuehren(win, doc, villageId, callback) {
     const fertig = (art, text) => { try { callback(art, text); } catch (e) { } };
     const dorf = getVillageDisplayName(villageId) || villageId;
@@ -57803,6 +57877,14 @@ if (location.href.includes("mode=scavenge_mass")) {
             !location.href.includes("mode=scavenge_mass")
         ) {
             applyPendingAssignment();
+        }
+
+        // v582: Bericht geoeffnet -> Ziel-Stand (Gebaeude, Verluste) merken.
+        if (location.href.includes("screen=report") && /[?&]view=\d+/.test(location.href)) {
+            try {
+                const bid = (location.href.match(/[?&]view=(\d+)/) || [])[1];
+                zielStandMerken(berichtZielLesen(document), bid);
+            } catch (e) { }
         }
 
         if (location.href.includes("screen=am_farm")) {
