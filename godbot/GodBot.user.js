@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      586
+// @version      587
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19503,6 +19503,13 @@ function botMarkerSichtbar() {
         if (!owner && !farmDue && !scavengeDue && !bauLaufAktiv &&
             !automationOnHold() && !rekrutSollAbgeben() && rekrutLaufLesen()) {
             if (rekrutLaufFortsetzen(null)) return;
+        }
+
+        // v587: eigener Rekrutierungslauf - unabhaengig vom Bauautomaten
+        // und vom Bau-Termin (siehe starteRekrutAutoLauf).
+        if (!owner && !farmDue && !scavengeDue && !bauLaufAktiv && !rekrutLaufAktiv &&
+            !automationOnHold() && !rekrutSollAbgeben() && rekrutScanFaellig()) {
+            if (starteRekrutAutoLauf()) return;
         }
 
         // DIE KONTROLLE (30.08.2026)
@@ -43892,8 +43899,13 @@ function rekrutFaelligeDoerfer() {
 function runBauLoop(onFinished) {
     const bauDoerfer = bauFaelligeDoerfer();
     const bauSet = new Set(bauDoerfer.map(String));
-    const doerfer = bauDoerfer.concat(
-        rekrutFaelligeDoerfer().filter(vid => !bauSet.has(String(vid))));
+    // v587 (Fetteruruk 11.10.: "trenn die Gebaeude von der Truppen-
+    // Bauschleife"): Rekrutiert wird im eigenen Lauf (starteRekrutAutoLauf).
+    // Bis v586 nur hier - und ohne faelligen Bauplan lief dieser Durchlauf
+    // gar nicht an. Belegt FetterOrk de260 11.10.: tw_build_plans {} ab
+    // 14:18 UTC, letzte Bau-Runde 14:16, letzte Rekrutierung 16:41, danach
+    // nichts mehr, obwohl der Rekrutiertermin 16:42 faellig war.
+    const doerfer = bauDoerfer.slice();
     let i = 0, gebaut = 0, geprueft = 0;
     let rekrutLaufGesendet = 0, rekrutLaufGeprueft = 0;
 
@@ -43943,17 +43955,9 @@ function runBauLoop(onFinished) {
         // Rekrutieren gehoert zum selben Besuch: es ist dieselbe Frage -
         // was fehlt diesem Dorf noch. Erst bauen, dann rekrutieren, damit
         // die Reserve fuer den Bauauftrag aus demselben Augenblick stammt.
-        const dannRekrutieren = () => {
-            if (!rekrutLoopAn() || rekrutAccountManagerAktiv()) { weiter(); return; }
-            bauFortschrittSetzen(`${bauLaufZaehler} ${bauDorfKurz(vid)}: Truppen`);
-            try { touchProcessLock("bau"); } catch (e) { }
-            rekrutDorfBesuchen(vid, (g, p, botschutz) => {
-                rekrutLaufGesendet += g;
-                rekrutLaufGeprueft += p;
-                if (botschutz) { fertig(); return; }
-                weiter();
-            });
-        };
+        // v587: Truppen laufen getrennt (starteRekrutAutoLauf) - der
+        // Bau-Besuch geht direkt zum naechsten Dorf.
+        const dannRekrutieren = () => { weiter(); };
 
         // Ein Dorf ohne Bauplan steht nur wegen der Truppen auf der
         // Liste. Die Bauseite dafuer zu laden waere ein Abruf fuer eine
@@ -45886,12 +45890,12 @@ function rekrutLaufLesen() {
     } catch (e) { return null; }
 }
 
-function rekrutLaufSchreiben(vids, gesendet, geprueft) {
+function rekrutLaufSchreiben(vids, gesendet, geprueft, auto) {
     try {
         if (!vids || !vids.length) { rekrutLaufLoeschen(); return; }
         localStorage.setItem(REKRUT_LAUF_KEY, JSON.stringify({
             vids: vids.map(String), gesendet: gesendet || 0,
-            geprueft: geprueft || 0, at: Date.now()
+            geprueft: geprueft || 0, auto: !!auto, at: Date.now()
         }));
     } catch (e) { console.warn("[TW] Rekrutierung: Lauf nicht speicherbar.", e); }
 }
@@ -45943,12 +45947,17 @@ function rekrutLaufFortsetzen(fertig) {
     console.log(`[TW] Rekrutierung: ${offen.length} Dorf/Doerfer offen - wird fortgesetzt.`);
     // Sichtbar wie beim Farmen: sonst haelt der Manager minutenlang die
     // Sperre, ohne dass irgendwo steht, dass er ueberhaupt laeuft.
-    try { showToast(`Truppen werden nachbestellt (${gesamt} Dörfer)…`, "ok"); } catch (e) { }
+    // v587: der automatische Lauf kommt alle 10-15 Min - ohne Meldung.
+    if (!lauf.auto) {
+        try { showToast(`Truppen werden nachbestellt (${gesamt} Dörfer)…`, "ok"); } catch (e) { }
+    }
 
     const ende = (grund) => {
         rekrutLaufAktiv = false;
         bauFortschrittSetzen("");
         releaseProcessLock("bau");
+        // v587: naechster eigener Rekrutierungslauf - nie vor der Untergrenze.
+        try { planeNaechstenRekrutScan(); } catch (e) { }
         console.log(`[TW] Rekrutierung beendet (${grund}): ${gesendet} Auftrag/Auftraege ` +
             `aus ${geprueft} Ausbildungsstaette(n).`);
         try { fertig && fertig(gesendet, geprueft, grund); } catch (e) { }
@@ -45959,7 +45968,7 @@ function rekrutLaufFortsetzen(fertig) {
         if (isBotProtectionActive()) {
             console.warn(`[TW] Rekrutierung: Botschutz - ${offen.length} Dorf/Doerfer ` +
                 `bleiben offen, es wird nichts mehr abgerufen.`);
-            rekrutLaufSchreiben(offen, gesendet, geprueft);
+            rekrutLaufSchreiben(offen, gesendet, geprueft, lauf.auto);
             ende("Botschutz");
             return;
         }
@@ -45968,7 +45977,7 @@ function rekrutLaufFortsetzen(fertig) {
         // Dorf haette ein offenes Frame und einen Auftrag in der Luft.
         const abgeben = managerAbbruch ? "Vorrang angefordert" : rekrutSollAbgeben();
         if (abgeben) {
-            rekrutLaufSchreiben(offen, gesendet, geprueft);
+            rekrutLaufSchreiben(offen, gesendet, geprueft, lauf.auto);
             console.log(`[TW] Rekrutierung: abgegeben (${abgeben}) - ` +
                 `${offen.length} Dorf/Doerfer bleiben offen.`);
             ende("abgegeben");
@@ -45981,13 +45990,83 @@ function rekrutLaufFortsetzen(fertig) {
         rekrutDorfBesuchen(vid, (g, p, botschutz) => {
             gesendet += g; geprueft += p;
             offen = offen.slice(1);
-            rekrutLaufSchreiben(offen, gesendet, geprueft);
+            rekrutLaufSchreiben(offen, gesendet, geprueft, lauf.auto);
             if (botschutz) { rekrutLaufLoeschen(); ende("Botschutz"); return; }
             setTimeout(step, humanDelay(1000, 1600));
         });
     };
     step();
     return true;
+}
+
+// v587 - EIGENER REKRUTIERUNGSLAUF, GETRENNT VOM BAUEN
+// ------------------------------------------------------------------
+// Bis v586 lief die Rekrutierung nur im Bau-Durchlauf mit. Der startete
+// nur bei eingeschaltetem Bauautomaten UND mindestens einem faelligen
+// Bauplan - ohne Bauplan wurde also nie rekrutiert, und mit Bauplan nur
+// im Bau-Takt (der Termin "nach Auftrag" wurde ignoriert).
+//
+// Jetzt eigener Takt mit eigener Uhr (tw_next_recruit_scan_at). Der Lauf
+// selbst ist der bewaehrte rekrutLaufFortsetzen(): Liste im Speicher,
+// uebersteht Seitenwechsel, gibt bei Farmen/Raubzug/Rausstellen ab,
+// Botschutz beendet ihn, Sperre "bau" wie bisher.
+//
+// Untergrenze 10-15 Min (zufaellig) zwischen zwei Laeufen, hoechstens
+// 30 Min. Haeufiger bringt nichts: die Menge je Auftrag ist ohnehin durch
+// die Rohstoffe begrenzt (Minimum aus Holz/Lehm/Eisen/Bauernhof), und die
+// Schleife haelt zwei Auftraege. Seltener Abrufe = kleineres Muster
+// (Botschutz-Messung 24.09.).
+const REKRUT_SCAN_KEY = "tw_next_recruit_scan_at";
+const REKRUT_SCAN_MIN_MS = 10 * 60 * 1000;
+const REKRUT_SCAN_MAX_MS = 15 * 60 * 1000;
+const REKRUT_SCAN_OBERGRENZE_MS = 30 * 60 * 1000;
+
+function rekrutScanFaellig() {
+    const raw = localStorage.getItem(REKRUT_SCAN_KEY);
+    const ts = raw ? parseInt(raw, 10) : 0;
+    if (!ts || isNaN(ts)) return true;
+    return ts <= Date.now();
+}
+
+function planeNaechstenRekrutScan() {
+    const jetzt = Date.now();
+    const plaene = ladeTruppenPlaene();
+    const termine = ladeRekrutTermine();
+    let frueheste = 0;
+    Object.keys(plaene).forEach(vid => {
+        const soll = (plaene[vid] && plaene[vid].einheiten) || {};
+        Object.keys(REKRUT_GEBAEUDE).forEach(g => {
+            if (!REKRUT_GEBAEUDE[g].some(u => (parseInt(soll[u], 10) || 0) > 0)) return;
+            const t = termine[String(vid) + ":" + g];
+            const at = (t && t.at) ? t.at : jetzt;
+            if (!frueheste || at < frueheste) frueheste = at;
+        });
+    });
+    const ziel = Math.min(
+        Math.max(frueheste || (jetzt + REKRUT_SCAN_OBERGRENZE_MS),
+            jetzt + humanDelay(REKRUT_SCAN_MIN_MS, REKRUT_SCAN_MAX_MS)),
+        jetzt + REKRUT_SCAN_OBERGRENZE_MS
+    );
+    try { localStorage.setItem(REKRUT_SCAN_KEY, String(Math.round(ziel))); } catch (e) { }
+    return ziel;
+}
+
+// Startet einen Lauf ueber die faelligen Doerfer. false = nichts gestartet.
+function starteRekrutAutoLauf() {
+    if (rekrutLaufAktiv || bauLaufAktiv) return false;
+    // Ein offener Lauf (Seitenwechsel) wird vom Fahrplan fortgesetzt.
+    if (rekrutLaufLesen()) return false;
+    // Account-Manager aktiv -> rekrutFaelligeDoerfer() liefert [] (er
+    // rekrutiert selbst). Dann nur die Uhr setzen.
+    const vids = rekrutFaelligeDoerfer();
+    if (!vids.length) { planeNaechstenRekrutScan(); return false; }
+    if (isBotProtectionActive()) return false;
+    rekrutLaufSchreiben(vids, 0, 0, true);
+    console.log(`[TW] Rekrutierung (eigener Lauf): ${vids.length} Dorf/Doerfer faellig.`);
+    if (rekrutLaufFortsetzen(null)) return true;
+    // Sperre nicht frei - Liste verwerfen, der naechste Takt versucht es neu.
+    rekrutLaufLoeschen();
+    return false;
 }
 
 // 29.08.2026: Der Schalter ist weg. Er hat nichts entschieden, was
@@ -63681,6 +63760,10 @@ if (location.href.includes("mode=scavenge_mass")) {
             istAn: () => {
                 if (bauLoopAn()) return true;
                 try { if (managerLaeuftText()) return true; } catch (e) { }
+                // v587: Rekrutierung laeuft auch ohne Bauautomaten.
+                try {
+                    if (!rekrutAccountManagerAktiv() && Object.keys(ladeTruppenPlaene()).length) return true;
+                } catch (e) { }
                 return false;
             },
             // Der naechste Lauf ist der fruehste aller vier Termine -
