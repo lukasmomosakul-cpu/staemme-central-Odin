@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      580
+// @version      581
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -57731,6 +57731,31 @@ if (location.href.includes("mode=scavenge_mass")) {
                 if (!wasExpectedNavigation) {
                     localStorage.removeItem("tw_scavenge_run_started_at");
                 }
+
+                // v581 (FetterOrk de260, 11.10. 03:03): Der Farm-Neustart
+                // loescht tw_farm_restart_scheduled VOR dem Lauf
+                // (checkDueFarmRestart). Starb der Lauf am Seitenwechsel
+                // (03:03:23 "Seitenwechsel waehrend Farmen", 03:03:26 hier
+                // freigegeben), setzte niemand den Folgetermin wieder -
+                // farmJobDue() und checkDueFarmRestart() verlangen ihn, also
+                // lief nichts mehr an, auch nicht mit "Jetzt" (03:03:32,
+                // 03:04:05), bis von Hand aus- und eingeschaltet wurde.
+                // Jetzt: Farmlauf abgerissen + Schleife an -> neu ansetzen.
+                // Ein Auffuell-Lauf bleibt aussen vor (soll enden).
+                try {
+                    let warFarm = false;
+                    try { warFarm = (JSON.parse(staleLock) || {}).owner === "farm"; } catch (e) { warFarm = /"farm"/.test(String(staleLock)); }
+                    if (warFarm && localStorage.getItem("tw_farm_loop_active") === "1" &&
+                        localStorage.getItem("tw_farm_refill_run") !== "1" &&
+                        localStorage.getItem("tw_farm_restart_scheduled") !== "1") {
+                        localStorage.setItem("tw_farm_restart_scheduled", "1");
+                        const naechst = parseInt(localStorage.getItem("tw_next_farm_burst_at") || "0", 10) || 0;
+                        if (!naechst || naechst > Date.now() + 5 * 60 * 1000) {
+                            localStorage.setItem("tw_next_farm_burst_at", String(Date.now() + 60 * 1000));
+                        }
+                        console.log("[TW] Farmen: Lauf ist am Seitenwechsel abgerissen - neu angesetzt (in ca. 1-2 Min).");
+                    }
+                } catch (e) { }
             }
         }
 
@@ -63321,6 +63346,9 @@ if (location.href.includes("mode=scavenge_mass")) {
 
         try {
             localStorage.setItem(k.zeit, String(Date.now() - 1));
+            // v581: Ohne Folgetermin-Merker greift das Vorziehen beim Farmen
+            // nicht (farmJobDue/checkDueFarmRestart verlangen ihn).
+            if (k.zeit === "tw_next_farm_burst_at") localStorage.setItem("tw_farm_restart_scheduled", "1");
             console.log(`[TW] ${k.name} vorgezogen - naechster Lauf ist ab sofort faellig.`);
             try { showToast(`${k.name} startet gleich.`, "ok"); } catch (e) { }
             return { ok: true, text: `${k.name} ist vorgezogen - startet gleich.` };
