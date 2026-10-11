@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      585
+// @version      586
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -46242,7 +46242,10 @@ function truppenVorrangCfg() {
     return {
         an: c.an !== false,
         einheit: typeof c.einheit === "string" && c.einheit ? c.einheit : "light",
-        grundstock: Math.max(0, parseInt(c.grundstock, 10) || 50)
+        // v586 (Fetteruruk 11.10.): "nimm die Schwelle raus" - Truppen haben
+        // Vorrang bis zum vollen Soll der Truppenvorlage. 0 = bis zum Soll;
+        // eine eigene Schwelle laesst sich weiter ueber tw_truppen_vorrang setzen.
+        grundstock: Math.max(0, parseInt(c.grundstock, 10) || 0)
     };
 }
 
@@ -46265,11 +46268,11 @@ function truppenStandMerken(villageId, seite) {
 // null = kein Vorrang fuer dieses Dorf; sonst { aktiv, zahl, grenze, einheit }
 function truppenVorrangLage(villageId) {
     const cfg = truppenVorrangCfg();
-    if (!cfg.an || !cfg.grundstock) return null;
+    if (!cfg.an) return null;
     const plan = ladeTruppenPlaene()[String(villageId)];
     const soll = parseInt(plan && plan.einheiten && plan.einheiten[cfg.einheit], 10) || 0;
     if (!soll) return null;
-    const grenze = Math.min(cfg.grundstock, soll);
+    const grenze = cfg.grundstock > 0 ? Math.min(cfg.grundstock, soll) : soll;
     let zahl = null;
     try {
         const d = (JSON.parse(localStorage.getItem(TRUPPEN_STAND_KEY) || "{}") || {})[String(villageId)];
