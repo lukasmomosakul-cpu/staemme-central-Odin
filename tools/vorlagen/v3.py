@@ -32,11 +32,16 @@ while any(lv[k]<v for k,v in ziel.items()):
 # Phase C: Katapulte (Standardwerte: Werkstatt braucht HG 10 + Schmiede 10; Katapult Werkstatt 2 + Schmiede 12)
 bis('smith',12); bis('garage',5)
 # Phase D: Adelshof (HG 20, Schmiede 20, Markt 10; Speicher muss 25k Lehm fassen)
-bis('main',20); bis('market',10); bis('smith',20)
-while storecap(lv['storage'])<25000*1.05: bau('storage')
-stuetzen('snob'); bau('snob')
-# AG (Adelsgeschlecht) braucht Platz: Speicher bis 21 (Vorgabe 11.10.)
+# Speicher bis 21 MIT der Adelsphase (Vorgabe 11.10.): HG und Schmiede brauchen
+# hier je viele Stunden, in der Zeit laeuft sonst der Speicher voll. Deshalb nach
+# jeder langen Stufe eine Speicherstufe, bis 21 erreicht ist (Platz fuer das AG).
+lang=[('main',l) for l in range(lv['main']+1,21)]+[('market',l) for l in range(lv['market']+1,11)]+[('smith',l) for l in range(lv['smith']+1,21)]
+for b,l in lang:
+    if lv.get(b,0)>=l: continue
+    stuetzen(b); bau(b)
+    if lv['storage']<21: bau('storage')
 bis('storage',21)
+stuetzen('snob'); bau('snob')
 q3=q1+';'+compress(steps)
 print('Voraussetzungen:',check(q3)); el=endlv(q3); print('Endstufen',el); print(len(parse(q3)),'Auftraege, Laenge',len(q3))
 print(compress(steps))
