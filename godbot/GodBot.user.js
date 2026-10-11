@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      591
+// @version      592
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32258,7 +32258,11 @@ function godFarmLog() {
 function godFarmFaellig() {
     if (!godFarmCfg().an) return false;
     const t = parseInt(localStorage.getItem(GODFARM_NEXT_KEY) || "0", 10) || 0;
-    return t <= Date.now();
+    if (t > Date.now()) return false;
+    // v592: nie zwei Laeufe binnen 60 s (mehrfach "jetzt" gedrueckt) - der
+    // zweite fand im Protokoll 11.10. 23:45:22 nur laufende Angriffe vor.
+    const s = godFarmStand();
+    return !(s && s.at && Date.now() - s.at < 60 * 1000);
 }
 
 function godFarmPlaneNaechsten(minuten) {
@@ -32577,6 +32581,7 @@ function godFarmUiBinden(content) {
         .forEach(id => q(id).addEventListener("change", speichern));
     q("tw-godfarm-jetzt").onclick = () => {
         if (!godFarmCfg().an) { q("tw-godfarm-an").checked = true; speichern(); }
+        console.log("[TW] GodBot-Farm: \"jetzt ein Lauf\" gedrueckt - startet beim naechsten Takt.");
         try { localStorage.setItem(GODFARM_NEXT_KEY, "0"); } catch (e) { }
         try { showToast("GodBot-Farm startet beim nächsten Takt", "ok"); } catch (e) { }
         godFarmUiStand(q("tw-godfarm-stand"));
@@ -52630,7 +52635,7 @@ function openOdinKarte() {
         <div id="tw-karte-legende" style="position:absolute;left:8px;bottom:8px;font-size:11px;background:rgba(0,0,0,.5);padding:3px 6px;border-radius:4px;pointer-events:none;"></div>
         <div id="tw-karte-status" style="position:absolute;right:8px;top:8px;font-size:11px;color:#b8c2a8;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:4px;"></div>
       </div>
-      <div id="tw-karte-info" style="padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:#1f2a1c;border-top:1px solid #3a4a33;min-height:64px;"></div>`;
+      <div id="tw-karte-info" style="flex:none;box-sizing:border-box;height:calc(108px + env(safe-area-inset-bottom, 0px));overflow:hidden;padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:#1f2a1c;border-top:1px solid #3a4a33;"></div>`;
     root.querySelectorAll("button").forEach(b => {
         b.style.borderRadius = "6px"; b.style.border = "1px solid #4a5a42"; b.style.background = "#2a3826"; b.style.color = "#e8e2d0";
     });
@@ -52784,7 +52789,7 @@ function openOdinKarte() {
             const alter = z.zeit ? Math.round((Date.now() - z.zeit) / 3600000) : null;
             const markiert = !(z.quittiert && z.quittiert >= (z.zeit || 0)) &&
                 (z.verluste > 0 || (g.wall || 0) > 0 || (g.barracks || 0) > 0);
-            zeile2 = `<div style="margin-top:3px;color:#d6c9a3;">Letzter Bericht${alter !== null ? ` vor ${alter} Std.` : ""}: ` +
+            zeile2 = `<div style="margin-top:3px;color:#d6c9a3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Letzter Bericht${alter !== null ? ` vor ${alter} Std.` : ""}: ` +
                 `Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}` +
                 (z.gebaeude ? ` · Wall ${g.wall || 0} · Kaserne ${g.barracks || 0}` : "") +
                 (markiert ? ` <button data-k="quitt" style="margin-left:6px;padding:1px 7px;border-radius:5px;border:1px solid #6a5a32;background:#3a3020;color:#f0dca8;">Markierung entfernen</button>` : "") +
@@ -52793,12 +52798,14 @@ function openOdinKarte() {
         const farmer = farmIdx.proDorf[d.id];
         if (farmer && farmer.length) {
             const jetztS = Math.floor(Date.now() / 1000);
-            zeile2 += `<div style="margin-top:3px;">Farmt: ` + farmer.map(f =>
+            // v592: eine Zeile, Ueberlaenge abgeschnitten - das Infofeld hat
+            // eine feste Hoehe, damit die Karte nicht springt.
+            zeile2 += `<div style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Farmt: ` + farmer.map(f =>
                 `<span style="color:${f.farbe};">●</span> ${String(f.name).replace(/</g, "&lt;")}` +
                 ` (vor ${Math.max(0, Math.round((jetztS - f.zuletzt) / 3600))} Std.)`).join(", ") + `</div>`;
         }
         const vid = gd.village && gd.village.id;
-        infoEl.innerHTML = `<div><b>${(d.name || "Barbarendorf").replace(/</g, "&lt;")}</b> (${d.x}|${d.y}) · ${d.punkte} P. · ${String(wer).replace(/</g, "&lt;")} · ${dist} Felder</div>${zeile2}
+        infoEl.innerHTML = `<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><b>${(d.name || "Barbarendorf").replace(/</g, "&lt;")}</b> (${d.x}|${d.y}) · ${d.punkte} P. · ${String(wer).replace(/</g, "&lt;")} · ${dist} Felder</div>${zeile2}
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
             <a href="/game.php?village=${vid}&screen=info_village&id=${encodeURIComponent(d.id)}" style="color:#9fd18b;">Dorfinfo</a>
             <a href="/game.php?village=${vid}&screen=place&target=${encodeURIComponent(d.id)}" style="color:#9fd18b;">Versammlungsplatz</a>
