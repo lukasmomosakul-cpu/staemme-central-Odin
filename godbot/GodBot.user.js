@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      588
+// @version      589
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51990,10 +51990,124 @@ function zielStandMerken(z, berichtId) {
 // Abrufe nur, wenn die Karte offen ist und ein Bereich fehlt (je Anfrage
 // hoechstens 4 Bereiche, 10 Min. gemerkt) - wie beim Verschieben im Spiel.
 const KARTE_SEKTOR = 20;
-const KARTE_FRISCH_MS = 10 * 60 * 1000;
+// v589: 30 statt 10 Min - Doerfer wechseln selten den Besitzer. Gezeigt
+// wird der gespeicherte Stand sofort, nachgeladen nur, was aelter ist.
+const KARTE_FRISCH_MS = 30 * 60 * 1000;
 const karteSektoren = {};      // "sx_sy" -> { at, doerfer: [] }
 const kartePlayer = {};        // id -> [name, punkte, stamm]
 let karteLaedt = false;
+
+// v589: Zwischenspeicher je Welt im localStorage. Bisher lag er nur im
+// Speicher der Seite - in der App laedt die Seite oft neu (Protokoll
+// 11.10.: 50x "geladen" in rund einer Stunde), also kam jede geoeffnete
+// Karte ohne Daten und mit 2-3 Abrufen. Praefix bewusst NICHT tw_: der
+// Odin-Abgleich laedt nur tw_/godbot_/gb_ hoch, das hier bleibt am Geraet.
+const KARTE_CACHE_PREFIX = "odinkarte_cache_";
+const KARTE_CACHE_MAX_SEKTOREN = 150;
+let karteCacheWelt = null;
+let karteCacheTimer = null;
+
+function karteCacheLaden(welt) {
+    if (!welt || karteCacheWelt === welt) return;
+    karteCacheWelt = welt;
+    try {
+        const d = JSON.parse(localStorage.getItem(KARTE_CACHE_PREFIX + welt) || "null");
+        if (!d || d.v !== 1 || !d.s) return;
+        Object.keys(d.s).forEach(k => {
+            if (karteSektoren[k] && karteSektoren[k].at >= d.s[k].at) return;
+            karteSektoren[k] = {
+                at: d.s[k].at,
+                doerfer: (d.s[k].d || []).map(a => ({
+                    id: String(a[0]), x: a[1], y: a[2], name: a[3] === null ? null : String(a[3]),
+                    punkte: a[4] || 0, besitzer: String(a[5] || "0")
+                }))
+            };
+        });
+        Object.keys(d.p || {}).forEach(pid => { if (!kartePlayer[pid]) kartePlayer[pid] = d.p[pid]; });
+    } catch (e) { }
+}
+
+function karteCacheSpeichern(welt) {
+    if (!welt) return;
+    clearTimeout(karteCacheTimer);
+    karteCacheTimer = setTimeout(() => {
+        try {
+            const keys = Object.keys(karteSektoren)
+                .sort((a, b) => karteSektoren[b].at - karteSektoren[a].at)
+                .slice(0, KARTE_CACHE_MAX_SEKTOREN);
+            const s = {}, pids = new Set();
+            keys.forEach(k => {
+                s[k] = { at: karteSektoren[k].at, d: karteSektoren[k].doerfer.map(o => {
+                    if (o.besitzer !== "0") pids.add(o.besitzer);
+                    return [o.id, o.x, o.y, o.name, o.punkte, o.besitzer];
+                }) };
+            });
+            const p = {};
+            pids.forEach(pid => { if (kartePlayer[pid]) p[pid] = kartePlayer[pid]; });
+            localStorage.setItem(KARTE_CACHE_PREFIX + welt, JSON.stringify({ v: 1, s, p }));
+        } catch (e) {
+            // Speicher voll: lieber ohne Zwischenspeicher als mit Fehler.
+            try { localStorage.removeItem(KARTE_CACHE_PREFIX + welt); } catch (e2) { }
+        }
+    }, 1000);
+}
+
+// v589: Farmgebiete der Teamkonten. Die App (bzw. Odin PC) liest dazu
+// tw_farm_gebiet aller Konten des Teams aus godbot_settings und ruft
+// TW_H.farmGebiete(zeilen) auf - asynchron, Netz nur zu Supabase, KEIN
+// Abruf beim Spielserver. Ohne App (Spiegel im Browser): nur das eigene.
+let karteTeamGebiete = null;   // [{ name, konto, z: { id: [x,y,sek] } }]
+let karteTeamAt = 0;
+let karteNeuZeichnen = null;
+
+function farmGebieteEmpfangen(zeilen) {
+    try {
+        const welt = (typeof game_data !== "undefined" && game_data.world) || "";
+        const out = [];
+        (Array.isArray(zeilen) ? zeilen : []).forEach(r => {
+            const ga = r && r.game_accounts;
+            if (!ga || String(ga.world || "") !== welt) return;
+            let g = null;
+            try { g = JSON.parse(r.value); } catch (e) { }
+            if (!g || !g.z) return;
+            out.push({ name: String(ga.name || "?"), konto: String(r.account_id || ""), z: g.z });
+        });
+        karteTeamGebiete = out;
+        karteTeamAt = Date.now();
+        if (karteNeuZeichnen) karteNeuZeichnen();
+    } catch (e) { console.warn("[TW] Karte: Farmgebiete nicht lesbar.", e); }
+}
+try { TW_H.farmGebiete = farmGebieteEmpfangen; } catch (e) { }
+
+function karteTeamGebieteAnfordern() {
+    if (Date.now() - karteTeamAt < 5 * 60 * 1000 && karteTeamGebiete) return;
+    try { if (odin && typeof odin.farmGebiete === "function") odin.farmGebiete(); } catch (e) { }
+}
+
+// Konten mit Farbe; das eigene Konto kommt bei fehlendem Abgleich aus dem
+// oertlichen Speicher. Je Dorf: Liste der farmenden Konten.
+const KARTE_FARM_FARBEN = ["#3ee07a", "#c77dff", "#ff8fab", "#4dd0e1", "#ffb74d", "#f06292", "#aed581", "#90a4ae"];
+function karteFarmIndex() {
+    const gd = (typeof game_data !== "undefined") ? game_data : {};
+    const ichName = String(gd.player && gd.player.name || "");
+    const konten = (karteTeamGebiete || []).slice();
+    if (!konten.some(k => k.name.toLowerCase() === ichName.toLowerCase())) {
+        const eigen = farmGebietLaden();
+        if (Object.keys(eigen.z).length) konten.push({ name: ichName || "ich", konto: "", z: eigen.z });
+    }
+    konten.sort((a, b) => a.name.localeCompare(b.name));
+    const proDorf = {};
+    const jetzt = Math.floor(Date.now() / 1000);
+    konten.forEach((k, i) => {
+        k.farbe = KARTE_FARM_FARBEN[i % KARTE_FARM_FARBEN.length];
+        Object.keys(k.z).forEach(id => {
+            const e = k.z[id];
+            if (!Array.isArray(e) || jetzt - (e[2] || 0) > FARM_GEBIET_MAX_ALTER_S) return;
+            (proDorf[id] = proDorf[id] || []).push({ name: k.name, farbe: k.farbe, zuletzt: e[2] });
+        });
+    });
+    return { konten, proDorf };
+}
 
 function karteSektorAbruf(schluessel, cb) {
     const loc = (typeof game_data !== "undefined" && game_data.locale) || "de_DE";
@@ -52016,6 +52130,7 @@ function karteSektorAbruf(schluessel, cb) {
             }
             arr.forEach(s => karteSektorUebernehmen(s));
             schluessel.forEach(k => { if (!karteSektoren[k]) karteSektoren[k] = { at: Date.now(), doerfer: [] }; });
+            try { karteCacheSpeichern(game_data.world); } catch (e) { }
             cb(true);
         })
         .catch(() => cb(false));
@@ -52070,6 +52185,10 @@ function openOdinKarte() {
     let cx = ansicht && ansicht.welt === gd.world ? ansicht.cx : ich.x + 0.5;
     let cy = ansicht && ansicht.welt === gd.world ? ansicht.cy : ich.y + 0.5;
     let massstab = ansicht && ansicht.welt === gd.world ? ansicht.m : (klein ? 14 : 18);
+    let farmZeigen = !(ansicht && ansicht.farm === false);
+    try { karteCacheLaden(gd.world); } catch (e) { }
+    karteTeamGebieteAnfordern();
+    let farmIdx = karteFarmIndex();
 
     const root = document.createElement("div");
     root.id = "tw-odin-karte";
@@ -52081,6 +52200,7 @@ function openOdinKarte() {
         <input id="tw-karte-ziel" placeholder="456764" inputmode="numeric" enterkeyhint="go" style="width:84px;padding:5px 6px;border-radius:6px;border:1px solid #4a5a42;background:#10150e;color:#e8e2d0;">
         <button data-k="hin" style="padding:5px 9px;">Los</button>
         <button data-k="heim" title="Zum eigenen Dorf" style="padding:5px 9px;">📍</button>
+        <button data-k="farm" title="Farmgebiete der Odin-Konten ein/aus" style="padding:5px 9px;">🌾</button>
         <span style="flex:1"></span>
         <button data-k="minus" style="padding:5px 11px;">−</button>
         <button data-k="plus" style="padding:5px 11px;">+</button>
@@ -52092,6 +52212,7 @@ function openOdinKarte() {
           <div style="position:absolute;left:12px;top:0;width:2px;height:26px;background:rgba(255,255,255,.85);"></div>
           <div style="position:absolute;top:12px;left:0;height:2px;width:26px;background:rgba(255,255,255,.85);"></div>
         </div>
+        <div id="tw-karte-legende" style="position:absolute;left:8px;bottom:8px;font-size:11px;background:rgba(0,0,0,.5);padding:3px 6px;border-radius:4px;pointer-events:none;"></div>
         <div id="tw-karte-status" style="position:absolute;right:8px;top:8px;font-size:11px;color:#b8c2a8;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:4px;"></div>
       </div>
       <div id="tw-karte-info" style="padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:#1f2a1c;border-top:1px solid #3a4a33;min-height:64px;"></div>`;
@@ -52104,11 +52225,13 @@ function openOdinKarte() {
     const ctx = canvas.getContext("2d");
     const infoEl = root.querySelector("#tw-karte-info");
     const statusEl = root.querySelector("#tw-karte-status");
+    const legendeEl = root.querySelector("#tw-karte-legende");
+    let infoDorf = null;
     let zielStand = {};
     try { zielStand = JSON.parse(localStorage.getItem("tw_ziel_stand") || "{}") || {}; } catch (e) { }
 
     function merken() {
-        try { localStorage.setItem("tw_karte_ansicht", JSON.stringify({ welt: gd.world, cx, cy, m: massstab })); } catch (e) { }
+        try { localStorage.setItem("tw_karte_ansicht", JSON.stringify({ welt: gd.world, cx, cy, m: massstab, farm: farmZeigen })); } catch (e) { }
     }
     function groesse() {
         const r = canvas.getBoundingClientRect();
@@ -52139,6 +52262,9 @@ function openOdinKarte() {
             const fehlend = sichtbareSektoren().filter(k => !karteSektoren[k] || Date.now() - karteSektoren[k].at > KARTE_FRISCH_MS);
             if (!fehlend.length) { statusEl.textContent = ""; return; }
             if (fehlend.length > 24) { statusEl.textContent = "näher heranzoomen zum Laden"; return; }
+            // v589: Mitte zuerst - was im Fadenkreuz liegt, ist sofort da.
+            const mitte = (k) => { const [sx, sy] = k.split("_").map(Number); return Math.hypot(sx + KARTE_SEKTOR / 2 - cx, sy + KARTE_SEKTOR / 2 - cy); };
+            fehlend.sort((a, b) => mitte(a) - mitte(b));
             karteLaedt = true;
             statusEl.textContent = "lädt …";
             const teil = fehlend.slice(0, 4);
@@ -52146,9 +52272,11 @@ function openOdinKarte() {
                 karteLaedt = false;
                 statusEl.textContent = ok ? "" : "Laden fehlgeschlagen";
                 zeichnen();
-                if (ok && fehlend.length > 4) setTimeout(nachladen, 700 + Math.random() * 500);
+                // v589: 0,3-0,5 s statt 0,7-1,2 s zwischen zwei Abrufen, und
+                // weiter auch dann, wenn waehrend des Ladens verschoben wurde.
+                if (ok) setTimeout(nachladen, 300 + Math.random() * 200);
             });
-        }, 350);
+        }, 200);
     }
 
     function farbe(d) {
@@ -52191,10 +52319,23 @@ function openOdinKarte() {
                 ctx.fillStyle = farbe(d);
                 ctx.fillRect(px - gr / 2, py - gr / 2, gr, gr);
                 const z = zielStand[d.id];
-                if (z) {
+                // v589: "Markierung entfernen" quittiert den Bericht; ein
+                // NEUERER Bericht mit Verlusten markiert wieder.
+                if (z && !(z.quittiert && z.quittiert >= (z.zeit || 0))) {
                     const g = z.gebaeude || {};
                     if (z.verluste > 0) { ctx.strokeStyle = "#ff3b30"; ctx.lineWidth = Math.max(1.5, gr * 0.16); ctx.strokeRect(px - gr / 2 - 1, py - gr / 2 - 1, gr + 2, gr + 2); }
                     else if ((g.wall || 0) > 0 || (g.barracks || 0) > 0) { ctx.strokeStyle = "#ff9f0a"; ctx.lineWidth = Math.max(1.5, gr * 0.14); ctx.strokeRect(px - gr / 2 - 1, py - gr / 2 - 1, gr + 2, gr + 2); }
+                }
+                // v589: Farmgebiete - je farmendem Konto ein Punkt im Dorf.
+                const farmer = farmZeigen ? farmIdx.proDorf[d.id] : null;
+                if (farmer && gr >= 4) {
+                    const r = Math.max(1.5, gr * 0.17);
+                    farmer.slice(0, 3).forEach((f, i) => {
+                        ctx.fillStyle = f.farbe;
+                        ctx.beginPath();
+                        ctx.arc(px - gr / 2 + r + 1 + i * (r * 2 + 1), py + gr / 2 - r - 1, r, 0, Math.PI * 2);
+                        ctx.fill();
+                    });
                 }
                 if (massstab >= 26 && d.punkte) {
                     ctx.fillStyle = "rgba(0,0,0,.75)"; ctx.font = `${Math.round(massstab * 0.28)}px system-ui,sans-serif`;
@@ -52202,11 +52343,20 @@ function openOdinKarte() {
                 }
             });
         });
+        legendeZeigen();
         infoZeigen();
+    }
+
+    function legendeZeigen() {
+        if (!farmZeigen || !farmIdx.konten.length) { legendeEl.style.display = "none"; return; }
+        legendeEl.style.display = "";
+        legendeEl.innerHTML = farmIdx.konten.map(k =>
+            `<span style="color:${k.farbe};">●</span> ${String(k.name).replace(/</g, "&lt;")} (${Object.keys(k.z).length})`).join(" &nbsp; ");
     }
 
     function infoZeigen() {
         const d = dorfUnterKreuz();
+        infoDorf = d;
         const fx = Math.floor(cx), fy = Math.floor(cy);
         if (!d) { infoEl.innerHTML = `<div style="color:#9aa58c;">${fx}|${fy} - kein Dorf</div>`; return; }
         const p = kartePlayer[d.besitzer];
@@ -52217,9 +52367,20 @@ function openOdinKarte() {
         if (z) {
             const g = z.gebaeude || {};
             const alter = z.zeit ? Math.round((Date.now() - z.zeit) / 3600000) : null;
+            const markiert = !(z.quittiert && z.quittiert >= (z.zeit || 0)) &&
+                (z.verluste > 0 || (g.wall || 0) > 0 || (g.barracks || 0) > 0);
             zeile2 = `<div style="margin-top:3px;color:#d6c9a3;">Letzter Bericht${alter !== null ? ` vor ${alter} Std.` : ""}: ` +
                 `Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}` +
-                (z.gebaeude ? ` · Wall ${g.wall || 0} · Kaserne ${g.barracks || 0}` : "") + `</div>`;
+                (z.gebaeude ? ` · Wall ${g.wall || 0} · Kaserne ${g.barracks || 0}` : "") +
+                (markiert ? ` <button data-k="quitt" style="margin-left:6px;padding:1px 7px;border-radius:5px;border:1px solid #6a5a32;background:#3a3020;color:#f0dca8;">Markierung entfernen</button>` : "") +
+                `</div>`;
+        }
+        const farmer = farmIdx.proDorf[d.id];
+        if (farmer && farmer.length) {
+            const jetztS = Math.floor(Date.now() / 1000);
+            zeile2 += `<div style="margin-top:3px;">Farmt: ` + farmer.map(f =>
+                `<span style="color:${f.farbe};">●</span> ${String(f.name).replace(/</g, "&lt;")}` +
+                ` (vor ${Math.max(0, Math.round((jetztS - f.zuletzt) / 3600))} Std.)`).join(", ") + `</div>`;
         }
         const vid = gd.village && gd.village.id;
         infoEl.innerHTML = `<div><b>${(d.name || "Barbarendorf").replace(/</g, "&lt;")}</b> (${d.x}|${d.y}) · ${d.punkte} P. · ${String(wer).replace(/</g, "&lt;")} · ${dist} Felder</div>${zeile2}
@@ -52286,6 +52447,20 @@ function openOdinKarte() {
         if (k === "plus") massstab = Math.min(64, massstab * 1.4);
         if (k === "minus") massstab = Math.max(1.5, massstab / 1.4);
         if (k === "heim") { cx = ich.x + 0.5; cy = ich.y + 0.5; }
+        if (k === "farm") { farmZeigen = !farmZeigen; if (farmZeigen) karteTeamGebieteAnfordern(); }
+        if (k === "quitt" && infoDorf) {
+            // Frisch lesen und nur diesen Eintrag aendern - der Speicher
+            // kann seit dem Oeffnen durch einen gelesenen Bericht gewachsen sein.
+            try {
+                const alle = JSON.parse(localStorage.getItem(ZIEL_STAND_KEY) || "{}") || {};
+                const e = alle[infoDorf.id];
+                if (e) {
+                    e.quittiert = e.zeit || Date.now();
+                    localStorage.setItem(ZIEL_STAND_KEY, JSON.stringify(alle));
+                    zielStand = alle;
+                }
+            } catch (e) { }
+        }
         if (k === "hin") {
             const z = karteKoordLesen(root.querySelector("#tw-karte-ziel").value);
             if (z) { cx = z.x + 0.5; cy = z.y + 0.5; }
@@ -52299,6 +52474,8 @@ function openOdinKarte() {
     });
     const beiGroesse = () => { if (!document.body.contains(root)) return; rect = groesse(); zeichnen(); nachladen(); };
     window.addEventListener("resize", beiGroesse);
+    // v589: Teamgebiete kommen asynchron - dann neu zeichnen.
+    karteNeuZeichnen = () => { if (!document.body.contains(root)) { karteNeuZeichnen = null; return; } farmIdx = karteFarmIndex(); zeichnen(); };
     zeichnen();
     nachladen();
 }
@@ -55926,6 +56103,9 @@ function snapshotFarmGodPlan() {
 
     if (!eintraege.length) return null;
 
+    // v589: Farmgebiet (welche Doerfer dieses Konto abfarmt) fuer die Karte.
+    try { farmGebietMerken(eintraege); } catch (e) { }
+
     const fortschritt = readFarmGodProgress();
     const plan = {
         at: Date.now(),
@@ -55954,6 +56134,51 @@ function snapshotFarmGodPlan() {
         console.warn("[TW] FarmGod-Plan liess sich nicht sichern.", e);
     }
     return plan;
+}
+
+// === FARMGEBIET (v589, 11.10.2026) =====================================
+// Fetteruruk: "zu den in Odin eingetragenen Accounts anzeigen, welche
+// Doerfer sie mit FarmGod abfarmen". Ein FarmGod-Plan nennt nur die Ziele
+// des LAUFENDEN Durchgangs (belegt: targetId + targetLabel "552|549",
+// tw_farmgod_plan Ares20/FetterOrk de260). Ueber die Durchgaenge gesammelt
+// ergibt das das Farmgebiet. Format kompakt: { v:1, z:{ id:[x,y,zuletztSek] } }.
+// Geschrieben wird nur bei neuem Ziel oder wenn "zuletzt" aelter als 1 Std.
+// ist - sonst gaelte der Schluessel dem Abgleich als Laufzeitwert.
+// Ziele, die 7 Tage nicht mehr vorkamen, fallen raus; hoechstens 1500.
+const FARM_GEBIET_KEY = "tw_farm_gebiet";
+const FARM_GEBIET_MAX_ALTER_S = 7 * 24 * 3600;
+
+function farmGebietLaden() {
+    try {
+        const d = JSON.parse(localStorage.getItem(FARM_GEBIET_KEY) || "null");
+        return (d && d.z && typeof d.z === "object") ? d : { v: 1, z: {} };
+    } catch (e) { return { v: 1, z: {} }; }
+}
+
+function farmGebietMerken(eintraege) {
+    const jetzt = Math.floor(Date.now() / 1000);
+    const g = farmGebietLaden();
+    let geaendert = false;
+    (eintraege || []).forEach(e => {
+        const id = String(e && e.targetId || "");
+        const m = String(e && e.targetLabel || "").match(/(\d{1,3})\|(\d{1,3})/);
+        if (!id || !m) return;
+        const alt = g.z[id];
+        if (!alt || jetzt - (alt[2] || 0) > 3600) {
+            g.z[id] = [parseInt(m[1], 10), parseInt(m[2], 10), jetzt];
+            geaendert = true;
+        }
+    });
+    Object.keys(g.z).forEach(id => {
+        if (jetzt - (g.z[id][2] || 0) > FARM_GEBIET_MAX_ALTER_S) { delete g.z[id]; geaendert = true; }
+    });
+    const ids = Object.keys(g.z);
+    if (ids.length > 1500) {
+        ids.sort((a, b) => g.z[a][2] - g.z[b][2]).slice(0, ids.length - 1500).forEach(id => delete g.z[id]);
+        geaendert = true;
+    }
+    if (!geaendert) return;
+    try { localStorage.setItem(FARM_GEBIET_KEY, JSON.stringify(g)); } catch (e) { }
 }
 
 function loadFarmGodPlan() {

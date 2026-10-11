@@ -75,7 +75,10 @@ js = r"""
   lebt:function(){try{N.lebt();}catch(e){}},
   protokoll:function(t){try{N.status(String(t));}catch(e){}},
   // GodBot-Leiste der Spielansicht (nativ). Nur oertlich, keine Netzanfrage.
-  stand:function(j){try{N.steuerstand(String(j));}catch(e){}}};
+  stand:function(j){try{N.steuerstand(String(j));}catch(e){}},
+  // 2.0.43: Farmgebiete aller Teamkonten (tw_farm_gebiet) fuer die GodBot-Karte.
+  // Nur Supabase, kein Spielserver. Antwort asynchron an H.farmGebiete(zeilen).
+  farmGebiete:function(){try{if(N.farmGebieteAbrufen){N.farmGebieteAbrufen();return true;}}catch(e){}return false;}};
  // --- Downloads ------------------------------------------------------------
  // GodBot speichert Protokolle ueber einen Blob und einen <a download>-Klick.
  // In Firefox geht das, in einer WebView passiert nichts: blob:-Adressen

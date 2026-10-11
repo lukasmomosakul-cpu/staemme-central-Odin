@@ -5887,6 +5887,24 @@ public class GameWebViewActivity extends Activity {
     }catch(Exception e){ setStatus("Befehl bestätigen fehlgeschlagen: "+e.getMessage()); }
    }).start();
   }
+  // 2.0.43: Farmgebiete der Teamkonten fuer die GodBot-Karte. Liest
+  // tw_farm_gebiet aller Konten des eigenen Teams (RLS: is_team_member)
+  // samt Kontoname/Welt. Wie befehleAbrufen nicht blockierend, Antwort per
+  // evaluateJavascript an H.farmGebiete. Kein Abruf beim Spielserver.
+  @JavascriptInterface public void farmGebieteAbrufen(){
+   if(!syncReady()||supaTeam==null||supaTeam.isEmpty())return;
+   new Thread(()->{
+    try{
+     String q="godbot_settings?select=account_id,value,updated_at,game_accounts(name,world)&skey=eq.tw_farm_gebiet&team_id=eq."
+       +java.net.URLEncoder.encode(supaTeam,"UTF-8");
+     String json=supaRequest("GET",q,null);
+     if(json==null)return; json=json.trim();
+     if(!json.startsWith("["))return;
+     final String js="(function(){try{var S=window[Symbol.for('tw:k')];if(S&&S.farmGebiete)S.farmGebiete("+json+")}catch(e){}})()";
+     runOnUiThread(()->{ try{ if(webView!=null)webView.evaluateJavascript(js,null); }catch(Exception ignored){} });
+    }catch(Exception ignored){}
+   }).start();
+  }
   // 2.0.21: Spiel-Adressen ueber den Weg dieses Kontos (OdinProxy.abrufen),
   // nicht mehr direkt ueber die Geraete-IP.
   @JavascriptInterface public String httpGet(String u){try{OdinProxy.Antwort a=OdinProxy.abrufen(gameAccountId,u);if(a.code<200||a.code>=400)throw new IOException("HTTP "+a.code);return new String(a.daten,"UTF-8");}catch(Exception e){throw new RuntimeException(e);}}

@@ -735,6 +735,13 @@ var OdinNative = {
             .then(function (a) { try{var S=window[Symbol.for('tw:k')]; if (a && a.length && S && S.befehle) S.befehle(a);}catch(e){} })
             .catch(function () { });
     },
+    // 589.1 / App 2.0.43: Farmgebiete der Teamkonten fuer die GodBot-Karte.
+    farmGebieteAbrufen: function () {
+        if (!OdinNative.syncReady()) return;
+        rest('GET', 'godbot_settings?select=account_id,value,updated_at,game_accounts(name,world)&skey=eq.tw_farm_gebiet&team_id=eq.' + encodeURIComponent(Z.team))
+            .then(function (a) { try { var S = window[Symbol.for('tw:k')]; if (a && S && S.farmGebiete) S.farmGebiete(a); } catch (e) { } })
+            .catch(function () { });
+    },
     befehlErledigt: function (id, ok, erg) {
         rpc('godbot_befehl_erledigt', { p_id: Number(id), p_ok: !!ok, p_ergebnis: erg == null ? '' : String(erg) })
             .then(function () { status('App-Befehl ' + (ok ? 'übernommen' : 'nicht übernommen') + ': ' + (erg || ''), ok ? 'info' : 'WICHTIG'); })
