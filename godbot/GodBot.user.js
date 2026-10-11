@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      584
+// @version      585
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51934,6 +51934,18 @@ function karteSektorUebernehmen(s) {
     karteSektoren[s.x + "_" + s.y] = { at: Date.now(), doerfer };
 }
 
+// v585 (Fetteruruk 11.10.): Am Handy zeigt das Feld nur Ziffern, ein "|"
+// laesst sich nicht tippen. Erlaubt: "456764" (6 Ziffern = 3+3), dazu wie
+// bisher alles mit Trenner ("456|764", "456 764", "456,764").
+function karteKoordLesen(text) {
+    const t = String(text || "").trim();
+    let m = t.match(/^(\d{1,3})\D+(\d{1,3})$/);
+    if (!m) m = t.match(/^(\d{3})(\d{3})$/);
+    if (!m) return null;
+    const x = parseInt(m[1], 10), y = parseInt(m[2], 10);
+    return (x >= 0 && x < 1000 && y >= 0 && y < 1000) ? { x, y } : null;
+}
+
 function openOdinKarte() {
     const alt = document.getElementById("tw-odin-karte");
     if (alt) { alt.remove(); return; }
@@ -51954,7 +51966,7 @@ function openOdinKarte() {
     root.innerHTML = `
       <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;padding-top:max(6px,env(safe-area-inset-top));background:#1f2a1c;border-bottom:1px solid #3a4a33;">
         <b style="flex:none;">Karte</b>
-        <input id="tw-karte-ziel" placeholder="x|y" inputmode="numeric" style="width:84px;padding:5px 6px;border-radius:6px;border:1px solid #4a5a42;background:#10150e;color:#e8e2d0;">
+        <input id="tw-karte-ziel" placeholder="456764" inputmode="numeric" enterkeyhint="go" style="width:84px;padding:5px 6px;border-radius:6px;border:1px solid #4a5a42;background:#10150e;color:#e8e2d0;">
         <button data-k="hin" style="padding:5px 9px;">Los</button>
         <button data-k="heim" title="Zum eigenen Dorf" style="padding:5px 9px;">📍</button>
         <span style="flex:1"></span>
@@ -52163,10 +52175,15 @@ function openOdinKarte() {
         if (k === "minus") massstab = Math.max(1.5, massstab / 1.4);
         if (k === "heim") { cx = ich.x + 0.5; cy = ich.y + 0.5; }
         if (k === "hin") {
-            const m = String(root.querySelector("#tw-karte-ziel").value || "").match(/(\d{1,3})\D+(\d{1,3})/);
-            if (m) { cx = parseInt(m[1], 10) + 0.5; cy = parseInt(m[2], 10) + 0.5; }
+            const z = karteKoordLesen(root.querySelector("#tw-karte-ziel").value);
+            if (z) { cx = z.x + 0.5; cy = z.y + 0.5; }
+            else { statusEl.textContent = "Koordinaten: 456764 oder 456|764"; }
         }
         zeichnen(); merken(); nachladen();
+    });
+    // v585: Enter im Feld = "Los" (Handy-Tastatur zeigt nur Ziffern).
+    root.querySelector("#tw-karte-ziel").addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); root.querySelector('[data-k="hin"]').click(); }
     });
     const beiGroesse = () => { if (!document.body.contains(root)) return; rect = groesse(); zeichnen(); nachladen(); };
     window.addEventListener("resize", beiGroesse);
