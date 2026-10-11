@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      583
+// @version      584
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33160,6 +33160,11 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
         dimBtnEl.title = "Vollbild + Bildschirm abdunkeln (Wischen von oben holt die Leiste zurück)";
         right.appendChild(dimBtnEl);
 
+        // v584: eigene Karte (Zoom, Fadenkreuz) - auch am PC erreichbar.
+        const karteBtnEl = btn("🗺", () => { openOdinKarte(); });
+        karteBtnEl.title = "Karte (Zoom, Fadenkreuz, Markierungen)";
+        right.appendChild(karteBtnEl);
+
         const settingsBtnEl = btn("⚙", () => {
     openSettings();
 });
@@ -51854,6 +51859,321 @@ function zielStandMerken(z, berichtId) {
     console.log(`[TW] Ziel-Stand ${z.x}|${z.y} (${z.id}): Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}, ${g}.`);
 }
 
+// === ODIN-KARTE (v584, 11.10.2026) =====================================
+// Eigene Karte mit Zoom (zwei Finger / Mausrad), Verschieben und
+// Fadenkreuz wie in der offiziellen App. Gleich auf Handy und PC, mobil
+// und Desktop (Canvas + Pointer-Events, keine Spielkarte).
+// BELEGT:
+//  - Daten wie die Spielkarte selbst (Mitschnitt 11.10. 09:42, de260):
+//      GET /map.php?v=2&locale=de_DE&e=<ms>&540_520=1&560_520=1
+//      Kopf: Accept json, X-Requested-With: XMLHttpRequest
+//      Antwort: [{x,y,tiles,data:{x,y,villages,players,...}}]
+//  - villages[dx][dy] = [id, bild, name|0 (Barbar), punkte, besitzer, ...]
+//    (Ausrichtung geprueft an Seitenquelle 08: Dorf 38859 bei 306|547 =
+//    Sektor 300_540, villages[6]["7"]).
+//  - players[id] = [name, punkte, stamm, ...]
+//  - eigene Lage: game_data.village.x/y, game_data.player.id/ally, locale.
+// Markierungen aus dem Ziel-Stand (v582): rot = eigene Verluste im letzten
+// Bericht, orange = Wall oder Kaserne gespaeht.
+// Abrufe nur, wenn die Karte offen ist und ein Bereich fehlt (je Anfrage
+// hoechstens 4 Bereiche, 10 Min. gemerkt) - wie beim Verschieben im Spiel.
+const KARTE_SEKTOR = 20;
+const KARTE_FRISCH_MS = 10 * 60 * 1000;
+const karteSektoren = {};      // "sx_sy" -> { at, doerfer: [] }
+const kartePlayer = {};        // id -> [name, punkte, stamm]
+let karteLaedt = false;
+
+function karteSektorAbruf(schluessel, cb) {
+    const loc = (typeof game_data !== "undefined" && game_data.locale) || "de_DE";
+    const url = "/map.php?v=2&locale=" + encodeURIComponent(loc) + "&e=" + Date.now() + "&" +
+        schluessel.map(k => k + "=1").join("&");
+    if (isBotProtectionActive()) { cb(false); return; }
+    twCountRequest(url, "manuell", "karte");
+    fetch(url, { credentials: "same-origin", headers: { "Accept": "application/json, text/javascript, */*; q=0.01", "X-Requested-With": "XMLHttpRequest" } })
+        .then(r => r.text())
+        .then(txt => {
+            let arr = null;
+            try { arr = JSON.parse(txt); } catch (e) { }
+            if (!Array.isArray(arr)) {
+                try {
+                    if (frameDocBlocked(new DOMParser().parseFromString(String(txt), "text/html"), "karte")) {
+                        haltAllAutomation("karte");
+                    }
+                } catch (e) { }
+                cb(false); return;
+            }
+            arr.forEach(s => karteSektorUebernehmen(s));
+            schluessel.forEach(k => { if (!karteSektoren[k]) karteSektoren[k] = { at: Date.now(), doerfer: [] }; });
+            cb(true);
+        })
+        .catch(() => cb(false));
+}
+
+function karteSektorUebernehmen(s) {
+    if (!s || typeof s.x !== "number") return;
+    const d = s.data || {};
+    const doerfer = [];
+    const v = d.villages || [];
+    Object.keys(v).forEach(dx => {
+        const spalte = v[dx];
+        if (!spalte) return;
+        Object.keys(spalte).forEach(dy => {
+            const i = spalte[dy];
+            if (!Array.isArray(i)) return;
+            doerfer.push({
+                id: String(i[0]), x: s.x + parseInt(dx, 10), y: s.y + parseInt(dy, 10),
+                name: i[2] === 0 || i[2] === "0" ? null : String(i[2]),
+                punkte: parseInt(String(i[3]).replace(/\D/g, ""), 10) || 0,
+                besitzer: String(i[4] || "0")
+            });
+        });
+    });
+    if (d.players && typeof d.players === "object") {
+        Object.keys(d.players).forEach(pid => { kartePlayer[pid] = d.players[pid]; });
+    }
+    karteSektoren[s.x + "_" + s.y] = { at: Date.now(), doerfer };
+}
+
+function openOdinKarte() {
+    const alt = document.getElementById("tw-odin-karte");
+    if (alt) { alt.remove(); return; }
+    const gd = (typeof game_data !== "undefined") ? game_data : {};
+    const ich = { x: Number(gd.village && gd.village.x) || 500, y: Number(gd.village && gd.village.y) || 500,
+        pid: String(gd.player && gd.player.id || ""), ally: String(gd.player && gd.player.ally || "0") };
+    let ansicht = null;
+    try { ansicht = JSON.parse(localStorage.getItem("tw_karte_ansicht") || "null"); } catch (e) { }
+    const klein = Math.min(window.innerWidth, window.innerHeight) < 600;
+    let cx = ansicht && ansicht.welt === gd.world ? ansicht.cx : ich.x + 0.5;
+    let cy = ansicht && ansicht.welt === gd.world ? ansicht.cy : ich.y + 0.5;
+    let massstab = ansicht && ansicht.welt === gd.world ? ansicht.m : (klein ? 14 : 18);
+
+    const root = document.createElement("div");
+    root.id = "tw-odin-karte";
+    root.style.cssText = "position:fixed;inset:0;z-index:2147483000;background:#141a12;display:flex;flex-direction:column;" +
+        "font:13px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e8e2d0;";
+    root.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;padding-top:max(6px,env(safe-area-inset-top));background:#1f2a1c;border-bottom:1px solid #3a4a33;">
+        <b style="flex:none;">Karte</b>
+        <input id="tw-karte-ziel" placeholder="x|y" inputmode="numeric" style="width:84px;padding:5px 6px;border-radius:6px;border:1px solid #4a5a42;background:#10150e;color:#e8e2d0;">
+        <button data-k="hin" style="padding:5px 9px;">Los</button>
+        <button data-k="heim" title="Zum eigenen Dorf" style="padding:5px 9px;">📍</button>
+        <span style="flex:1"></span>
+        <button data-k="minus" style="padding:5px 11px;">−</button>
+        <button data-k="plus" style="padding:5px 11px;">+</button>
+        <button data-k="zu" title="Schließen" style="padding:5px 11px;">✕</button>
+      </div>
+      <div style="position:relative;flex:1;min-height:0;">
+        <canvas id="tw-karte-canvas" style="position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:grab;"></canvas>
+        <div style="position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;pointer-events:none;">
+          <div style="position:absolute;left:12px;top:0;width:2px;height:26px;background:rgba(255,255,255,.85);"></div>
+          <div style="position:absolute;top:12px;left:0;height:2px;width:26px;background:rgba(255,255,255,.85);"></div>
+        </div>
+        <div id="tw-karte-status" style="position:absolute;right:8px;top:8px;font-size:11px;color:#b8c2a8;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:4px;"></div>
+      </div>
+      <div id="tw-karte-info" style="padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:#1f2a1c;border-top:1px solid #3a4a33;min-height:64px;"></div>`;
+    root.querySelectorAll("button").forEach(b => {
+        b.style.borderRadius = "6px"; b.style.border = "1px solid #4a5a42"; b.style.background = "#2a3826"; b.style.color = "#e8e2d0";
+    });
+    document.body.appendChild(root);
+
+    const canvas = root.querySelector("#tw-karte-canvas");
+    const ctx = canvas.getContext("2d");
+    const infoEl = root.querySelector("#tw-karte-info");
+    const statusEl = root.querySelector("#tw-karte-status");
+    let zielStand = {};
+    try { zielStand = JSON.parse(localStorage.getItem("tw_ziel_stand") || "{}") || {}; } catch (e) { }
+
+    function merken() {
+        try { localStorage.setItem("tw_karte_ansicht", JSON.stringify({ welt: gd.world, cx, cy, m: massstab })); } catch (e) { }
+    }
+    function groesse() {
+        const r = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.round(r.width * dpr));
+        canvas.height = Math.max(1, Math.round(r.height * dpr));
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return r;
+    }
+    let rect = groesse();
+
+    function sichtbareSektoren() {
+        const bx = rect.width / 2 / massstab, by = rect.height / 2 / massstab;
+        const x0 = Math.floor((cx - bx) / KARTE_SEKTOR) * KARTE_SEKTOR, x1 = Math.floor((cx + bx) / KARTE_SEKTOR) * KARTE_SEKTOR;
+        const y0 = Math.floor((cy - by) / KARTE_SEKTOR) * KARTE_SEKTOR, y1 = Math.floor((cy + by) / KARTE_SEKTOR) * KARTE_SEKTOR;
+        const out = [];
+        for (let x = Math.max(0, x0); x <= Math.min(980, x1); x += KARTE_SEKTOR)
+            for (let y = Math.max(0, y0); y <= Math.min(980, y1); y += KARTE_SEKTOR) out.push(x + "_" + y);
+        return out;
+    }
+
+    let ladeTimer = null;
+    function nachladen() {
+        clearTimeout(ladeTimer);
+        ladeTimer = setTimeout(() => {
+            if (karteLaedt || !document.body.contains(root)) return;
+            // Zu weit herausgezoomt -> nicht die halbe Welt abrufen.
+            const fehlend = sichtbareSektoren().filter(k => !karteSektoren[k] || Date.now() - karteSektoren[k].at > KARTE_FRISCH_MS);
+            if (!fehlend.length) { statusEl.textContent = ""; return; }
+            if (fehlend.length > 24) { statusEl.textContent = "näher heranzoomen zum Laden"; return; }
+            karteLaedt = true;
+            statusEl.textContent = "lädt …";
+            const teil = fehlend.slice(0, 4);
+            karteSektorAbruf(teil, (ok) => {
+                karteLaedt = false;
+                statusEl.textContent = ok ? "" : "Laden fehlgeschlagen";
+                zeichnen();
+                if (ok && fehlend.length > 4) setTimeout(nachladen, 700 + Math.random() * 500);
+            });
+        }, 350);
+    }
+
+    function farbe(d) {
+        if (d.besitzer === "0") return "#8d8a80";
+        if (d.besitzer === ich.pid) return "#ffd24a";
+        const p = kartePlayer[d.besitzer];
+        if (p && ich.ally !== "0" && String(p[2]) === ich.ally) return "#4aa3ff";
+        return "#c9584f";
+    }
+
+    function dorfUnterKreuz() {
+        let best = null, bd = 0.75;
+        const kx = Math.floor(cx), ky = Math.floor(cy);
+        Object.keys(karteSektoren).forEach(k => {
+            karteSektoren[k].doerfer.forEach(d => {
+                if (Math.abs(d.x - kx) > 1 || Math.abs(d.y - ky) > 1) return;
+                const dist = Math.hypot(d.x + 0.5 - cx, d.y + 0.5 - cy);
+                if (dist < bd) { bd = dist; best = d; }
+            });
+        });
+        return best;
+    }
+
+    function zeichnen() {
+        const w = rect.width, h = rect.height;
+        ctx.fillStyle = "#1b2417"; ctx.fillRect(0, 0, w, h);
+        const wx = x => (x - cx) * massstab + w / 2, wy = y => (y - cy) * massstab + h / 2;
+        // Kontinentgrenzen (alle 100 Felder) und bei Naehe Sektor-Raster.
+        ctx.strokeStyle = "rgba(255,255,255,.12)"; ctx.lineWidth = 1;
+        const schritt = massstab >= 8 ? KARTE_SEKTOR : 100;
+        const xa = Math.floor((cx - w / 2 / massstab) / schritt) * schritt;
+        const ya = Math.floor((cy - h / 2 / massstab) / schritt) * schritt;
+        for (let x = xa; wx(x) < w; x += schritt) { ctx.beginPath(); ctx.moveTo(wx(x), 0); ctx.lineTo(wx(x), h); ctx.stroke(); }
+        for (let y = ya; wy(y) < h; y += schritt) { ctx.beginPath(); ctx.moveTo(0, wy(y)); ctx.lineTo(w, wy(y)); ctx.stroke(); }
+        const gr = Math.max(2, massstab * 0.72);
+        Object.keys(karteSektoren).forEach(k => {
+            karteSektoren[k].doerfer.forEach(d => {
+                const px = wx(d.x + 0.5), py = wy(d.y + 0.5);
+                if (px < -gr || py < -gr || px > w + gr || py > h + gr) return;
+                ctx.fillStyle = farbe(d);
+                ctx.fillRect(px - gr / 2, py - gr / 2, gr, gr);
+                const z = zielStand[d.id];
+                if (z) {
+                    const g = z.gebaeude || {};
+                    if (z.verluste > 0) { ctx.strokeStyle = "#ff3b30"; ctx.lineWidth = Math.max(1.5, gr * 0.16); ctx.strokeRect(px - gr / 2 - 1, py - gr / 2 - 1, gr + 2, gr + 2); }
+                    else if ((g.wall || 0) > 0 || (g.barracks || 0) > 0) { ctx.strokeStyle = "#ff9f0a"; ctx.lineWidth = Math.max(1.5, gr * 0.14); ctx.strokeRect(px - gr / 2 - 1, py - gr / 2 - 1, gr + 2, gr + 2); }
+                }
+                if (massstab >= 26 && d.punkte) {
+                    ctx.fillStyle = "rgba(0,0,0,.75)"; ctx.font = `${Math.round(massstab * 0.28)}px system-ui,sans-serif`;
+                    ctx.textAlign = "center"; ctx.fillText(String(d.punkte), px, py + massstab * 0.1);
+                }
+            });
+        });
+        infoZeigen();
+    }
+
+    function infoZeigen() {
+        const d = dorfUnterKreuz();
+        const fx = Math.floor(cx), fy = Math.floor(cy);
+        if (!d) { infoEl.innerHTML = `<div style="color:#9aa58c;">${fx}|${fy} - kein Dorf</div>`; return; }
+        const p = kartePlayer[d.besitzer];
+        const wer = d.besitzer === "0" ? "Barbar" : (p ? String(p[0]) : "Spieler " + d.besitzer);
+        const dist = Math.hypot(d.x - ich.x, d.y - ich.y).toFixed(1);
+        const z = zielStand[d.id];
+        let zeile2 = "";
+        if (z) {
+            const g = z.gebaeude || {};
+            const alter = z.zeit ? Math.round((Date.now() - z.zeit) / 3600000) : null;
+            zeile2 = `<div style="margin-top:3px;color:#d6c9a3;">Letzter Bericht${alter !== null ? ` vor ${alter} Std.` : ""}: ` +
+                `Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}` +
+                (z.gebaeude ? ` · Wall ${g.wall || 0} · Kaserne ${g.barracks || 0}` : "") + `</div>`;
+        }
+        const vid = gd.village && gd.village.id;
+        infoEl.innerHTML = `<div><b>${(d.name || "Barbarendorf").replace(/</g, "&lt;")}</b> (${d.x}|${d.y}) · ${d.punkte} P. · ${String(wer).replace(/</g, "&lt;")} · ${dist} Felder</div>${zeile2}
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+            <a href="/game.php?village=${vid}&screen=info_village&id=${encodeURIComponent(d.id)}" style="color:#9fd18b;">Dorfinfo</a>
+            <a href="/game.php?village=${vid}&screen=place&target=${encodeURIComponent(d.id)}" style="color:#9fd18b;">Versammlungsplatz</a>
+          </div>`;
+    }
+
+    // --- Bedienung: Pointer (Finger/Maus), Mausrad, Knoepfe -------------
+    const zeiger = new Map();
+    let pinchStart = null;
+    canvas.addEventListener("pointerdown", e => {
+        canvas.setPointerCapture(e.pointerId);
+        zeiger.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (zeiger.size === 2) {
+            const [a, b] = [...zeiger.values()];
+            pinchStart = { abstand: Math.hypot(a.x - b.x, a.y - b.y), massstab };
+        }
+    });
+    canvas.addEventListener("pointermove", e => {
+        const alt2 = zeiger.get(e.pointerId);
+        if (!alt2) return;
+        const neu = { x: e.clientX, y: e.clientY };
+        zeiger.set(e.pointerId, neu);
+        if (zeiger.size === 1) {
+            cx -= (neu.x - alt2.x) / massstab; cy -= (neu.y - alt2.y) / massstab;
+        } else if (zeiger.size === 2 && pinchStart) {
+            const [a, b] = [...zeiger.values()];
+            const ab = Math.hypot(a.x - b.x, a.y - b.y);
+            massstab = Math.max(1.5, Math.min(64, pinchStart.massstab * ab / Math.max(1, pinchStart.abstand)));
+        }
+        zeichnen();
+    });
+    const loslassen = e => {
+        zeiger.delete(e.pointerId);
+        if (zeiger.size < 2) pinchStart = null;
+        if (!zeiger.size) { merken(); nachladen(); }
+    };
+    canvas.addEventListener("pointerup", loslassen);
+    canvas.addEventListener("pointercancel", loslassen);
+    canvas.addEventListener("wheel", e => {
+        e.preventDefault();
+        massstab = Math.max(1.5, Math.min(64, massstab * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+        zeichnen(); merken(); nachladen();
+    }, { passive: false });
+    // Tippen ohne Ziehen: Dorf unter den Finger ins Fadenkreuz holen.
+    let tippStart = null;
+    canvas.addEventListener("pointerdown", e => { tippStart = { x: e.clientX, y: e.clientY, t: Date.now() }; });
+    canvas.addEventListener("pointerup", e => {
+        if (!tippStart || zeiger.size) return;
+        if (Math.hypot(e.clientX - tippStart.x, e.clientY - tippStart.y) < 6 && Date.now() - tippStart.t < 400) {
+            const r = canvas.getBoundingClientRect();
+            cx += (e.clientX - r.left - r.width / 2) / massstab;
+            cy += (e.clientY - r.top - r.height / 2) / massstab;
+            zeichnen(); merken(); nachladen();
+        }
+        tippStart = null;
+    });
+    root.addEventListener("click", e => {
+        const k = e.target && e.target.getAttribute && e.target.getAttribute("data-k");
+        if (!k) return;
+        if (k === "zu") { root.remove(); window.removeEventListener("resize", beiGroesse); return; }
+        if (k === "plus") massstab = Math.min(64, massstab * 1.4);
+        if (k === "minus") massstab = Math.max(1.5, massstab / 1.4);
+        if (k === "heim") { cx = ich.x + 0.5; cy = ich.y + 0.5; }
+        if (k === "hin") {
+            const m = String(root.querySelector("#tw-karte-ziel").value || "").match(/(\d{1,3})\D+(\d{1,3})/);
+            if (m) { cx = parseInt(m[1], 10) + 0.5; cy = parseInt(m[2], 10) + 0.5; }
+        }
+        zeichnen(); merken(); nachladen();
+    });
+    const beiGroesse = () => { if (!document.body.contains(root)) return; rect = groesse(); zeichnen(); nachladen(); };
+    window.addEventListener("resize", beiGroesse);
+    zeichnen();
+    nachladen();
+}
+
 function bauSchrittAusfuehren(win, doc, villageId, callback) {
     const fertig = (art, text) => { try { callback(art, text); } catch (e) { } };
     const dorf = getVillageDisplayName(villageId) || villageId;
@@ -63200,6 +63520,7 @@ if (location.href.includes("mode=scavenge_mass")) {
         angriffe: () => openAttackPlanPopup(),
         rausstellen: () => openTabbenPopup(),
         statistik: () => openStatsPopup(),
+        karte: () => openOdinKarte(),
         einstellungen: () => { if (TW_AKTIONEN.einstellungen) TW_AKTIONEN.einstellungen(); },
         godbot: () => { if (TW_AKTIONEN.hub) TW_AKTIONEN.hub.umschalten(); }
     };

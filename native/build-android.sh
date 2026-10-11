@@ -3850,7 +3850,7 @@ public class GameWebViewActivity extends Activity {
  private static final String[][] GODBOT_BEREICHE={
   {"raubzug","Raubzug","scavenge"},{"farmen","Farmen","farm"},{"bau","Manager","bau"},
   {"rohstoffe","Rohstoffe","resources"},{"angriffe","Angriffe","attack"},
-  {"rausstellen","Rausstellen","rausstellen"},{"statistik","Statistik",""},{"godbot","GodBot ⋯",""}};
+  {"rausstellen","Rausstellen","rausstellen"},{"statistik","Statistik",""},{"karte","🗺 Karte",""},{"godbot","GodBot ⋯",""}};
  private static boolean godbotSchaltbar(String k){
   return "raubzug".equals(k)||"farmen".equals(k)||"bau".equals(k)||"rohstoffe".equals(k);
  }
