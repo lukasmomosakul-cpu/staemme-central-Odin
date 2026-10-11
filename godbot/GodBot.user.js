@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      592
+// @version      593
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -2570,6 +2570,8 @@ function botMarkerSichtbar() {
 
     function farmJobDue() {
         if (localStorage.getItem("tw_farm_loop_active") !== "1") return false;
+        // v593: GodBot-Farm an -> FarmGod ist nie faellig (kein Arbeits-Frame, keine Anfrage).
+        if (godFarmVorrang("Fahrplan")) return false;
         if (localStorage.getItem("tw_farm_restart_scheduled") !== "1") return false;
 
         const raw = localStorage.getItem("tw_next_farm_burst_at");
@@ -29945,6 +29947,13 @@ function triggerFarmRun() {
         haltAllAutomation("triggerFarmRun:entry");
         return;
     }
+    // v593: letzte Sicherung fuer jeden weiteren Weg. Eine vom Aufrufer
+    // schon genommene "farm"-Sperre wird freigegeben.
+    if (godFarmVorrang("triggerFarmRun")) {
+        try { releaseProcessLock("farm"); } catch (e) { }
+        try { closeWorkFrame(); } catch (e) { }
+        return;
+    }
 
     // Die Prozess-Sperre wurde hier bisher NICHT geprueft. Der Weg
     // ueber den faelligen Neustart (checkFarmRestart -> ensureFarmValue
@@ -32255,6 +32264,22 @@ function godFarmLog() {
     } catch (e) { return {}; }
 }
 
+// v593 (Fetteruruk 12.10.): "wenn GodBot aktiv geschaltet, soll auch nur
+// dieser farmen". GodBot-Farm hat Vorrang: solange es an ist, startet
+// FarmGod auf keinem Weg (Fahrplan, faelliger Neustart, Farm-Knopf,
+// triggerFarmRun). Der FarmGod-Schalter selbst bleibt stehen - wird
+// GodBot-Farm wieder ausgeschaltet, laeuft FarmGod wie vorher weiter.
+let godFarmVorrangGemeldetAt = 0;
+function godFarmVorrang(stelle) {
+    let an = false;
+    try { an = godFarmCfg().an; } catch (e) { an = false; }
+    if (an && Date.now() - godFarmVorrangGemeldetAt > 10 * 60 * 1000) {
+        godFarmVorrangGemeldetAt = Date.now();
+        console.log(`[TW] FarmGod startet nicht (${stelle}) - GodBot-Farm ist an und farmt allein.`);
+    }
+    return an;
+}
+
 function godFarmFaellig() {
     if (!godFarmCfg().an) return false;
     const t = parseInt(localStorage.getItem(GODFARM_NEXT_KEY) || "0", 10) || 0;
@@ -32535,7 +32560,7 @@ function godFarmUiHtml() {
                     <input type="checkbox" id="tw-godfarm-an" class="tw-checkbox" ${c.an ? "checked" : ""} />
                     <b>GodBot-Farm (Test)</b>
                 </label>
-                <div style="font-size:11px;color:#999;margin:3px 0 6px;">Eigener Farmlauf, nur für dieses Konto. Läuft parallel zu FarmGod, nie gleichzeitig. 1 Abruf je Lauf + Angriffe.</div>
+                <div style="font-size:11px;color:#999;margin:3px 0 6px;">Eigener Farmlauf, nur für dieses Konto. Solange an, farmt nur GodBot – FarmGod pausiert (sein Schalter bleibt). 1 Abruf je Lauf + Angriffe.</div>
                 <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;">
                     <span>Abstand je Dorf</span>${feld("tw-godfarm-abstand", c.abstandMin)}<span>Min.</span>
                     <span>· max.</span>${feld("tw-godfarm-felder", c.maxFelder, 40)}<span>Felder</span>
@@ -33426,6 +33451,12 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             if (localStorage.getItem("tw_farm_refill_run") === "1") {
                 localStorage.removeItem("tw_farm_refill_run");
                 console.log("[TW] Farmen von Hand gestartet - altes Auffuell-Kennzeichen entfernt.");
+            }
+
+            // v593: GodBot-Farm an -> FarmGod nicht von Hand starten.
+            if (godFarmVorrang("Farm-Knopf")) {
+                showToast("GodBot-Farm ist an – FarmGod startet nicht.", "error");
+                return;
             }
 
             if (!acquireProcessLock("farm")) {
@@ -34616,6 +34647,9 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                 haltAllAutomation("farmRestart:check");
                 return;
             }
+
+            // v593: GodBot-Farm hat Vorrang - Neustart bleibt vorgemerkt.
+            if (godFarmVorrang("Neustart")) return;
 
             farmRestartTriggered = true;
             localStorage.removeItem("tw_farm_restart_scheduled");
