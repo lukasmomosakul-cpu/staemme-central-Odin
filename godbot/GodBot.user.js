@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      589
+// @version      590
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -52182,8 +52182,10 @@ function openOdinKarte() {
     let ansicht = null;
     try { ansicht = JSON.parse(localStorage.getItem("tw_karte_ansicht") || "null"); } catch (e) { }
     const klein = Math.min(window.innerWidth, window.innerHeight) < 600;
-    let cx = ansicht && ansicht.welt === gd.world ? ansicht.cx : ich.x + 0.5;
-    let cy = ansicht && ansicht.welt === gd.world ? ansicht.cy : ich.y + 0.5;
+    // v590 (Fetteruruk 11.10.): beim Oeffnen IMMER auf das aktuelle Dorf -
+    // gemerkt bleiben nur Zoomstufe und Farm-Schalter.
+    let cx = ich.x + 0.5;
+    let cy = ich.y + 0.5;
     let massstab = ansicht && ansicht.welt === gd.world ? ansicht.m : (klein ? 14 : 18);
     let farmZeigen = !(ansicht && ansicht.farm === false);
     try { karteCacheLaden(gd.world); } catch (e) { }
@@ -52198,12 +52200,9 @@ function openOdinKarte() {
       <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;padding-top:max(6px,env(safe-area-inset-top));background:#1f2a1c;border-bottom:1px solid #3a4a33;">
         <b style="flex:none;">Karte</b>
         <input id="tw-karte-ziel" placeholder="456764" inputmode="numeric" enterkeyhint="go" style="width:84px;padding:5px 6px;border-radius:6px;border:1px solid #4a5a42;background:#10150e;color:#e8e2d0;">
-        <button data-k="hin" style="padding:5px 9px;">Los</button>
         <button data-k="heim" title="Zum eigenen Dorf" style="padding:5px 9px;">📍</button>
         <button data-k="farm" title="Farmgebiete der Odin-Konten ein/aus" style="padding:5px 9px;">🌾</button>
         <span style="flex:1"></span>
-        <button data-k="minus" style="padding:5px 11px;">−</button>
-        <button data-k="plus" style="padding:5px 11px;">+</button>
         <button data-k="zu" title="Schließen" style="padding:5px 11px;">✕</button>
       </div>
       <div style="position:relative;flex:1;min-height:0;">
@@ -52461,16 +52460,17 @@ function openOdinKarte() {
                 }
             } catch (e) { }
         }
-        if (k === "hin") {
-            const z = karteKoordLesen(root.querySelector("#tw-karte-ziel").value);
-            if (z) { cx = z.x + 0.5; cy = z.y + 0.5; }
-            else { statusEl.textContent = "Koordinaten: 456764 oder 456|764"; }
-        }
         zeichnen(); merken(); nachladen();
     });
-    // v585: Enter im Feld = "Los" (Handy-Tastatur zeigt nur Ziffern).
-    root.querySelector("#tw-karte-ziel").addEventListener("keydown", e => {
-        if (e.key === "Enter") { e.preventDefault(); root.querySelector('[data-k="hin"]').click(); }
+    // v585/v590: Enter im Feld springt (der Knopf "Los" ist weggefallen).
+    const zielFeld = root.querySelector("#tw-karte-ziel");
+    zielFeld.addEventListener("keydown", e => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const z = karteKoordLesen(zielFeld.value);
+        if (z) { cx = z.x + 0.5; cy = z.y + 0.5; try { zielFeld.blur(); } catch (e2) { } }
+        else { statusEl.textContent = "Koordinaten: 456764 oder 456|764"; }
+        zeichnen(); merken(); nachladen();
     });
     const beiGroesse = () => { if (!document.body.contains(root)) return; rect = groesse(); zeichnen(); nachladen(); };
     window.addEventListener("resize", beiGroesse);

@@ -43,3 +43,5 @@ Siehe ANFRAGEN.md.
 | 29 | stable (Rekrutierungsschleife, current_order) | de260 | mobil | 11.10.2026, 18:32:43 | .queueItem, span.timer (Restzeit laufender Auftrag), cancelOrder | godbot-diagnose_2026-10-11_2244.txt (Mitschnitt train) |
 | 30 | stable (Rekrutierungsschleife, 2 Aufträge) | de260 | mobil | 11.10.2026, 20:30:51 | nur 1. .queueItem mit span.timer, 2. .queueItem[data-order] mit Dauer als Text; beim Mitschnitt nach 2000 Zeichen gekürzt | godbot-diagnose_2026-10-11_2244.txt (Mitschnitt train) |
 | 31 | barracks (Rekrutierungsschleife, current_order) | de259 | desktop | 26.9.2026, 14:16:25 | tr.lit > td.lit-item > span.timer, cancelOrder | ANFRAGEN.md Nr. 4 |
+| 32 | am_farm (Farm-Assistent) | de260 | mobil | 11.10.2026, 23:13:44 | tr#village_<id> (3 Zeilen je Dorf), dots/*, max_loot/0|1, command/attack (Anzahl im title), Wall, Entfernung, send_units_link, farm.current_units, farm.templates | godbot-seite-am_farm_2026-10-11_2313.txt |
+| 33 | am_farm (Farm-Assistent) | de260 | desktop | 11.10.2026, 23:14:36 | wie 32, eine Zeile je Dorf; sendUnits(this, Ziel, Vorlage) mit Einheiten/Beute/Laufzeit im data-title | godbot-seite-am_farm_2026-10-11_2314.txt |
