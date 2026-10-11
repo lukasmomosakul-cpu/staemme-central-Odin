@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      595
+// @version      596
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -2407,6 +2407,8 @@ function botMarkerSichtbar() {
 
         const owner = currentProcessOwner();
         if (owner === moduleKey) return "active";
+        // v596: GodBot-Farm laeuft unter eigener Sperre, ist aber "Farmen".
+        if (moduleKey === "farm" && owner === "godfarm") return "active";
 
         // Irgendjemand anderes arbeitet gerade -> zurueckgestellt.
         if (owner) return "blocked";
@@ -32236,14 +32238,32 @@ const GODFARM_LOG_KEY = "tw_godfarm_ankunft";
 const GODFARM_MAX_ANGRIFFE = 40;
 let godFarmLaeuft = false;
 
+// v596 (Fetteruruk 12.10.): "entweder FarmGod oder GodBot - Aktivierung
+// ueber den Farmen-Knopf, dort auch der naechste Lauf, egal welche Variante
+// aktiv ist". Gewaehlt wird nur noch die METHODE (Einstellungen -> Farmen).
+// Ein/aus ist allein der Farmen-Knopf (tw_farm_loop_active). Fruehere
+// Fassungen speicherten "an": true - das gilt als Methode GodBot.
+function godFarmModus() {
+    let c = {};
+    try { c = JSON.parse(localStorage.getItem(GODFARM_CFG_KEY) || "{}") || {}; } catch (e) { c = {}; }
+    if (c.modus === "godbot" || c.modus === "farmgod") return c.modus;
+    return c.an === true ? "godbot" : "farmgod";
+}
+
+function farmNaechsterKey() {
+    return godFarmModus() === "godbot" ? GODFARM_NEXT_KEY : "tw_next_farm_burst_at";
+}
+
 function godFarmCfg() {
     let c = {};
     try { c = JSON.parse(localStorage.getItem(GODFARM_CFG_KEY) || "{}") || {}; } catch (e) { c = {}; }
     const zahl = (v, d, min, max) => { const n = parseFloat(v); return isNaN(n) ? d : Math.max(min, Math.min(max, n)); };
     const von = zahl(c.laufMin, 10, 2, 240);
+    const modus = godFarmModus();
     return {
-        an: c.an === true,
-        abstandMin: zahl(c.abstandMin, 30, 1, 1440),
+        modus,
+        an: modus === "godbot" && localStorage.getItem("tw_farm_loop_active") === "1",
+        abstandMin: zahl(c.abstandMin, 15, 1, 1440),
         maxFelder: zahl(c.maxFelder, 20, 1, 100),
         laufMin: von,
         laufMax: Math.max(von, zahl(c.laufMax, 20, 2, 240))
@@ -32252,6 +32272,7 @@ function godFarmCfg() {
 
 function godFarmCfgSetzen(teil) {
     const c = Object.assign(godFarmCfg(), teil || {});
+    delete c.an;   // ergibt sich aus Methode + Farmen-Knopf
     try { localStorage.setItem(GODFARM_CFG_KEY, JSON.stringify(c)); } catch (e) { }
     return c;
 }
@@ -32273,10 +32294,10 @@ function godFarmLog() {
 let godFarmVorrangGemeldetAt = 0;
 function godFarmVorrang(stelle) {
     let an = false;
-    try { an = godFarmCfg().an; } catch (e) { an = false; }
+    try { an = godFarmModus() === "godbot"; } catch (e) { an = false; }
     if (an && Date.now() - godFarmVorrangGemeldetAt > 10 * 60 * 1000) {
         godFarmVorrangGemeldetAt = Date.now();
-        console.log(`[TW] FarmGod startet nicht (${stelle}) - GodBot-Farm ist an und farmt allein.`);
+        console.log(`[TW] FarmGod startet nicht (${stelle}) - Farmmethode ist GodBot-Farm.`);
     }
     return an;
 }
@@ -32493,10 +32514,14 @@ function godFarmLauf(fertig) {
         godFarmStandMerken(s);
         console.log(`[TW] GodBot-Farm: ${s.text}`);
         if (s.fehlLaeufe >= 3) {
-            godFarmCfgSetzen({ an: false });
-            console.error("[TW] GodBot-Farm: 3 Laeufe in Folge fehlgeschlagen - fuer DIESES Konto " +
-                "abgeschaltet. FarmGod ist davon nicht betroffen.");
-            try { showToast("GodBot-Farm abgeschaltet (3 Fehler in Folge)", "error"); } catch (e) { }
+            godFarmCfgSetzen({ modus: "farmgod" });
+            try {
+                localStorage.setItem("tw_farm_restart_scheduled", "1");
+                localStorage.setItem("tw_next_farm_burst_at", String(Date.now() + 60000));
+            } catch (e) { }
+            console.error("[TW] GodBot-Farm: 3 Laeufe in Folge fehlgeschlagen - Farmmethode fuer DIESES " +
+                "Konto zurueck auf FarmGod. Farmen laeuft weiter.");
+            try { showToast("GodBot-Farm: 3 Fehler – zurück auf FarmGod", "error"); } catch (e) { }
         }
         try { fertig && fertig(s); } catch (e) { }
     };
@@ -32634,12 +32659,16 @@ function godFarmUiHtml() {
     const feld = (id, wert, breite) => `<input type="number" id="${id}" value="${wert}" class="tw-numfield" ` +
         `style="width:${breite || 46}px;text-align:right;background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;" />`;
     return `
-            <div style="margin-top:12px;padding-top:10px;border-top:1px solid #333;">
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                    <input type="checkbox" id="tw-godfarm-an" class="tw-checkbox" ${c.an ? "checked" : ""} />
-                    <b>GodBot-Farm (Test)</b>
+            <div style="margin:2px 0 12px;padding-bottom:10px;border-bottom:1px solid #333;">
+                <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <b>Farmmethode</b>
+                    <select id="tw-godfarm-modus" style="background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;">
+                        <option value="farmgod" ${c.modus === "farmgod" ? "selected" : ""}>FarmGod</option>
+                        <option value="godbot" ${c.modus === "godbot" ? "selected" : ""}>GodBot-Farm (Test)</option>
+                    </select>
                 </label>
-                <div style="font-size:11px;color:#999;margin:3px 0 6px;">Eigener Farmlauf, nur für dieses Konto. Solange an, farmt nur GodBot – FarmGod pausiert (sein Schalter bleibt). 1 Abruf je Lauf + Angriffe.</div>
+                <div style="font-size:11px;color:#999;margin:3px 0 6px;">Ein/aus über den Farmen-Knopf (lange drücken). Es farmt immer nur die gewählte Methode, nur für dieses Konto.</div>
+                <div id="tw-godfarm-werte">
                 <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;">
                     <span>Abstand je Dorf</span>${feld("tw-godfarm-abstand", c.abstandMin)}<span>Min. (zwischen Ankünften)</span>
                     <span>· max.</span>${feld("tw-godfarm-felder", c.maxFelder, 40)}<span>Felder</span>
@@ -32648,7 +32677,7 @@ function godFarmUiHtml() {
                     <span>Lauf alle</span>${feld("tw-godfarm-von", c.laufMin, 40)}<span>bis</span>${feld("tw-godfarm-bis", c.laufMax, 40)}<span>Min.</span>
                 </div>
                 <div id="tw-godfarm-stand" style="font-size:11px;color:#aab;margin-top:6px;"></div>
-                <button id="tw-godfarm-jetzt" style="margin-top:6px;width:100%;background:#222;color:#fff;border:1px solid #444;border-radius:4px;padding:5px;cursor:pointer;">GodBot-Farm: jetzt ein Lauf</button>
+                </div>
             </div>`;
 }
 
@@ -32660,35 +32689,47 @@ function godFarmUiStand(el) {
     const teile = [];
     if (s && s.at) teile.push(`Letzter Lauf ${new Date(s.at).toLocaleTimeString("de-DE")}: ${String(s.text || "").replace(/</g, "&lt;")}`);
     if (c.an) teile.push(next > Date.now() ? `Nächster Lauf ${new Date(next).toLocaleTimeString("de-DE")}` : "Nächster Lauf: fällig");
-    else teile.push("aus");
+    else teile.push(c.modus === "godbot" ? "Farmen-Knopf ist aus" : "Methode FarmGod gewählt");
     el.innerHTML = teile.join("<br>");
 }
 
 function godFarmUiBinden(content) {
     const q = (id) => content.querySelector("#" + id);
-    if (!q("tw-godfarm-an")) return;
+    if (!q("tw-godfarm-modus")) return;
+    const werteZeigen = () => { q("tw-godfarm-werte").style.display = q("tw-godfarm-modus").value === "godbot" ? "" : "none"; };
     const speichern = () => {
+        const vorher = godFarmModus();
         const c = godFarmCfgSetzen({
-            an: q("tw-godfarm-an").checked,
+            modus: q("tw-godfarm-modus").value === "godbot" ? "godbot" : "farmgod",
             abstandMin: parseFloat(q("tw-godfarm-abstand").value),
             maxFelder: parseFloat(q("tw-godfarm-felder").value),
             laufMin: parseFloat(q("tw-godfarm-von").value),
             laufMax: parseFloat(q("tw-godfarm-bis").value)
         });
-        console.log(`[TW] GodBot-Farm: ${c.an ? "AN" : "AUS"} - Abstand ${c.abstandMin} Min. zwischen zwei Ankünften je Dorf, ` +
-            `max. ${c.maxFelder} Felder, Lauf alle ${c.laufMin}-${c.laufMax} Min.`);
+        // Wechsel bei laufendem Farmen: die neue Methode startet gleich.
+        if (vorher !== c.modus && localStorage.getItem("tw_farm_loop_active") === "1") {
+            try {
+                if (c.modus === "godbot") {
+                    localStorage.setItem(GODFARM_NEXT_KEY, "0");
+                    localStorage.removeItem("tw_farm_restart_scheduled");
+                } else {
+                    localStorage.setItem("tw_farm_restart_scheduled", "1");
+                    localStorage.setItem("tw_next_farm_burst_at", String(Date.now()));
+                }
+            } catch (e) { }
+        }
+        console.log(`[TW] Farmmethode: ${c.modus === "godbot" ? "GodBot-Farm" : "FarmGod"}` +
+            (c.modus === "godbot" ? ` - Abstand ${c.abstandMin} Min. zwischen zwei Ankünften je Dorf, ` +
+                `max. ${c.maxFelder} Felder, Lauf alle ${c.laufMin}-${c.laufMax} Min.` : "") +
+            ` (Farmen-Knopf ${localStorage.getItem("tw_farm_loop_active") === "1" ? "an" : "aus"}).`);
+        werteZeigen();
         godFarmUiStand(q("tw-godfarm-stand"));
     };
-    ["tw-godfarm-an", "tw-godfarm-abstand", "tw-godfarm-felder", "tw-godfarm-von", "tw-godfarm-bis"]
+    ["tw-godfarm-modus", "tw-godfarm-abstand", "tw-godfarm-felder", "tw-godfarm-von", "tw-godfarm-bis"]
         .forEach(id => q(id).addEventListener("change", speichern));
-    q("tw-godfarm-jetzt").onclick = () => {
-        if (!godFarmCfg().an) { q("tw-godfarm-an").checked = true; speichern(); }
-        console.log("[TW] GodBot-Farm: \"jetzt ein Lauf\" gedrueckt - startet beim naechsten Takt.");
-        try { localStorage.setItem(GODFARM_NEXT_KEY, "0"); } catch (e) { }
-        try { showToast("GodBot-Farm startet beim nächsten Takt", "ok"); } catch (e) { }
-        godFarmUiStand(q("tw-godfarm-stand"));
-    };
+    werteZeigen();
     godFarmUiStand(q("tw-godfarm-stand"));
+
 }
 
     function createOverlay(data) {
@@ -33530,9 +33571,15 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                 console.log("[TW] Farmen von Hand gestartet - altes Auffuell-Kennzeichen entfernt.");
             }
 
-            // v593: GodBot-Farm an -> FarmGod nicht von Hand starten.
-            if (godFarmVorrang("Farm-Knopf")) {
-                showToast("GodBot-Farm ist an – FarmGod startet nicht.", "error");
+            // v596: Methode GodBot-Farm -> der Knopf startet GodBot-Farm.
+            if (godFarmModus() === "godbot") {
+                localStorage.setItem("tw_farm_loop_active", "1");
+                localStorage.setItem(GODFARM_NEXT_KEY, "0");
+                localStorage.removeItem("tw_farm_restart_scheduled");
+                localStorage.removeItem("tw_next_farm_burst_at");
+                console.log("[TW] Farmen gestartet (GodBot-Farm) - erster Lauf beim naechsten Takt.");
+                updateFarmButtonUI();
+                showToast("Farmen an (GodBot-Farm)", "ok");
                 return;
             }
 
@@ -33954,7 +34001,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             const rows =
                 row("Raubzug", scavengeOn, owner === "scavenge", "tw_next_recheck_at",
                     hubCfg.showScavenge, "", "scavenge") +
-                row("Farmen", farmOn, owner === "farm", "tw_next_farm_burst_at", hubCfg.showFarm,
+                row("Farmen", farmOn, owner === "farm" || owner === "godfarm", farmNaechsterKey(), hubCfg.showFarm,
                     (farmPercent !== null
                         ? ` <span style="color:${farmPercent < 90 ? "#e8c34a" : "#667"};">${farmPercent}%</span>`
                         : "") +
@@ -35375,6 +35422,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
         ${sectionToggle("farmen", "Farmen")}
         <div id="tw-farmen-panel" style="display:none; max-height:400px; overflow-y:auto; -webkit-overflow-scrolling:touch;">
         <div style="padding:10px;">
+            ${godFarmUiHtml()}
 
 
             <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
@@ -35387,8 +35435,6 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                 <span style="font-size:10px;color:#666;">Min.</span>
                 ${infoIcon("Nach dieser Zeit pausiert FarmGod kurz und lädt neu, um nicht ununterbrochen zu senden - unabhängig davon, ob schon alles abgeschickt ist. Läuft immer, keine Option zum Deaktivieren.")}
             </label>
-
-            ${godFarmUiHtml()}
 
             <button id="tw-farmgod-settings-btn"
                 style="width:100%;background:#222;color:#fff;border:1px solid #444;border-radius:4px;padding:6px;cursor:pointer;">
@@ -63475,7 +63521,7 @@ if (location.href.includes("mode=scavenge_mass")) {
             : "– / –";
         const bursts = z("tw_farm_bursts_current_run");
 
-        const naechsterTs = z("tw_next_farm_burst_at");
+        const naechsterTs = z(farmNaechsterKey());
         const naechster = naechsterTs > Date.now()
             ? new Date(naechsterTs).toLocaleTimeString("de-DE") : "–";
 
@@ -64253,7 +64299,7 @@ if (location.href.includes("mode=scavenge_mass")) {
         try {
             out.naechst = {
                 raubzug: parseInt(localStorage.getItem("tw_next_recheck_at") || "0", 10) || null,
-                farmen: parseInt(localStorage.getItem("tw_next_farm_burst_at") || "0", 10) || null,
+                farmen: parseInt(localStorage.getItem(farmNaechsterKey()) || "0", 10) || null,
                 rohstoffe: parseInt(localStorage.getItem("tw_next_resource_scan_at") || "0", 10) || null
             };
         } catch (e) { }
@@ -64516,7 +64562,7 @@ if (location.href.includes("mode=scavenge_mass")) {
             istAn: () => localStorage.getItem("tw_loop_active") === "1"
         },
         farm: {
-            zeit: "tw_next_farm_burst_at", schalter: "farm", name: "Farmen",
+            get zeit() { return farmNaechsterKey(); }, schalter: "farm", name: "Farmen",
             istAn: () => localStorage.getItem("tw_farm_loop_active") === "1"
         },
         resources: {
