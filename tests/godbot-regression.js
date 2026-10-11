@@ -51,5 +51,12 @@ pruefe('Berichte: Zwischenseite publish_and_forward_many', () => { const f = sei
 pruefe('Berichte: [report]-Codes auf der Mail-Seite gefunden', () => { const t = fn('twSucheExportText')(seite('07_de259_mail').d, /\[report\]/); return (!!t && (t.match(/\[report\]/g) || []).length === 4) || 'abweichend'; });
 pruefe('Angriffe mobil mit Eintraegen: #incomings_form + reqdef', () => { const f = seite('04_de256_Eintreffende').d.querySelector('#incomings_form'); return (!!f && !!f.querySelector('input[name="reqdef"]')) || 'abweichend'; });
 
+// Rekrutierungsschleife (v588): Restzeit des laufenden Auftrags
+const rekrutSeite = (muster) => { const { d, w } = seite(muster); w.unit_managers = { units: { light: { wood: 125, stone: 100, iron: 250, pop: 4, requirements_met: true }, spear: { wood: 50, stone: 30, iron: 10, pop: 1, requirements_met: true } } }; w.game_data = { village: { wood: 1000, stone: 1000, iron: 1000, pop: 100, pop_max: 200 } }; return fn('rekrutSeiteLesen')(w, d); };
+pruefe('Stall mobil, 1 Auftrag: 2 LKav, Rest 0:21:00', () => { const s = rekrutSeite('29_de260_stable-schleife'); const q = s.schlange; return (q.length === 1 && q[0].einheit === 'light' && q[0].anzahl === 2 && q[0].restMs === 1260000) || JSON.stringify(q); });
+pruefe('Stall mobil, 2 Auftraege: laufender Rest 0:26:23, zweiter ohne Timer (Mitschnitt gekuerzt)', () => { const { d } = seite('30_de260_stable-schleife'); const q = rekrutSeite('30_de260_stable-schleife').schlange; const zweiter = d.querySelector('.queueItem[data-order="60992"]'); return (q[0].anzahl === 3 && q[0].restMs === 1583000 && !!zweiter && !zweiter.querySelector('span.timer') && /2 Leichte Kavallerie/.test(zweiter.textContent)) || JSON.stringify(q); });
+pruefe('Kaserne desktop: 1 Speer, Rest 0:10:06', () => { const q = rekrutSeite('31_de259_barracks-schleife').schlange; return (q.length === 1 && q[0].einheit === 'spear' && q[0].anzahl === 1 && q[0].restMs === 606000) || JSON.stringify(q); });
+pruefe('Volle Schleife: warten bis Platz frei (26:23)', () => { global.REKRUT_MAX_AUFTRAEGE = 2; const s = rekrutSeite('30_de260_stable-schleife'); s.schlange = [s.schlange[0], { id: '60992', einheit: 'light', anzahl: 2, restMs: null }]; s.trainLink = '/x'; s.popFrei = 100; const r = fn('naechsterRekrutSchritt')('6863', 'stable', s, { light: 200 }); return (r.art === 'warten' && r.freiInMs === 1583000 && /Platz frei in 27 Min/.test(r.grund)) || JSON.stringify(r); });
+
 console.log(`\n${ok} bestanden, ${fehl} fehlgeschlagen`);
 process.exit(fehl ? 1 : 0);

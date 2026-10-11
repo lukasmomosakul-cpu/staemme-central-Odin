@@ -40,3 +40,6 @@ Siehe ANFRAGEN.md.
 | 26 | place/scavenge (Einzelseite) | de261 | desktop | 9.10.2026, 11:53:16 | wie 25 | godbot-seite-place_2026-10-09_1153.txt |
 | 27 | place/scavenge (Einzelseite) | de261 | mobil | 9.10.2026, 13:18 | Slot 1 freigeschaltet, 2-4 gesperrt, ohne Premium; dazu Mitschnitt send_squads 13:19:22 | godbot-seite-place_2026-10-09_1318.txt |
 | 28 | report (Späherbericht, Barbarendorf) | de260 | mobil | 11.10.2026, 09:25:18 | #attack_spy_building_data (JSON id/level), #attack_info_def .village_anchor[data-id], #attack_info_att_units Anzahl/Verluste (td.unit-item-*), Kampfzeit | godbot-seite-report_2026-10-11_0925.txt |
+| 29 | stable (Rekrutierungsschleife, current_order) | de260 | mobil | 11.10.2026, 18:32:43 | .queueItem, span.timer (Restzeit laufender Auftrag), cancelOrder | godbot-diagnose_2026-10-11_2244.txt (Mitschnitt train) |
+| 30 | stable (Rekrutierungsschleife, 2 Aufträge) | de260 | mobil | 11.10.2026, 20:30:51 | nur 1. .queueItem mit span.timer, 2. .queueItem[data-order] mit Dauer als Text; beim Mitschnitt nach 2000 Zeichen gekürzt | godbot-diagnose_2026-10-11_2244.txt (Mitschnitt train) |
+| 31 | barracks (Rekrutierungsschleife, current_order) | de259 | desktop | 26.9.2026, 14:16:25 | tr.lit > td.lit-item > span.timer, cancelOrder | ANFRAGEN.md Nr. 4 |

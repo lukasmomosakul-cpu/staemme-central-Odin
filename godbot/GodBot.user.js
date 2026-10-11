@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      587
+// @version      588
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -46249,10 +46249,28 @@ function rekrutSeiteLesen(win, doc) {
             const um = h.match(/unit_([a-z_]+?)(?:@2x)?\.webp/) ||
                 h.match(/unit_sprite_smaller\s+([a-z_]+)/);
             const zm = String(el.textContent || "").match(/(\d+)\s*[^\d\s]/);
+            // v588: Restzeit des LAUFENDEN Auftrags. Belegt mobil (de260
+            // 11.10., current_order): nur das erste .queueItem traegt
+            // <span class="timer">0:26:23</span>, die weiteren die Dauer
+            // als blossen Text. Desktop (de259 26.09.): tr.lit >
+            // td.lit-item > <span class="timer">0:10:06</span>. Der Timer
+            // "Naechste Einheit in" steht ausserhalb der Auftraege.
+            let restMs = null;
+            try {
+                const tm = el.querySelector("span.timer");
+                const t = tm ? String(tm.textContent || "").trim() : "";
+                const hm = t.match(/^(\d+):([0-5]\d):([0-5]\d)$/);
+                if (hm) {
+                    const ms = ((parseInt(hm[1], 10) * 3600) + (parseInt(hm[2], 10) * 60) +
+                        parseInt(hm[3], 10)) * 1000;
+                    if (ms > 0) restMs = ms;
+                }
+            } catch (e) { }
             out.schlange.push({
                 id: im[1],
                 einheit: um ? um[1] : null,
-                anzahl: zm ? (parseInt(zm[1], 10) || 0) : 0
+                anzahl: zm ? (parseInt(zm[1], 10) || 0) : 0,
+                restMs: restMs
             });
         });
     } catch (e) {
@@ -46408,10 +46426,15 @@ function naechsterRekrutSchritt(villageId, gebaeude, seite, soll) {
         return { art: "aus", grund: "Rekrutierungsadresse fehlt (TrainOverview.train_link)." };
     }
     if (seite.schlange.length >= REKRUT_MAX_AUFTRAEGE) {
+        // v588: wann wird ein Platz frei? = Ende des laufenden Auftrags.
+        const zeiten = seite.schlange.map(o => o && o.restMs)
+            .filter(x => typeof x === "number" && x > 0);
+        const freiInMs = zeiten.length ? Math.min.apply(null, zeiten) : null;
         return {
-            art: "warten",
+            art: "warten", freiInMs: freiInMs,
             grund: `Rekrutierungsschleife hat ${seite.schlange.length} von ` +
-                `${REKRUT_MAX_AUFTRAEGE} erlaubten Aufträgen.`
+                `${REKRUT_MAX_AUFTRAEGE} erlaubten Aufträgen` +
+                (freiInMs ? ` - Platz frei in ${Math.ceil(freiInMs / 60000)} Min.` : "") + `.`
         };
     }
     if (seite.popFrei === null) {
@@ -46651,7 +46674,14 @@ function rekrutGebaeudeBesuchen(villageId, gebaeude, fertig) {
             console.log(`[TW] Rekrutierung ${dorf}/${gebaeude}: ${schritt.art} - ${schritt.grund}`);
             // Auch hier bekommt jeder Ausgang einen Termin - ohne den
             // liefe das Dorf im Sekundentakt dieselbe Runde.
+            // v588: volle Schleife -> wieder ansehen, sobald der laufende
+            // Auftrag fertig ist (plus 20-60 s), statt pauschal 20 Min.
+            // Ohne lesbare Restzeit bleibt es bei 20 Min. Die Untergrenze
+            // zwischen zwei Laeufen (10-15 Min, planeNaechstenRekrutScan)
+            // gilt unveraendert - es gibt keine zusaetzlichen Abrufe.
             const pause = schritt.langsam ? 6 * 60 * 60 * 1000
+                : (schritt.art === "warten" && schritt.freiInMs)
+                    ? Math.min(schritt.freiInMs, 6 * 60 * 60 * 1000) + humanDelay(20 * 1000, 60 * 1000)
                 : (schritt.art === "warten") ? 20 * 60 * 1000
                 : (schritt.art === "fertig") ? 60 * 60 * 1000 : 2 * 60 * 60 * 1000;
             merkeRekrutTermin(villageId, gebaeude, Date.now() + pause, schritt.grund);
