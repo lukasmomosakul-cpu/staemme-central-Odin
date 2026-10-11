@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      593
+// @version      594
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32229,8 +32229,10 @@ const DEFAULT_SETTINGS = {
 const GODFARM_CFG_KEY = "tw_godfarm_cfg";
 const GODFARM_NEXT_KEY = "tw_next_godfarm_at";
 const GODFARM_STAND_KEY = "tw_godfarm_stand";
-// Laufzeitwert je Geraet, absichtlich ohne tw_ (nicht im Odin-Abgleich).
-const GODFARM_LOG_KEY = "godfarm_log";
+// v594: letzte eigene ANKUNFT je Ziel { id: ankunftMs }. Mit tw_, damit ein
+// Geraetewechsel (Geraete-Sperre) die Abstaende kennt; geschrieben nur
+// einmal je Lauf.
+const GODFARM_LOG_KEY = "tw_godfarm_ankunft";
 const GODFARM_MAX_ANGRIFFE = 40;
 let godFarmLaeuft = false;
 
@@ -32243,7 +32245,6 @@ function godFarmCfg() {
         an: c.an === true,
         abstandMin: zahl(c.abstandMin, 30, 1, 1440),
         maxFelder: zahl(c.maxFelder, 20, 1, 100),
-        leerFaktor: zahl(c.leerFaktor, 2, 1, 10),
         laufMin: von,
         laufMax: Math.max(von, zahl(c.laufMax, 20, 2, 240))
     };
@@ -32258,7 +32259,7 @@ function godFarmCfgSetzen(teil) {
 function godFarmLog() {
     try {
         const d = JSON.parse(localStorage.getItem(GODFARM_LOG_KEY) || "{}") || {};
-        const grenze = Date.now() - 48 * 3600 * 1000;
+        const grenze = Date.now() - 24 * 3600 * 1000;
         Object.keys(d).forEach(k => { if (!(d[k] > grenze)) delete d[k]; });
         return d;
     } catch (e) { return {}; }
@@ -32307,7 +32308,10 @@ function godFarmTitelLesen(a) {
     let m;
     while ((m = re.exec(t)) !== null) einheiten[m[1]] = (einheiten[m[1]] || 0) + parseInt(m[2], 10);
     const bm = t.match(/ressources[^<]*<\/span>\s*(\d+)/);
-    return { einheiten, beute: bm ? parseInt(bm[1], 10) : null };
+    // v594: "Laufzeit: 0:10:00" (Seitenquellen 32/33, beide Oberflaechen).
+    const lz = t.match(/Laufzeit:\s*(\d+):([0-5]\d):([0-5]\d)/);
+    const laufzeitMs = lz ? ((parseInt(lz[1], 10) * 3600) + (parseInt(lz[2], 10) * 60) + parseInt(lz[3], 10)) * 1000 : null;
+    return { einheiten, beute: bm ? parseInt(bm[1], 10) : null, laufzeitMs };
 }
 
 function godFarmSeiteLesen(doc, html, eigen) {
@@ -32375,7 +32379,7 @@ function godFarmSeiteLesen(doc, html, eigen) {
             const art = a.classList.contains("farm_icon_b") ? "B" : (a.classList.contains("farm_icon_a") ? "A" : null);
             if (!art) return;
             const t = godFarmTitelLesen(a);
-            ziel.vorlagen[art] = { id: om[2], beute: t.beute };
+            ziel.vorlagen[art] = { id: om[2], beute: t.beute, laufzeitMs: t.laufzeitMs };
             const v = out.vorlagen[om[2]] = out.vorlagen[om[2]] || { einheiten: t.einheiten, beute: null };
             if (t.beute !== null) v.beute = t.beute;
             if (!Object.keys(v.einheiten).length) v.einheiten = t.einheiten;
@@ -32394,21 +32398,30 @@ function godFarmLeistbar(einheiten, vorlage) {
     return Object.keys(vorlage.einheiten).every(u => (einheiten[u] || 0) >= vorlage.einheiten[u]);
 }
 
+// v594 (Fetteruruk 12.10.): "FarmGod schickt Angriffe in festen Abstaenden
+// - alle z.B. 15 Minuten wird ein Dorf angegriffen. Weil extrem viel durch
+// alle Spieler gefarmt wird, muss man alles nehmen, was man kriegen kann."
+// Darum NICHT mehr "laufender Angriff = auslassen" und kein Leer-Faktor:
+// massgeblich ist allein der Abstand zwischen zwei eigenen ANKUENFTEN am
+// selben Dorf (Ankunft = jetzt + Laufzeit der Vorlage laut Farm-Seite).
+// Reihenfolge wie bei FarmGod nach Entfernung (kurze Wege = mehr Umlaeufe
+// mit denselben Truppen); "Volle Beute" bekommt die groessere Vorlage.
+// Nur der Uebergang ist vorsichtig: steht ein Angriff aus, den GodBot-Farm
+// nicht selbst geschickt hat (keine eigene Ankunft gemerkt, z.B. noch von
+// FarmGod), wird das Dorf erst nach dessen Ankunft wieder genommen.
 function godFarmAuswahl(seite, cfg, log, jetzt) {
     const gruende = { laufend: 0, verluste: 0, wall: 0, weit: 0, abstand: 0, truppen: 0 };
     const kandidaten = [];
     seite.ziele.forEach(z => {
-        if (z.laufend > 0) { gruende.laufend++; return; }
         if (z.dot === "red" || z.dot === "yellow") { gruende.verluste++; return; }
         if (z.wall !== null && z.wall > 0) { gruende.wall++; return; }
         if (z.dist !== null && z.dist > cfg.maxFelder) { gruende.weit++; return; }
-        const abstand = cfg.abstandMin * 60000 * (z.voll === false ? cfg.leerFaktor : 1);
-        if (log[z.id] && jetzt - log[z.id] < abstand) { gruende.abstand++; return; }
+        if (z.laufend > 0 && !log[z.id]) { gruende.laufend++; return; }
         kandidaten.push(z);
     });
-    const rang = (z) => (z.voll === true ? 0 : (z.voll === null ? 1 : 2));
-    kandidaten.sort((a, b) => (rang(a) - rang(b)) || ((a.dist || 0) - (b.dist || 0)));
+    kandidaten.sort((a, b) => ((a.dist || 0) - (b.dist || 0)) || ((b.voll === true) - (a.voll === true)));
 
+    const abstand = cfg.abstandMin * 60000;
     const einheiten = Object.assign({}, seite.einheiten);
     const plan = [];
     kandidaten.forEach(z => {
@@ -32417,14 +32430,15 @@ function godFarmAuswahl(seite, cfg, log, jetzt) {
         const vb = z.vorlagen.B && seite.vorlagen[z.vorlagen.B.id];
         const beute = (v) => (v && typeof v.beute === "number") ? v.beute : 0;
         let wahl = null;
-        // Volle Beute: groessere Vorlage, wenn leistbar.
         if (z.voll === true && vb && beute(vb) > beute(va) && godFarmLeistbar(einheiten, vb)) wahl = "B";
         else if (va && godFarmLeistbar(einheiten, va)) wahl = "A";
         else if (vb && godFarmLeistbar(einheiten, vb)) wahl = "B";
         if (!wahl) { gruende.truppen++; return; }
+        const ankunft = jetzt + (z.vorlagen[wahl].laufzeitMs || 0);
+        if (log[z.id] && ankunft - log[z.id] < abstand) { gruende.abstand++; return; }
         const v = wahl === "A" ? va : vb;
         Object.keys(v.einheiten).forEach(u => { einheiten[u] -= v.einheiten[u]; });
-        plan.push({ ziel: z, art: wahl, vorlageId: z.vorlagen[wahl].id });
+        plan.push({ ziel: z, art: wahl, vorlageId: z.vorlagen[wahl].id, ankunft });
     });
     return { plan, gruende, kandidaten: kandidaten.length };
 }
@@ -32484,7 +32498,7 @@ function godFarmLauf(fertig) {
             const log = godFarmLog();
             const aw = godFarmAuswahl(seite, cfg, log, Date.now());
             const g = aw.gruende;
-            const ausgelassen = `ausgelassen: ${g.laufend} laufend, ${g.abstand} Abstand, ${g.verluste} Verluste, ` +
+            const ausgelassen = `ausgelassen: ${g.abstand} Abstand, ${g.laufend} fremd laufend, ${g.verluste} Verluste, ` +
                 `${g.wall} Wall, ${g.weit} zu weit, ${g.truppen} ohne Truppen` +
                 (seite.seiten > 1 ? ` - Achtung: ${seite.seiten} Seiten, gelesen nur Seite 1 (Seitengroesse erhoehen)` : "");
             if (!aw.plan.length) {
@@ -32502,6 +32516,9 @@ function godFarmLauf(fertig) {
             const proArt = { A: 0, B: 0 };
             const naechster = () => {
                 if (i >= aw.plan.length || fehlerFolge >= 2 || isBotProtectionActive()) {
+                    // Einmal je Lauf schreiben - sonst gaelte der Schluessel dem
+                    // Odin-Abgleich als Laufzeitwert und ginge nie hoch.
+                    if (gesendet) { try { localStorage.setItem(GODFARM_LOG_KEY, JSON.stringify(log)); } catch (e) { } }
                     const grund = fehlerFolge >= 2 ? " - 2 Ablehnungen in Folge, abgebrochen"
                         : (isBotProtectionActive() ? " - Botschutz, abgebrochen" : "");
                     ende({
@@ -32525,8 +32542,8 @@ function godFarmLauf(fertig) {
                         const echt = ok && r && r.success && String(r.target_village) === String(p.ziel.id);
                         if (echt) {
                             gesendet++; fehlerFolge = 0; proArt[p.art]++;
-                            log[p.ziel.id] = Date.now();
-                            try { localStorage.setItem(GODFARM_LOG_KEY, JSON.stringify(log)); } catch (e) { }
+                            // Ankunft neu gerechnet ab dem tatsaechlichen Versand.
+                            log[p.ziel.id] = Date.now() + (p.ziel.vorlagen[p.art].laufzeitMs || 0);
                             try { incrementFarmCounter(p.art === "B" ? "tw_farm_attacks_sent_b" : "tw_farm_attacks_sent_a"); } catch (e) { }
                         } else {
                             fehlerFolge++;
@@ -32562,12 +32579,11 @@ function godFarmUiHtml() {
                 </label>
                 <div style="font-size:11px;color:#999;margin:3px 0 6px;">Eigener Farmlauf, nur für dieses Konto. Solange an, farmt nur GodBot – FarmGod pausiert (sein Schalter bleibt). 1 Abruf je Lauf + Angriffe.</div>
                 <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;">
-                    <span>Abstand je Dorf</span>${feld("tw-godfarm-abstand", c.abstandMin)}<span>Min.</span>
+                    <span>Abstand je Dorf</span>${feld("tw-godfarm-abstand", c.abstandMin)}<span>Min. (zwischen Ankünften)</span>
                     <span>· max.</span>${feld("tw-godfarm-felder", c.maxFelder, 40)}<span>Felder</span>
                 </div>
                 <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;margin-top:4px;">
                     <span>Lauf alle</span>${feld("tw-godfarm-von", c.laufMin, 40)}<span>bis</span>${feld("tw-godfarm-bis", c.laufMax, 40)}<span>Min.</span>
-                    <span>· nach leer ×</span>${feld("tw-godfarm-leer", c.leerFaktor, 36)}
                 </div>
                 <div id="tw-godfarm-stand" style="font-size:11px;color:#aab;margin-top:6px;"></div>
                 <button id="tw-godfarm-jetzt" style="margin-top:6px;width:100%;background:#222;color:#fff;border:1px solid #444;border-radius:4px;padding:5px;cursor:pointer;">GodBot-Farm: jetzt ein Lauf</button>
@@ -32595,14 +32611,13 @@ function godFarmUiBinden(content) {
             abstandMin: parseFloat(q("tw-godfarm-abstand").value),
             maxFelder: parseFloat(q("tw-godfarm-felder").value),
             laufMin: parseFloat(q("tw-godfarm-von").value),
-            laufMax: parseFloat(q("tw-godfarm-bis").value),
-            leerFaktor: parseFloat(q("tw-godfarm-leer").value)
+            laufMax: parseFloat(q("tw-godfarm-bis").value)
         });
-        console.log(`[TW] GodBot-Farm: ${c.an ? "AN" : "AUS"} - Abstand ${c.abstandMin} Min. (nach leer x${c.leerFaktor}), ` +
+        console.log(`[TW] GodBot-Farm: ${c.an ? "AN" : "AUS"} - Abstand ${c.abstandMin} Min. zwischen zwei Ankünften je Dorf, ` +
             `max. ${c.maxFelder} Felder, Lauf alle ${c.laufMin}-${c.laufMax} Min.`);
         godFarmUiStand(q("tw-godfarm-stand"));
     };
-    ["tw-godfarm-an", "tw-godfarm-abstand", "tw-godfarm-felder", "tw-godfarm-von", "tw-godfarm-bis", "tw-godfarm-leer"]
+    ["tw-godfarm-an", "tw-godfarm-abstand", "tw-godfarm-felder", "tw-godfarm-von", "tw-godfarm-bis"]
         .forEach(id => q(id).addEventListener("change", speichern));
     q("tw-godfarm-jetzt").onclick = () => {
         if (!godFarmCfg().an) { q("tw-godfarm-an").checked = true; speichern(); }
