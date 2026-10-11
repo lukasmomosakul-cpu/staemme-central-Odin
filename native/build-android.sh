@@ -1136,10 +1136,41 @@ public class OdinService extends Service {
    .notify((int)(System.currentTimeMillis()%90000),n);
   c.startActivity(i);
  }
+ // 2.0.39: AUSWAHL "AUTOMATISCH OEFFNEN" je Geraet. Fetteruruk 11.10.: "nicht
+ // mehr random in alle hinzugefuegten Konten geladen werden" - am 11.10. um
+ // 02:31 holte der Wecker auf FetterOrks Handy Ares20/de256 nach vorn, weil
+ // dessen Raubzug-Termine aus einer frueheren Sitzung hier noch vorgemerkt
+ // waren. Ist "nur ausgewaehlte Konten" an, weckt Odin nur die angehakten.
+ // Von Hand oeffnen geht immer.
+ static boolean autoAuswahlAn(Context c){
+  return c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).getBoolean("auto_auswahl",false);
+ }
+ static java.util.Set<String> autoKonten(Context c){
+  java.util.Set<String> out=new java.util.HashSet<>();
+  try{ JSONArray a=new JSONArray(c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).getString("auto_konten","[]"));
+   for(int i=0;i<a.length();i++)out.add(a.optString(i)); }catch(Exception ig){}
+  return out;
+ }
+ static void autoKontoSetzen(Context c,String konto,boolean an){
+  java.util.Set<String> s=autoKonten(c); if(an)s.add(konto); else s.remove(konto);
+  JSONArray a=new JSONArray(); for(String k:s)a.put(k);
+  c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).edit().putString("auto_konten",a.toString()).apply();
+ }
+ static void autoAuswahlSetzen(Context c,boolean an){
+  c.getSharedPreferences("odin_svc",Context.MODE_PRIVATE).edit().putBoolean("auto_auswahl",an).apply();
+ }
+ static boolean autoErlaubt(Context c,String konto){
+  if(konto==null||konto.isEmpty()||!autoAuswahlAn(c))return true;
+  return autoKonten(c).contains(konto);
+ }
  static void wecken(Context c,String konto,String text,String art,boolean wartung){
   String fremd=fremdHalter(konto);
   if(fremd!=null){
    OdinLog.schreib(c,"-","info","Wecken uebersprungen ("+art+") - Konto läuft auf "+fremd);
+   return;
+  }
+  if(!autoErlaubt(c,konto)){
+   OdinLog.schreib(c,"-","info","Wecken uebersprungen ("+art+") - Konto auf diesem Gerät nicht für automatisches Öffnen ausgewählt: "+text);
    return;
   }
   String kt=konto==null?"":konto;
@@ -1234,6 +1265,8 @@ public class OdinService extends Service {
   // 2.0.17: fremd gefuehrtes Konto - Termin verwerfen, ohne die 90-s-Sperre
   // fuer eigene Termine zu verbrauchen.
   if(fremdHalter(konto)!=null){ OdinLog.schreib(this,"-","info","Termin übergangen ("+art+") - Konto läuft auf "+fremdHalter(konto)); return; }
+  // 2.0.39: nicht ausgewaehltes Konto - verwerfen, ohne die 90-s-Sperre zu verbrauchen.
+  if(!autoErlaubt(this,konto)){ OdinLog.schreib(this,"-","info","Termin übergangen ("+art+") - Konto nicht für automatisches Öffnen ausgewählt"); return; }
   zuletztGeweckt=jetzt;
   wecken(this,konto,text,art,"Raubzug".equals(art));
  }
@@ -3685,6 +3718,38 @@ public class GameWebViewActivity extends Activity {
   }catch(Exception e){ return null; }
  }
  // Langdruck auf eine Konto-Karte: alles zur IP dieses Kontos.
+ // 2.0.39 - KONTOMENUE (langer Druck in der Fussleiste). Fetteruruk 11.10.:
+ // "wenn man in einem Konto aktiv ist, gibt es keine Moeglichkeit
+ // auszuloggen". "Abmelden" schliesst die Welt dieses Geraets und gibt die
+ // Geraete-Sperre frei (weltSchliessen -> leaseFreigeben) - danach kann ein
+ // anderes Geraet das Konto ohne Rueckfrage uebernehmen.
+ private void kontoMenue(String kid,String name,String welt){
+  if(kid==null||kid.isEmpty()){ ipDialog(kid,name,welt); return; }
+  final Welt w=weltVon(kid);
+  final boolean auswahl=OdinService.autoAuswahlAn(this);
+  final boolean erlaubt=OdinService.autoKonten(this).contains(kid);
+  java.util.List<String> punkte=new java.util.ArrayList<>();
+  java.util.List<Runnable> taten=new java.util.ArrayList<>();
+  if(w!=null){ punkte.add("Abmelden (Welt auf diesem Gerät schließen)");
+   taten.add(()->weltSchliessen(w,"abgemeldet (lange gedrückt)")); }
+  punkte.add(erlaubt?"Automatisch öffnen: JA - ausschalten":"Automatisch öffnen: NEIN - einschalten");
+  taten.add(()->{ OdinService.autoKontoSetzen(this,kid,!erlaubt);
+   if(!erlaubt&&!auswahl)OdinService.autoAuswahlSetzen(this,true);
+   setStatus((welt.isEmpty()?name:welt+" "+name)+": automatisch öffnen "+(!erlaubt?"an":"aus")
+     +(OdinService.autoAuswahlAn(this)?"":" (Auswahl ist aus - alle Konten werden geweckt)"));
+   try{ fussleisteFuellen(); }catch(Exception ig){} });
+  punkte.add(auswahl?"Auswahl aus (wieder alle Konten automatisch öffnen)":"Nur ausgewählte Konten automatisch öffnen");
+  taten.add(()->{ OdinService.autoAuswahlSetzen(this,!auswahl);
+   setStatus(!auswahl?"Automatisch geöffnet werden nur noch die ausgewählten Konten":"Automatisch geöffnet werden wieder alle Konten");
+   try{ fussleisteFuellen(); }catch(Exception ig){} });
+  punkte.add("Verbindung / IP anzeigen");
+  taten.add(()->ipDialog(kid,name,welt));
+  new android.app.AlertDialog.Builder(this)
+   .setTitle((welt.isEmpty()?"":welt+" · ")+name)
+   .setItems(punkte.toArray(new String[0]),(d,i)->{ if(i>=0&&i<taten.size())taten.get(i).run(); })
+   .setNegativeButton("Abbrechen",null)
+   .show();
+ }
  private void ipDialog(String konto,String name,String welt){
   String[] g=ipGemerkt(konto);
   StringBuilder b=new StringBuilder();
@@ -4034,7 +4099,15 @@ public class GameWebViewActivity extends Activity {
      ipv.setTextColor("1".equals(ipInfo[2])?0xFFE0A030:UI_SCHWACH); karte.addView(ipv);
     }
     final String fName=nm, fWelt2=welt;
-    karte.setOnLongClickListener(x->{ ipDialog(kid,fName,fWelt2); return true; });
+    // 2.0.39: nicht automatisch oeffnen -> sichtbar markieren.
+    if(!kid.isEmpty()&&!OdinService.autoErlaubt(this,kid)){
+     TextView mv=new TextView(this); mv.setText("nur von Hand"); mv.setTextSize(9.5f); mv.setSingleLine(true);
+     mv.setTextColor(0xFFE0A030); karte.addView(mv);
+    }
+    // 2.0.39: langer Druck = Kontomenue (Abmelden, automatisch oeffnen, IP).
+    karte.setOnLongClickListener(x->{
+     x.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+     kontoMenue(kid,fName,fWelt2); return true; });
     if(!active){
      final String fNm=nm, fWelt=welt, fUser=o.optString("username",""), fAlle=accountsJson;
      karte.setOnClickListener(x->{
