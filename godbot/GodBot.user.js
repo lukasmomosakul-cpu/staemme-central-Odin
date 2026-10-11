@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      582
+// @version      583
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -48448,9 +48448,21 @@ function amMitschnittBetrifft(url) {
 // (auch GET), samt laengerer Antwort - die Belohnungsliste kommt
 // vermutlich per GET, das Abholen evtl. als Seitenaufruf. Alles andere
 // bleibt wie gehabt auf POST beschraenkt.
+// v583 (Fetteruruk 11.10.): Karte geoeffnet, verschoben, Dorf angetippt -
+// nichts aufgezeichnet. Die Karte laedt per GET (map.php / screen=map&
+// ajax=...), das traf keine Bedingung. Jetzt: Karten-Anfragen jeder
+// Methode, mit langer Antwort - gleich fuer mobil/desktop, App/PC (alles
+// laeuft ueber denselben XHR-/fetch-Haken).
+function amMitschnittKarte(url) {
+    const u = String(url || "");
+    return /(^|\/)map\.php/i.test(u) || /screen=map(&|$)/i.test(u) || /[?&]ajax=map/i.test(u) ||
+        /\/map\/[a-z_]+\.txt/i.test(u) || /screen=api&ajax(action)?=map/i.test(u);
+}
+
 function amMitschnittQuest(url) {
     const u = String(url || "");
     if (/socket\.io/.test(u)) return false;
+    if (amMitschnittKarte(u) && !/screen=map(&|$)(?!.*ajax)/i.test(u)) return true;
     // v554: auch Export-Anfragen jeder Methode (Berichte, Eintreffende).
     return /quest|reward/i.test(u) ||
         /screen=report.*(forward|publish|export)|forward.*screen=report|screen=reqdef|ajax\w*=.*(export|forward|publish)/i.test(u);
@@ -48470,6 +48482,27 @@ let amMitschnittEingehaengt = false;
 function amMitschnittEinhaengen() {
     if (amMitschnittEingehaengt) return;
     amMitschnittEingehaengt = true;
+
+    // v583: Laedt die Karte Bereiche NICHT per XHR/fetch (Skript, Bild,
+    // JSONP), sieht der Haken sie nicht. Die Ladeliste des Browsers sieht
+    // alles - nur Adresse und Art, ohne Inhalt. Gleich auf Handy und PC.
+    try {
+        if (typeof PerformanceObserver === "function") {
+            const po = new PerformanceObserver((liste) => {
+                try {
+                    if (!amMitschnittAn()) return;
+                    liste.getEntries().forEach(e => {
+                        const art = String(e.initiatorType || "");
+                        if (art === "xmlhttprequest" || art === "fetch") return;
+                        if (!amMitschnittKarte(e.name)) return;
+                        amMitschnittMerken(`Ladeliste (${art || "?"})`, e.name,
+                            `Dauer ${Math.round(e.duration || 0)} ms, ${e.transferSize || 0} Bytes`);
+                    });
+                } catch (err) { }
+            });
+            po.observe({ type: "resource", buffered: false });
+        }
+    } catch (e) { }
 
     try {
         const XHR = window.XMLHttpRequest;
