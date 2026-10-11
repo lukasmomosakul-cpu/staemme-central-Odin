@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      590
+// @version      591
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -51,7 +51,8 @@
         tw_next_resource_scan_at: "Rohstoffe",
         tw_mass_support_next_at: "Massenunterstützung",
         tw_incoming_rename_due_at: "Eingehende",
-        tw_am_check_soon_at: "Manager"
+        tw_am_check_soon_at: "Manager",
+        tw_next_godfarm_at: "Farmen (GodBot)"
         // NICHT hierher: tw_am_check_at und tw_plan_aufraeumen_at. Beide
         // halten den Zeitpunkt des LETZTEN Laufs (Date.now()), keinen
         // kuenftigen Termin. Als Termin gemeldet galten sie nach 3 Minuten
@@ -19535,6 +19536,13 @@ function botMarkerSichtbar() {
             return;
         }
 
+        // v591: GodBot-Farm (Test) - nur wenn sonst nichts laeuft oder
+        // ansteht; eigener Sperrname, nie gleichzeitig mit FarmGod.
+        if (!owner && !farmDue && !scavengeDue && !bauLaufAktiv &&
+            !automationOnHold() && godFarmFaellig()) {
+            if (godFarmLauf(null)) return;
+        }
+
         if (!farmDue && !scavengeDue) return;
 
         // Siehe holdAutomationAfterAttack: gilt nur fuer Raubzug/Farmen.
@@ -32171,6 +32179,411 @@ const DEFAULT_SETTINGS = {
         return result;
     }
 
+// === GODBOT-FARM (v591, 11.10.2026) ======================================
+// Eigener Farmlauf statt FarmGod - zunaechst ZUM TESTEN, je Konto
+// einschaltbar und parallel zu FarmGod (Fetteruruk: "zunaechst noch
+// parallel laufen, um zu testen und nicht alle Accounts im Problemfall
+// lahmzulegen"). Standard AUS.
+//
+// BELEGT (Seitenquellen 32/33, Mitschnitt 11.10. 23:15:26 de260):
+//  - Eine Farm-Seite (screen=am_farm) enthaelt alles fuer einen Lauf:
+//      tr#village_<id>        Ziel, (x|y), dots/<farbe>, max_loot/0|1,
+//                             command/attack (title "Es läuft 1 Angriff.")
+//      a.farm_village_<id>.farm_icon_a|_b  sendUnits(this, Ziel, Vorlage),
+//                             title/data-title mit Einheiten + Beute
+//      Accountmanager.send_units_link = '...ajaxaction=farm&json=1&h=..'
+//      Accountmanager.farm.current_units = {...}
+//      Accountmanager.farm.templates['t_<id>']['<einheit>'] = <n>;
+//  - Versand: POST send_units_link, Rumpf target=..&template_id=..&source=..&h=..
+//    Antwort: {"response":{"success":"Es wurden folgende Einheiten geschickt:..",
+//              "target_village":6598,"current_units":{...}}}
+//    Gesendet ueber TribalWars.post - wie der bestehende Farmversand.
+//
+// SPARSAMER ALS FARMGOD (Odin-Zaehler 11.10., FetterOrk de260, 10,5 Std.):
+// FarmGod brauchte je Lauf ~9 Verwaltungsabrufe (Befehlsuebersicht,
+// Farm-Seiten, Gruppenmenue, Kombiniert) - 457 gegen 384 Angriffe. Hier:
+// EIN Abruf der Farm-Seite je Lauf, dann nur die Angriffe.
+//
+// EFFIZIENTER: kein Ziel mit laufendem Angriff; Verluste (gelb/rot) und
+// gespaehter Wall werden ausgelassen; "Volle Beute" zuerst (dort liegt
+// mehr) und mit der groesseren Vorlage; nach "Teilweise Beute" (leer
+// geraeumt) gilt der Abstand x Leer-Faktor. Der Abstand zwischen zwei
+// eigenen Angriffen auf dasselbe Dorf ist einstellbar (wie bei FarmGod).
+//
+// Steht auf Skript-Ebene VOR createOverlay()/openSettings(): das Einstellungsfenster ruft
+// godFarmUiHtml() auf, der Fahrplan godFarmFaellig()/godFarmLauf().
+//
+// SICHERHEIT: eigener Sperrname "godfarm" (FarmGod und GodBot-Farm laufen
+// nie gleichzeitig), Botschutz vor jedem Abruf und jedem Angriff, 2
+// abgelehnte Angriffe in Folge beenden den Lauf, 3 fehlgeschlagene Laeufe
+// in Folge schalten GodBot-Farm fuer DIESES Konto ab.
+const GODFARM_CFG_KEY = "tw_godfarm_cfg";
+const GODFARM_NEXT_KEY = "tw_next_godfarm_at";
+const GODFARM_STAND_KEY = "tw_godfarm_stand";
+// Laufzeitwert je Geraet, absichtlich ohne tw_ (nicht im Odin-Abgleich).
+const GODFARM_LOG_KEY = "godfarm_log";
+const GODFARM_MAX_ANGRIFFE = 40;
+let godFarmLaeuft = false;
+
+function godFarmCfg() {
+    let c = {};
+    try { c = JSON.parse(localStorage.getItem(GODFARM_CFG_KEY) || "{}") || {}; } catch (e) { c = {}; }
+    const zahl = (v, d, min, max) => { const n = parseFloat(v); return isNaN(n) ? d : Math.max(min, Math.min(max, n)); };
+    const von = zahl(c.laufMin, 10, 2, 240);
+    return {
+        an: c.an === true,
+        abstandMin: zahl(c.abstandMin, 30, 1, 1440),
+        maxFelder: zahl(c.maxFelder, 20, 1, 100),
+        leerFaktor: zahl(c.leerFaktor, 2, 1, 10),
+        laufMin: von,
+        laufMax: Math.max(von, zahl(c.laufMax, 20, 2, 240))
+    };
+}
+
+function godFarmCfgSetzen(teil) {
+    const c = Object.assign(godFarmCfg(), teil || {});
+    try { localStorage.setItem(GODFARM_CFG_KEY, JSON.stringify(c)); } catch (e) { }
+    return c;
+}
+
+function godFarmLog() {
+    try {
+        const d = JSON.parse(localStorage.getItem(GODFARM_LOG_KEY) || "{}") || {};
+        const grenze = Date.now() - 48 * 3600 * 1000;
+        Object.keys(d).forEach(k => { if (!(d[k] > grenze)) delete d[k]; });
+        return d;
+    } catch (e) { return {}; }
+}
+
+function godFarmFaellig() {
+    if (!godFarmCfg().an) return false;
+    const t = parseInt(localStorage.getItem(GODFARM_NEXT_KEY) || "0", 10) || 0;
+    return t <= Date.now();
+}
+
+function godFarmPlaneNaechsten(minuten) {
+    const c = godFarmCfg();
+    const ms = typeof minuten === "number" ? minuten * 60000
+        : humanDelay(c.laufMin * 60000, c.laufMax * 60000);
+    const at = Date.now() + ms;
+    try { localStorage.setItem(GODFARM_NEXT_KEY, String(Math.round(at))); } catch (e) { }
+    return at;
+}
+
+// --- Farm-Seite lesen (mobil und desktop, Seitenquellen 32/33) ------------
+function godFarmTitelLesen(a) {
+    const t = String((a && (a.getAttribute("data-title") || a.getAttribute("title"))) || "");
+    const einheiten = {};
+    const re = /unit_([a-z]+)(?:@2x)?\.webp[^>]*>\s*(\d+)/g;
+    let m;
+    while ((m = re.exec(t)) !== null) einheiten[m[1]] = (einheiten[m[1]] || 0) + parseInt(m[2], 10);
+    const bm = t.match(/ressources[^<]*<\/span>\s*(\d+)/);
+    return { einheiten, beute: bm ? parseInt(bm[1], 10) : null };
+}
+
+function godFarmSeiteLesen(doc, html, eigen) {
+    const out = { ok: false, fehler: null, sendLink: null, einheiten: null, vorlagen: {}, ziele: [], seiten: 1 };
+    html = String(html || "");
+    if (!doc || !doc.querySelector("#plunder_list")) {
+        out.fehler = "Farm-Assistent nicht auf der Seite (#plunder_list fehlt - Premium/Farm-Assistent aktiv?).";
+        return out;
+    }
+    const lm = html.match(/Accountmanager\.send_units_link\s*=\s*'([^']+)'/);
+    if (lm) out.sendLink = lm[1];
+    const um = html.match(/Accountmanager\.farm\.current_units\s*=\s*(\{[^}]*\})/);
+    if (um) {
+        try {
+            const u = JSON.parse(um[1]);
+            out.einheiten = {};
+            Object.keys(u).forEach(k => { out.einheiten[k] = parseInt(u[k], 10) || 0; });
+        } catch (e) { }
+    }
+    const tre = /Accountmanager\.farm\.templates\['t_(\d+)'\]\['([a-z]+)'\]\s*=\s*(\d+)/g;
+    let m;
+    while ((m = tre.exec(html)) !== null) {
+        const v = out.vorlagen[m[1]] = out.vorlagen[m[1]] || { einheiten: {}, beute: null };
+        v.einheiten[m[2]] = parseInt(m[3], 10) || 0;
+    }
+    // Die Seitenleiste steht zweimal (oben und unten, beide id=plunder_list_nav,
+    // Seitenquellen 32/33) - gezaehlt werden verschiedene Seitennummern.
+    out.seiten = Math.max(1, new Set([...doc.querySelectorAll(".paged-nav-item")]
+        .map(e => String(e.textContent || "").replace(/\D/g, "")).filter(Boolean)).size);
+
+    doc.querySelectorAll('tr[id^="village_"]').forEach(tr => {
+        const id = (tr.id.match(/^village_(\d+)$/) || [])[1];
+        if (!id) return;
+        const h = String(tr.innerHTML || "");
+        const km = String(tr.textContent || "").match(/\((\d{1,3})\|(\d{1,3})\)/);
+        if (!km) return;
+        const x = parseInt(km[1], 10), y = parseInt(km[2], 10);
+        const dot = (h.match(/dots\/([a-z]+)(?:@2x)?\.webp/) || [])[1] || null;
+        const ml = (h.match(/max_loot\/(\d)(?:@2x)?\.webp/) || [])[1];
+        let laufend = 0;
+        const att = tr.querySelector('img[src*="command/attack"]');
+        if (att) {
+            const n = String(att.getAttribute("data-title") || att.getAttribute("title") || "").match(/(\d+)/);
+            laufend = n ? parseInt(n[1], 10) : 1;
+        }
+        // Wall: mobil Text hinter wall.webp, desktop die Zelle nach den
+        // Rohstoffen (colspan=3). "?" = nicht gespaeht.
+        let wall = null;
+        const wm = h.match(/buildings\/wall\.webp[^>]*>\s*(\d+|\?)/);
+        if (wm) wall = wm[1] === "?" ? null : parseInt(wm[1], 10);
+        else {
+            const rc = tr.querySelector('td[colspan="3"]');
+            const t = rc && rc.nextElementSibling ? String(rc.nextElementSibling.textContent || "").trim() : "";
+            if (/^\d+$/.test(t)) wall = parseInt(t, 10);
+        }
+        const ziel = {
+            id, x, y,
+            dist: eigen ? Math.hypot(x - eigen.x, y - eigen.y) : null,
+            dot, voll: ml === "1" ? true : (ml === "0" ? false : null),
+            laufend, wall, vorlagen: {}
+        };
+        doc.querySelectorAll("a.farm_village_" + id).forEach(a => {
+            const om = String(a.getAttribute("onclick") || "").match(/sendUnits\(this,\s*(\d+),\s*(\d+)\)/);
+            if (!om || om[1] !== id) return;
+            const art = a.classList.contains("farm_icon_b") ? "B" : (a.classList.contains("farm_icon_a") ? "A" : null);
+            if (!art) return;
+            const t = godFarmTitelLesen(a);
+            ziel.vorlagen[art] = { id: om[2], beute: t.beute };
+            const v = out.vorlagen[om[2]] = out.vorlagen[om[2]] || { einheiten: t.einheiten, beute: null };
+            if (t.beute !== null) v.beute = t.beute;
+            if (!Object.keys(v.einheiten).length) v.einheiten = t.einheiten;
+        });
+        out.ziele.push(ziel);
+    });
+    if (!out.sendLink) { out.fehler = "Versandadresse (send_units_link) fehlt auf der Seite."; return out; }
+    if (!out.einheiten) { out.fehler = "Truppen im Dorf (farm.current_units) nicht lesbar."; return out; }
+    out.ok = true;
+    return out;
+}
+
+// --- Auswahl (rein rechnerisch, keine Abrufe) --------------------------
+function godFarmLeistbar(einheiten, vorlage) {
+    if (!vorlage || !vorlage.einheiten || !Object.keys(vorlage.einheiten).length) return false;
+    return Object.keys(vorlage.einheiten).every(u => (einheiten[u] || 0) >= vorlage.einheiten[u]);
+}
+
+function godFarmAuswahl(seite, cfg, log, jetzt) {
+    const gruende = { laufend: 0, verluste: 0, wall: 0, weit: 0, abstand: 0, truppen: 0 };
+    const kandidaten = [];
+    seite.ziele.forEach(z => {
+        if (z.laufend > 0) { gruende.laufend++; return; }
+        if (z.dot === "red" || z.dot === "yellow") { gruende.verluste++; return; }
+        if (z.wall !== null && z.wall > 0) { gruende.wall++; return; }
+        if (z.dist !== null && z.dist > cfg.maxFelder) { gruende.weit++; return; }
+        const abstand = cfg.abstandMin * 60000 * (z.voll === false ? cfg.leerFaktor : 1);
+        if (log[z.id] && jetzt - log[z.id] < abstand) { gruende.abstand++; return; }
+        kandidaten.push(z);
+    });
+    const rang = (z) => (z.voll === true ? 0 : (z.voll === null ? 1 : 2));
+    kandidaten.sort((a, b) => (rang(a) - rang(b)) || ((a.dist || 0) - (b.dist || 0)));
+
+    const einheiten = Object.assign({}, seite.einheiten);
+    const plan = [];
+    kandidaten.forEach(z => {
+        if (plan.length >= GODFARM_MAX_ANGRIFFE) return;
+        const va = z.vorlagen.A && seite.vorlagen[z.vorlagen.A.id];
+        const vb = z.vorlagen.B && seite.vorlagen[z.vorlagen.B.id];
+        const beute = (v) => (v && typeof v.beute === "number") ? v.beute : 0;
+        let wahl = null;
+        // Volle Beute: groessere Vorlage, wenn leistbar.
+        if (z.voll === true && vb && beute(vb) > beute(va) && godFarmLeistbar(einheiten, vb)) wahl = "B";
+        else if (va && godFarmLeistbar(einheiten, va)) wahl = "A";
+        else if (vb && godFarmLeistbar(einheiten, vb)) wahl = "B";
+        if (!wahl) { gruende.truppen++; return; }
+        const v = wahl === "A" ? va : vb;
+        Object.keys(v.einheiten).forEach(u => { einheiten[u] -= v.einheiten[u]; });
+        plan.push({ ziel: z, art: wahl, vorlageId: z.vorlagen[wahl].id });
+    });
+    return { plan, gruende, kandidaten: kandidaten.length };
+}
+
+// --- Ein Lauf: 1 Abruf der Farm-Seite + die Angriffe -------------------
+function godFarmStandMerken(s) {
+    try { localStorage.setItem(GODFARM_STAND_KEY, JSON.stringify(s)); } catch (e) { }
+}
+
+function godFarmStand() {
+    try { return JSON.parse(localStorage.getItem(GODFARM_STAND_KEY) || "null"); } catch (e) { return null; }
+}
+
+function godFarmLauf(fertig) {
+    const ende = (s) => {
+        godFarmLaeuft = false;
+        releaseProcessLock("godfarm");
+        const alt = godFarmStand() || {};
+        s.fehlLaeufe = s.fehler ? (alt.fehlLaeufe || 0) + 1 : 0;
+        s.at = Date.now();
+        godFarmStandMerken(s);
+        console.log(`[TW] GodBot-Farm: ${s.text}`);
+        if (s.fehlLaeufe >= 3) {
+            godFarmCfgSetzen({ an: false });
+            console.error("[TW] GodBot-Farm: 3 Laeufe in Folge fehlgeschlagen - fuer DIESES Konto " +
+                "abgeschaltet. FarmGod ist davon nicht betroffen.");
+            try { showToast("GodBot-Farm abgeschaltet (3 Fehler in Folge)", "error"); } catch (e) { }
+        }
+        try { fertig && fertig(s); } catch (e) { }
+    };
+    if (godFarmLaeuft) return false;
+    if (isBotProtectionActive() || automationOnHold()) return false;
+    const gd = (typeof game_data !== "undefined") ? game_data : null;
+    if (!gd || !gd.village || !gd.village.id) return false;
+    if (!acquireProcessLock("godfarm")) return false;
+    godFarmLaeuft = true;
+    godFarmPlaneNaechsten();
+
+    const vid = String(gd.village.id);
+    const eigen = { x: Number(gd.village.x), y: Number(gd.village.y) };
+    const url = "/game.php?village=" + encodeURIComponent(vid) + "&screen=am_farm";
+    let anfragen = 1;
+    twCountRequest(url, "auto", "godfarm-seite");
+    fetch(url, { credentials: "same-origin" })
+        .then(r => r.text())
+        .then(html => {
+            let doc = null;
+            try { doc = new DOMParser().parseFromString(html, "text/html"); } catch (e) { }
+            if (!doc || frameDocBlocked(doc, "godfarm")) {
+                try { haltAllAutomation("godfarm"); } catch (e) { }
+                ende({ fehler: true, gesendet: 0, anfragen, text: "Botschutz auf der Farm-Seite - Lauf beendet." });
+                return;
+            }
+            const seite = godFarmSeiteLesen(doc, html, eigen);
+            if (!seite.ok) { ende({ fehler: true, gesendet: 0, anfragen, text: seite.fehler }); return; }
+            const cfg = godFarmCfg();
+            const log = godFarmLog();
+            const aw = godFarmAuswahl(seite, cfg, log, Date.now());
+            const g = aw.gruende;
+            const ausgelassen = `ausgelassen: ${g.laufend} laufend, ${g.abstand} Abstand, ${g.verluste} Verluste, ` +
+                `${g.wall} Wall, ${g.weit} zu weit, ${g.truppen} ohne Truppen` +
+                (seite.seiten > 1 ? ` - Achtung: ${seite.seiten} Seiten, gelesen nur Seite 1 (Seitengroesse erhoehen)` : "");
+            if (!aw.plan.length) {
+                ende({ fehler: false, gesendet: 0, anfragen, text: `${seite.ziele.length} Ziele, nichts zu senden (${ausgelassen}).` });
+                return;
+            }
+            let TW = null;
+            try { TW = (seitenWin(window) || window).TribalWars; } catch (e) { TW = null; }
+            if (!TW || typeof TW.post !== "function") {
+                ende({ fehler: true, gesendet: 0, anfragen, text: "TribalWars.post nicht verfuegbar - nichts gesendet." });
+                return;
+            }
+            const sendUrl = seite.sendLink.replace(/village=(\d+)/, "village=" + vid);
+            let i = 0, gesendet = 0, fehlerFolge = 0, letzterStart = 0;
+            const proArt = { A: 0, B: 0 };
+            const naechster = () => {
+                if (i >= aw.plan.length || fehlerFolge >= 2 || isBotProtectionActive()) {
+                    const grund = fehlerFolge >= 2 ? " - 2 Ablehnungen in Folge, abgebrochen"
+                        : (isBotProtectionActive() ? " - Botschutz, abgebrochen" : "");
+                    ende({
+                        fehler: fehlerFolge >= 2, gesendet, anfragen,
+                        text: `${gesendet} von ${aw.plan.length} Angriff(en) (A ${proArt.A}, B ${proArt.B}) ` +
+                            `mit ${anfragen} Anfrage(n)${grund}; ${ausgelassen}.`
+                    });
+                    return;
+                }
+                const p = aw.plan[i++];
+                const warte = letzterStart ? Math.max(0, humanDelay(250, 600) - (Date.now() - letzterStart)) : 0;
+                setTimeout(() => {
+                    letzterStart = Date.now();
+                    try { touchProcessLock("godfarm"); } catch (e) { }
+                    anfragen++;
+                    twCountRequest(sendUrl, "auto", "godfarm-versand");
+                    let beantwortet = false;
+                    const antwort = (ok, r) => {
+                        if (beantwortet) return;
+                        beantwortet = true;
+                        const echt = ok && r && r.success && String(r.target_village) === String(p.ziel.id);
+                        if (echt) {
+                            gesendet++; fehlerFolge = 0; proArt[p.art]++;
+                            log[p.ziel.id] = Date.now();
+                            try { localStorage.setItem(GODFARM_LOG_KEY, JSON.stringify(log)); } catch (e) { }
+                            try { incrementFarmCounter(p.art === "B" ? "tw_farm_attacks_sent_b" : "tw_farm_attacks_sent_a"); } catch (e) { }
+                        } else {
+                            fehlerFolge++;
+                            let roh = ""; try { roh = JSON.stringify(r).slice(0, 200); } catch (e) { }
+                            console.warn(`[TW] GodBot-Farm: Angriff auf ${p.ziel.x}|${p.ziel.y} nicht bestaetigt ` +
+                                `(${fehlerFolge}. in Folge) ${roh}`);
+                        }
+                        naechster();
+                    };
+                    try {
+                        TW.post(sendUrl, null, { target: p.ziel.id, template_id: p.vorlageId, source: vid },
+                            (r) => antwort(true, r), (r) => antwort(false, r));
+                    } catch (e) { antwort(false, { error: String(e && e.message || e) }); return; }
+                    setTimeout(() => antwort(false, { error: "keine Antwort binnen 15 s" }), 15000);
+                }, warte);
+            };
+            naechster();
+        })
+        .catch(e => ende({ fehler: true, gesendet: 0, anfragen, text: "Farm-Seite nicht ladbar: " + (e && e.message || e) }));
+    return true;
+}
+
+// --- Einstellungen im Farmen-Bereich -----------------------------------
+function godFarmUiHtml() {
+    const c = godFarmCfg();
+    const feld = (id, wert, breite) => `<input type="number" id="${id}" value="${wert}" class="tw-numfield" ` +
+        `style="width:${breite || 46}px;text-align:right;background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;" />`;
+    return `
+            <div style="margin-top:12px;padding-top:10px;border-top:1px solid #333;">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="tw-godfarm-an" class="tw-checkbox" ${c.an ? "checked" : ""} />
+                    <b>GodBot-Farm (Test)</b>
+                </label>
+                <div style="font-size:11px;color:#999;margin:3px 0 6px;">Eigener Farmlauf, nur für dieses Konto. Läuft parallel zu FarmGod, nie gleichzeitig. 1 Abruf je Lauf + Angriffe.</div>
+                <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;">
+                    <span>Abstand je Dorf</span>${feld("tw-godfarm-abstand", c.abstandMin)}<span>Min.</span>
+                    <span>· max.</span>${feld("tw-godfarm-felder", c.maxFelder, 40)}<span>Felder</span>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;margin-top:4px;">
+                    <span>Lauf alle</span>${feld("tw-godfarm-von", c.laufMin, 40)}<span>bis</span>${feld("tw-godfarm-bis", c.laufMax, 40)}<span>Min.</span>
+                    <span>· nach leer ×</span>${feld("tw-godfarm-leer", c.leerFaktor, 36)}
+                </div>
+                <div id="tw-godfarm-stand" style="font-size:11px;color:#aab;margin-top:6px;"></div>
+                <button id="tw-godfarm-jetzt" style="margin-top:6px;width:100%;background:#222;color:#fff;border:1px solid #444;border-radius:4px;padding:5px;cursor:pointer;">GodBot-Farm: jetzt ein Lauf</button>
+            </div>`;
+}
+
+function godFarmUiStand(el) {
+    if (!el) return;
+    const s = godFarmStand();
+    const c = godFarmCfg();
+    const next = parseInt(localStorage.getItem(GODFARM_NEXT_KEY) || "0", 10) || 0;
+    const teile = [];
+    if (s && s.at) teile.push(`Letzter Lauf ${new Date(s.at).toLocaleTimeString("de-DE")}: ${String(s.text || "").replace(/</g, "&lt;")}`);
+    if (c.an) teile.push(next > Date.now() ? `Nächster Lauf ${new Date(next).toLocaleTimeString("de-DE")}` : "Nächster Lauf: fällig");
+    else teile.push("aus");
+    el.innerHTML = teile.join("<br>");
+}
+
+function godFarmUiBinden(content) {
+    const q = (id) => content.querySelector("#" + id);
+    if (!q("tw-godfarm-an")) return;
+    const speichern = () => {
+        const c = godFarmCfgSetzen({
+            an: q("tw-godfarm-an").checked,
+            abstandMin: parseFloat(q("tw-godfarm-abstand").value),
+            maxFelder: parseFloat(q("tw-godfarm-felder").value),
+            laufMin: parseFloat(q("tw-godfarm-von").value),
+            laufMax: parseFloat(q("tw-godfarm-bis").value),
+            leerFaktor: parseFloat(q("tw-godfarm-leer").value)
+        });
+        console.log(`[TW] GodBot-Farm: ${c.an ? "AN" : "AUS"} - Abstand ${c.abstandMin} Min. (nach leer x${c.leerFaktor}), ` +
+            `max. ${c.maxFelder} Felder, Lauf alle ${c.laufMin}-${c.laufMax} Min.`);
+        godFarmUiStand(q("tw-godfarm-stand"));
+    };
+    ["tw-godfarm-an", "tw-godfarm-abstand", "tw-godfarm-felder", "tw-godfarm-von", "tw-godfarm-bis", "tw-godfarm-leer"]
+        .forEach(id => q(id).addEventListener("change", speichern));
+    q("tw-godfarm-jetzt").onclick = () => {
+        if (!godFarmCfg().an) { q("tw-godfarm-an").checked = true; speichern(); }
+        try { localStorage.setItem(GODFARM_NEXT_KEY, "0"); } catch (e) { }
+        try { showToast("GodBot-Farm startet beim nächsten Takt", "ok"); } catch (e) { }
+        godFarmUiStand(q("tw-godfarm-stand"));
+    };
+    godFarmUiStand(q("tw-godfarm-stand"));
+}
+
     function createOverlay(data) {
         const old = document.getElementById("tw-overlay");
         if (old) old.remove();
@@ -34859,6 +35272,8 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
                 ${infoIcon("Nach dieser Zeit pausiert FarmGod kurz und lädt neu, um nicht ununterbrochen zu senden - unabhängig davon, ob schon alles abgeschickt ist. Läuft immer, keine Option zum Deaktivieren.")}
             </label>
 
+            ${godFarmUiHtml()}
+
             <button id="tw-farmgod-settings-btn"
                 style="width:100%;background:#222;color:#fff;border:1px solid #444;border-radius:4px;padding:6px;cursor:pointer;">
                 FarmGod Einstellungen
@@ -36305,6 +36720,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
     initAttackPlannerUI(content);
     initTabbenUI(content);
 
+    try { godFarmUiBinden(content); } catch (e) { console.warn("[TW] GodBot-Farm: Einstellungen nicht gebunden.", e); }
     const farmgodSettingsBtn = content.querySelector("#tw-farmgod-settings-btn");
     if (farmgodSettingsBtn) {
         farmgodSettingsBtn.onclick = () => {
