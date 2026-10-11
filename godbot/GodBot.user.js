@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      594
+// @version      595
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32281,6 +32281,37 @@ function godFarmVorrang(stelle) {
     return an;
 }
 
+// v595: Ankuenfte laufender Angriffe aus der Befehlsuebersicht (tw_commands_cache,
+// parseCommandsOverview: direction "attack", targetCoord "x|y", arrivalMs in
+// Serverzeit) in die eigene Ankunftsliste uebernehmen. Rueckgabe: Anzahl
+// Ziele, die einen Angriff unterwegs haben, dessen Ankunft weiter fehlt.
+const GODFARM_BEFEHLE_KEY = "godfarm_befehle_at";
+function godFarmBefehleHolenErlaubt() {
+    const t = parseInt(localStorage.getItem(GODFARM_BEFEHLE_KEY) || "0", 10) || 0;
+    return Date.now() - t > 30 * 60 * 1000;
+}
+
+function godFarmAnkuenfteNachtragen(log, ziele) {
+    let c = null;
+    try { c = loadCommandsCacheFromStorage(); } catch (e) { c = null; }
+    let versatz = 0;
+    try { versatz = serverNowMs() - Date.now(); } catch (e) { versatz = 0; }
+    const jetzt = Date.now();
+    if (c && Array.isArray(c.commands)) {
+        const nachKoord = {};
+        ziele.forEach(z => { nachKoord[z.x + "|" + z.y] = z; });
+        c.commands.forEach(k => {
+            if (!k || k.direction !== "attack" || !k.targetCoord || !k.arrivalMs) return;
+            const z = nachKoord[k.targetCoord];
+            if (!z) return;
+            const ankunft = k.arrivalMs - versatz;
+            if (ankunft <= jetzt) return;
+            if (!log[z.id] || log[z.id] < ankunft) log[z.id] = ankunft;
+        });
+    }
+    return ziele.filter(z => z.laufend > 0 && !log[z.id]).length;
+}
+
 function godFarmFaellig() {
     if (!godFarmCfg().an) return false;
     const t = parseInt(localStorage.getItem(GODFARM_NEXT_KEY) || "0", 10) || 0;
@@ -32494,8 +32525,8 @@ function godFarmLauf(fertig) {
             }
             const seite = godFarmSeiteLesen(doc, html, eigen);
             if (!seite.ok) { ende({ fehler: true, gesendet: 0, anfragen, text: seite.fehler }); return; }
+            const planen = (log) => {
             const cfg = godFarmCfg();
-            const log = godFarmLog();
             const aw = godFarmAuswahl(seite, cfg, log, Date.now());
             const g = aw.gruende;
             const ausgelassen = `ausgelassen: ${g.abstand} Abstand, ${g.laufend} fremd laufend, ${g.verluste} Verluste, ` +
@@ -32561,6 +32592,37 @@ function godFarmLauf(fertig) {
                 }, warte);
             };
             naechster();
+            };
+            // v595: Angriffe unterwegs, deren Ankunft GodBot-Farm nicht kennt
+            // (Umstieg von FarmGod: 12.10. 00:25:53 waren alle 30 Ziele
+            // "fremd laufend", nichts ging raus). Ankuenfte zuerst aus dem
+            // vorhandenen Befehls-Zwischenspeicher (0 Anfragen); fehlt dann
+            // noch etwas, EINMAL die Befehlsuebersicht holen (1 Anfrage,
+            // hoechstens alle 30 Min) - FarmGod holte sie bei jedem Lauf.
+            const log = godFarmLog();
+            const offen = godFarmAnkuenfteNachtragen(log, seite.ziele);
+            if (offen > 0 && godFarmBefehleHolenErlaubt()) {
+                anfragen++;
+                try { localStorage.setItem(GODFARM_BEFEHLE_KEY, String(Date.now())); } catch (e) { }
+                console.log(`[TW] GodBot-Farm: ${offen} Ziel(e) mit Angriff unbekannter Ankunft - hole einmal die Befehlsuebersicht.`);
+                // Eigene Frist: kommt die Uebersicht nicht (Schlange haengt),
+                // geht es nach 30 s mit dem Bekannten weiter - der Lauf darf
+                // nie an einer fremden Rueckmeldung haengen bleiben.
+                let weiterGemacht = false;
+                const weiter = (grund) => {
+                    if (weiterGemacht) return;
+                    weiterGemacht = true;
+                    const rest = godFarmAnkuenfteNachtragen(log, seite.ziele);
+                    console.log(`[TW] GodBot-Farm: Ankuenfte nachgetragen (${grund}), ${rest} Ziel(e) weiter unbekannt.`);
+                    planen(log);
+                };
+                setTimeout(() => weiter("Frist 30 s"), 30000);
+                try { touchProcessLock("godfarm"); } catch (e) { }
+                try { fetchCommandsOverview(() => weiter("Befehlsuebersicht")); }
+                catch (e) { weiter("Abruf nicht moeglich"); }
+                return;
+            }
+            planen(log);
         })
         .catch(e => ende({ fehler: true, gesendet: 0, anfragen, text: "Farm-Seite nicht ladbar: " + (e && e.message || e) }));
     return true;
