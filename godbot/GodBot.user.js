@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      599
+// @version      600
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32730,16 +32730,35 @@ function godFarmLauf(fertig) {
     const mehrdorf = (parseInt(gd.player && gd.player.villages, 10) || 1) > 1;
     let anfragen = 1;
     twCountRequest(url, "auto", "godfarm-seite");
-    const seiteHolen = (u) => fetch(u, { credentials: "same-origin" }).then(r => r.text()).then(html => {
-        let doc = null;
-        try { doc = new DOMParser().parseFromString(html, "text/html"); } catch (e) { }
-        return { html, doc };
+    // v600 (Botschutz-Pruefung 12.10.): Antworten wie jede andere fetch-
+    // Antwort pruefen - htmlDocBlocked() (Textvorpruefung, Schnappschuss mit
+    // Antworttext, Halt) mit der ECHTEN Adresse nach Weiterleitungen, dann
+    // frameDocBlocked() auf dem Dokument. Bisher nur frameDocBlocked mit dem
+    // Platzhalter "godfarm": Erkennung ueber die Adresse und der Antworttext
+    // im Schnappschuss fehlten.
+    const seiteHolen = (u) => fetch(u, { credentials: "same-origin" }).then(r => {
+        const echt = String((r && r.url) || u);
+        return r.text().then(html => {
+            let doc = null;
+            try { doc = new DOMParser().parseFromString(html, "text/html"); } catch (e) { }
+            let gesperrt = false;
+            try { gesperrt = htmlDocBlocked(html, echt) || (!!doc && frameDocBlocked(doc, echt)); } catch (e) { gesperrt = false; }
+            return { html, doc, echt, gesperrt };
+        });
     });
     seiteHolen(url)
-        .then(({ html, doc }) => {
-            if (!doc || frameDocBlocked(doc, "godfarm")) {
-                try { haltAllAutomation("godfarm"); } catch (e) { }
-                ende({ fehler: true, gesendet: 0, anfragen, text: "Botschutz auf der Farm-Seite - Lauf beendet." });
+        .then(({ html, doc, echt, gesperrt }) => {
+            // Botschutz ist kein Fehler von GodBot-Farm: kein Rueckfall-Zaehler,
+            // der Halt (haltAllAutomation) ist schon passiert.
+            if (gesperrt || isBotProtectionActive()) {
+                ende({ fehler: false, gesendet: 0, anfragen, text: "Botschutz auf der Farm-Seite - Lauf beendet, alles angehalten." });
+                return;
+            }
+            if (!doc) { ende({ fehler: true, gesendet: 0, anfragen, text: "Farm-Seite nicht lesbar." }); return; }
+            // Weiterleitung weg von der Farm-Seite (Sitzung abgelaufen,
+            // Anmeldung, Urlaubsvertretung ...): nichts senden, nicht zaehlen.
+            if (!/screen=am_farm/.test(echt)) {
+                ende({ fehler: false, gesendet: 0, anfragen, text: `Farm-Seite umgeleitet (${echt.slice(0, 120)}) - nichts gesendet.` });
                 return;
             }
             const seite = godFarmSeiteLesen(doc, html, eigen);
@@ -32821,7 +32840,11 @@ function godFarmLauf(fertig) {
                     return;
                 }
                 const p = aw.plan[i++];
-                const warte = letzterStart ? Math.max(0, pause() - (Date.now() - letzterStart)) : 0;
+                // v600: vor dem ERSTEN Angriff kurz "lesen" (0,8-2,5 s, zuegig
+                // 0,3-0,8 s) - bisher ging er im selben Moment raus, in dem die
+                // Farm-Seite da war.
+                const warte = letzterStart ? Math.max(0, pause() - (Date.now() - letzterStart))
+                    : (cfg.tempo === "zuegig" ? humanDelay(300, 800) : humanDelay(800, 2500));
                 setTimeout(() => {
                     if (isBotProtectionActive() || godFarmAbbruchGrund) { i--; naechster(); return; }
                     letzterStart = Date.now();
@@ -32833,6 +32856,14 @@ function godFarmLauf(fertig) {
                     const antwort = (ok, r) => {
                         if (beantwortet) return;
                         beantwortet = true;
+                        // v600: Botschutz-Kennung in der Antwort selbst -> sofort halten
+                        // (sonst erst ueber den Waechter, 0,5-1,8 s spaeter).
+                        try {
+                            const roh = JSON.stringify(r || "");
+                            if (/bot_?protect|botprotection|bot_check|captcha/i.test(roh)) {
+                                haltAllAutomation("godfarm-antwort [" + roh.slice(0, 120) + "]");
+                            }
+                        } catch (e) { }
                         const echt = ok && r && r.success && String(r.target_village) === String(p.ziel.id);
                         if (echt) {
                             gesendet++; fehlerFolge = 0; proArt[p.art]++;
@@ -32869,12 +32900,13 @@ function godFarmLauf(fertig) {
                 anfragen++;
                 twCountRequest(u, "auto", "godfarm-doerfer");
                 try { touchProcessLock("godfarm"); } catch (e) { }
-                seiteHolen(u).then(({ doc: d2 }) => {
-                    if (!d2 || frameDocBlocked(d2, "godfarm")) {
-                        try { haltAllAutomation("godfarm"); } catch (e) { }
-                        ende({ fehler: true, gesendet: 0, anfragen, text: "Botschutz auf der Uebersicht - Lauf beendet." });
+                // Ein Mensch klickt nicht in derselben Millisekunde weiter.
+                setTimeout(() => seiteHolen(u).then(({ doc: d2, gesperrt: g2 }) => {
+                    if (g2 || isBotProtectionActive()) {
+                        ende({ fehler: false, gesendet: 0, anfragen, text: "Botschutz auf der Uebersicht - Lauf beendet, alles angehalten." });
                         return;
                     }
+                    if (!d2) { weiter(null); return; }
                     const liste = godFarmDoerferLesen(d2);
                     if (!liste.length) {
                         console.warn("[TW] GodBot-Farm: Kombinierte Uebersicht nicht lesbar - farme nur aus dem aktuellen Dorf.");
@@ -32885,7 +32917,7 @@ function godFarmLauf(fertig) {
                 }).catch(() => {
                     console.warn("[TW] GodBot-Farm: Kombinierte Uebersicht nicht ladbar - farme nur aus dem aktuellen Dorf.");
                     weiter(null);
-                });
+                }), humanDelay(400, 1200));
             };
 
             // v595: Angriffe unterwegs, deren Ankunft GodBot-Farm nicht kennt
