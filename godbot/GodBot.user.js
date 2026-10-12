@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      602
+// @version      603
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -64771,10 +64771,30 @@ if (location.href.includes("mode=scavenge_mass")) {
         pfad = String(pfad || "");
         // v563: Eine Vorlage aus der Sammlung ist nicht zeitkritisch - sie
         // gilt eine Woche, damit sie auch ein Konto erreicht, das gerade ruht.
-        const vorlageBefehl = pfad === "bauvorlage.uebernehmen";
+        // v603: auch die Truppen-Vorrang-Grenze ist nicht zeitkritisch.
+        const vorlageBefehl = pfad === "bauvorlage.uebernehmen" || pfad === "truppenvorrang.grenze";
         if (erstelltMs && Date.now() - erstelltMs > (vorlageBefehl ? 7 * 24 * 3600 * 1000 : ODIN_BEFEHL_VERFALL_MS)) {
             return { ok: false, text: vorlageBefehl ? "verfallen - lag über 7 Tage ungelesen"
                 : "verfallen - lag über 60 Min ungelesen" };
+        }
+
+        // --- Truppen-Vorrang-Grenze (v603) ------------------------------------
+        // Fetteruruk 12.10.: Schmiede 12 bauen, Truppen sollen parallel weiter
+        // laufen. Bis v602 hatte die Truppenvorlage Vorrang bis zum VOLLEN
+        // Soll (v586) - der Bau ging so lange nur an Bauernhof/Speicher. Mit
+        // einer Grenze (z.B. 150 LKav) bekommt darueber der Bau den Vorrang
+        // samt Reserve, rekrutiert wird mit dem Rest. 0 = wieder volles Soll.
+        if (pfad === "truppenvorrang.grenze") {
+            const w = parseInt(wert && typeof wert === "object" ? wert.grenze : wert, 10);
+            if (isNaN(w) || w < 0 || w > 100000) return { ok: false, text: `ungültiger Wert ${JSON.stringify(wert)}` };
+            let c = {};
+            try { c = JSON.parse(localStorage.getItem(TRUPPEN_VORRANG_KEY) || "{}") || {}; } catch (e) { c = {}; }
+            c.grundstock = w;
+            if (wert && typeof wert === "object" && typeof wert.einheit === "string" && wert.einheit) c.einheit = wert.einheit;
+            try { localStorage.setItem(TRUPPEN_VORRANG_KEY, JSON.stringify(c)); } catch (e) { }
+            odinSteuerstandMelden(true);
+            console.log(`[TW] App-Befehl: Truppen-Vorrang ${w ? "bis " + w + " " + (c.einheit || "light") : "bis zum vollen Soll"}.`);
+            return { ok: true, text: w ? `Vorrang bis ${w}` : "Vorrang bis volles Soll" };
         }
 
         if (vorlageBefehl) {
