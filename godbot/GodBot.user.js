@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      596
+// @version      597
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32531,6 +32531,12 @@ function godFarmLauf(fertig) {
     if (!gd || !gd.village || !gd.village.id) return false;
     if (!acquireProcessLock("godfarm")) return false;
     godFarmLaeuft = true;
+    // v597: FarmGod-Reste duerfen bei Methode GodBot-Farm nicht liegen
+    // bleiben (sie loesten die Ueberfaellig-Abschaltung beim Laden aus).
+    try {
+        localStorage.removeItem("tw_farm_restart_scheduled");
+        localStorage.removeItem("tw_next_farm_burst_at");
+    } catch (e) { }
     godFarmPlaneNaechsten();
 
     const vid = String(gd.village.id);
@@ -59140,7 +59146,19 @@ if (location.href.includes("mode=scavenge_mass")) {
                 localStorage.removeItem("tw_active_process");
             }
 
-            if (localStorage.getItem("tw_farm_loop_active") === "1" &&
+            // v597: Bei Farmmethode GodBot-Farm gibt es keinen FarmGod-Termin.
+            // Ein liegengebliebener tw_next_farm_burst_at (aus der FarmGod-
+            // Zeit) schaltete hier das Farmen ab - belegt FetterOrk de260
+            // 12.10. 05:48:40 "Farmen-Termin ist Stunden ueberfaellig -
+            // Zustand zurueckgesetzt", danach kein Lauf bis zum Neustart von
+            // Hand 05:51. Ein ueberfaelliger GodBot-Farm-Termin heisst nur
+            // "faellig" - kein Grund zum Abschalten. FarmGod-Reste weg.
+            let godbotMethode = false;
+            try { godbotMethode = godFarmModus() === "godbot"; } catch (e) { godbotMethode = false; }
+            if (godbotMethode) {
+                localStorage.removeItem("tw_farm_restart_scheduled");
+                localStorage.removeItem("tw_next_farm_burst_at");
+            } else if (localStorage.getItem("tw_farm_loop_active") === "1" &&
                 scheduleIsStale("tw_next_farm_burst_at")) {
                 console.log("[TW] Farmen-Termin ist Stunden ueberfaellig - Zustand zurueckgesetzt.");
                 localStorage.removeItem("tw_farm_loop_active");
