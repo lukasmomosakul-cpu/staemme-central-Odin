@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      598
+// @version      599
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -9021,7 +9021,7 @@ function botMarkerSichtbar() {
                 return;
             }
 
-            if (owner === "farm" || owner === "scavenge" || owner === "bau") {
+            if (owner === "farm" || owner === "godfarm" || owner === "scavenge" || owner === "bau") {
                 preemptRaubzugFarmen("Rausstellen");
             } else if (TIME_CRITICAL_OWNERS.indexOf(owner) >= 0) {
                 // Angriffsplaner laeuft parallel weiter - abgegrenzt wird
@@ -19368,7 +19368,7 @@ function botMarkerSichtbar() {
                 const fremd = lockOwners(readProcessLock())
                     .filter(o => TIME_CRITICAL_OWNERS.indexOf(o) < 0);
                 if (fremd.length) {
-                    if (fremd.some(o => o === "farm" || o === "scavenge" ||
+                    if (fremd.some(o => o === "farm" || o === "godfarm" || o === "scavenge" ||
                                        o === "resources" || o === "bau")) {
                         preemptRaubzugFarmen("Angriffsplaner");
                     } else {
@@ -20132,6 +20132,17 @@ function botMarkerSichtbar() {
                 `Abbruch angefordert${lief ? "" : " (es lief nichts)"}, ` +
                 `Vorrang übernommen.`);
             releaseProcessLock("bau");
+            return true;
+        }
+
+        // v599: GodBot-Farm - zwischen zwei Angriffen gefahrlos. Der
+        // Angriff, der gerade beim Server liegt, kommt noch an (er steht
+        // dann im Ankunfts-Speicher), Neues schickt der Lauf nicht mehr.
+        if (owner === "godfarm") {
+            godFarmAbbruchGrund = reason;
+            console.warn(`[TW] ${reason}: GodBot-Farm hält die Sperre - Abbruch angefordert, Vorrang übernommen.`);
+            hubTaetigkeitMerken(`${reason} - Vorrang, GodBot-Farm unterbrochen`);
+            releaseProcessLock("godfarm");
             return true;
         }
 
@@ -32238,6 +32249,7 @@ const GODFARM_LOG_KEY = "tw_godfarm_ankunft";
 const GODFARM_MAX_ANGRIFFE = 80;          // v598: Haeppchen je Lauf
 const GODFARM_LAUF_MAX_MS = 90 * 1000;      // v598: Sperre hoechstens ~90 s am Stueck
 let godFarmLaeuft = false;
+let godFarmAbbruchGrund = "";   // v599: gesetzt von preemptRaubzugFarmen
 
 // v596 (Fetteruruk 12.10.): "entweder FarmGod oder GodBot - Aktivierung
 // ueber den Farmen-Knopf, dort auch der naechste Lauf, egal welche Variante
@@ -32488,7 +32500,7 @@ function godFarmMsProFeld(seite) {
 // naechste Dorf mit passenden Truppen; ist dort der Ankunftsabstand noch
 // nicht erreicht, darf ein weiter entferntes Dorf (spaetere Ankunft) es
 // nehmen. Ohne "doerfer" gilt nur das Dorf der Farm-Seite (seite.eigen).
-function godFarmAuswahl(seite, cfg, log, jetzt, doerfer) {
+function godFarmAuswahl(seite, cfg, log, jetzt, doerfer, reserve) {
     const gruende = { laufend: 0, verluste: 0, wall: 0, weit: 0, abstand: 0, truppen: 0, rest: 0 };
     const max = Math.max(1, cfg.haeppchen || GODFARM_MAX_ANGRIFFE);
     const msFeld = godFarmMsProFeld(seite);
@@ -32497,6 +32509,14 @@ function godFarmAuswahl(seite, cfg, log, jetzt, doerfer) {
         ? doerfer.map(d => ({ id: String(d.id), x: d.x, y: d.y, einheiten: Object.assign({}, d.einheiten),
             seitenDorf: String(d.id) === String(eigen.id) }))
         : [{ id: String(eigen.id || ""), x: eigen.x, y: eigen.y, einheiten: Object.assign({}, seite.einheiten), seitenDorf: true }];
+    // v599: fuer geplante Angriffe gebrauchte Truppen abziehen.
+    if (reserve) quellen.forEach(q => {
+        const r = reserve[q.id];
+        if (!r) return;
+        Object.keys(r).forEach(u => {
+            q.einheiten[u] = r[u] === Infinity ? 0 : Math.max(0, (q.einheiten[u] || 0) - r[u]);
+        });
+    });
 
     const ziele = [];
     seite.ziele.forEach(z => {
@@ -32601,6 +32621,33 @@ function godFarmDoerferLesen(doc) {
     return out;
 }
 
+// v599: Truppen, die der Angriffsplaner braucht, bleiben stehen. Ein
+// Farmangriff ist erst nach Hin- UND Rueckweg wieder da - zurueckgehalten
+// wird deshalb fuer jeden noch nicht gesendeten Angriff, der innerhalb
+// "Horizont" (= Rueckweg zum weitesten erlaubten Ziel + 10 Min) startet.
+// Plan-Felder (tw_attack_plans): villageId, startsAtMs (Serverzeit),
+// troops {einheit: n}; n < 0 heisst "alle bis auf |n|" -> Einheit ganz sperren.
+function godFarmPlanReserve(horizontMs) {
+    const out = {};
+    let plaene = {};
+    try { plaene = loadAttackPlans() || {}; } catch (e) { plaene = {}; }
+    let jetzt = Date.now();
+    try { jetzt = serverNowMs(); } catch (e) { }
+    let anzahl = 0;
+    Object.keys(plaene).forEach(pid => ((plaene[pid] && plaene[pid].attacks) || []).forEach(a => {
+        if (!a || a.removed || a.sent || a.failed || !a.startsAtMs || !a.villageId) return;
+        if (a.startsAtMs < jetzt - 60000 || a.startsAtMs > jetzt + horizontMs) return;
+        anzahl++;
+        const r = out[String(a.villageId)] = out[String(a.villageId)] || {};
+        Object.keys(a.troops || {}).forEach(u => {
+            const n = parseInt(a.troops[u], 10) || 0;
+            if (n < 0) r[u] = Infinity;
+            else if (n > 0 && r[u] !== Infinity) r[u] = (r[u] || 0) + n;
+        });
+    }));
+    return { proDorf: out, anzahl };
+}
+
 // v598: Tempo (Fetteruruk 12.10.: "wirkt, als wuerde unmenschlich schnell
 // alles rausgeschickt"). Pause VOR dem naechsten Angriff, ab Start des
 // vorigen gerechnet. Gemessen: FarmGod 230-290 ms, GodBot-Farm bisher
@@ -32668,6 +32715,7 @@ function godFarmLauf(fertig) {
     if (!gd || !gd.village || !gd.village.id) return false;
     if (!acquireProcessLock("godfarm")) return false;
     godFarmLaeuft = true;
+    godFarmAbbruchGrund = "";
     // v597: FarmGod-Reste duerfen bei Methode GodBot-Farm nicht liegen
     // bleiben (sie loesten die Ueberfaellig-Abschaltung beim Laden aus).
     try {
@@ -32697,6 +32745,14 @@ function godFarmLauf(fertig) {
             const seite = godFarmSeiteLesen(doc, html, eigen);
             if (!seite.ok) { ende({ fehler: true, gesendet: 0, anfragen, text: seite.fehler }); return; }
             seite.eigen = eigen;
+            // v599: Karte - Farmgebiet auch bei GodBot-Farm pflegen (bisher nur
+            // aus FarmGod-Plaenen; FetterOrk de260: tw_farm_gebiet stand seit
+            // dem Umstieg 11.10. 22:21 UTC auf 17 von 30 Zielen). Alles mit
+            // laufendem Angriff gehoert dazu; gesendete Ziele kommen am Ende.
+            try {
+                farmGebietMerken(seite.ziele.filter(z => z.laufend > 0)
+                    .map(z => ({ targetId: z.id, targetLabel: z.x + "|" + z.y })));
+            } catch (e) { }
             const hinweise = [];
             if (/Accountmanager\.farm\.hide_attacked\s*=\s*true/.test(html)) {
                 hinweise.push("Farm-Assistent blendet angegriffene Doerfer aus (Haken setzen)");
@@ -32707,7 +32763,11 @@ function godFarmLauf(fertig) {
 
             const planen = (log, doerfer) => {
             const cfg = godFarmCfg();
-            const aw = godFarmAuswahl(seite, cfg, log, Date.now(), doerfer);
+            const msWerte = Object.keys(godFarmMsProFeld(seite)).map(k => godFarmMsProFeld(seite)[k]);
+            const msFeldMax = msWerte.length ? Math.max.apply(null, msWerte) : 10 * 60000;
+            const res = godFarmPlanReserve(2 * cfg.maxFelder * msFeldMax + 10 * 60000);
+            if (res.anzahl) hinweise.push(`Truppen fuer ${res.anzahl} geplante(n) Angriff(e) zurueckgehalten`);
+            const aw = godFarmAuswahl(seite, cfg, log, Date.now(), doerfer, res.proDorf);
             const g = aw.gruende;
             const ausgelassen = `ausgelassen: ${g.abstand} Abstand, ${g.laufend} fremd laufend, ${g.verluste} Verluste, ` +
                 `${g.wall} Wall, ${g.weit} zu weit, ${g.truppen} ohne Truppen` +
@@ -32729,8 +32789,10 @@ function godFarmLauf(fertig) {
             const stunde = godFarmStundeLaden();
             const startZeit = Date.now();
             let i = 0, gesendet = 0, fehlerFolge = 0, letzterStart = 0, stop = "";
+            const gesendetZiele = [];
             const proArt = { A: 0, B: 0 };
             const naechster = () => {
+                if (!stop && godFarmAbbruchGrund) stop = `Vorrang ${godFarmAbbruchGrund}`;
                 if (!stop && i < aw.plan.length) {
                     if (cfg.maxProStunde > 0 && stunde.length >= cfg.maxProStunde) stop = "Obergrenze je Stunde erreicht";
                     else if (Date.now() - startZeit > GODFARM_LAUF_MAX_MS) stop = "Haeppchen-Zeit (90 s) um";
@@ -32741,10 +32803,12 @@ function godFarmLauf(fertig) {
                     if (gesendet) {
                         try { localStorage.setItem(GODFARM_LOG_KEY, JSON.stringify(log)); } catch (e) { }
                         try { localStorage.setItem(GODFARM_STUNDE_KEY, JSON.stringify(stunde)); } catch (e) { }
+                        try { farmGebietMerken(gesendetZiele); } catch (e) { }
                     }
                     const uebrig = aw.plan.length - i + (g.rest || 0);
-                    // Rest wartet -> naechstes Haeppchen bald (nicht bei Obergrenze).
-                    if (uebrig > 0 && fehlerFolge < 2 && !isBotProtectionActive() && stop !== "Obergrenze je Stunde erreicht") {
+                    // Rest wartet -> naechstes Haeppchen bald (nicht bei Obergrenze/Vorrang).
+                    if (uebrig > 0 && fehlerFolge < 2 && !isBotProtectionActive() &&
+                        stop !== "Obergrenze je Stunde erreicht" && !godFarmAbbruchGrund) {
                         godFarmPlaneNaechsten(1 + Math.random() * 2);
                     }
                     const grund = fehlerFolge >= 2 ? " - 2 Ablehnungen in Folge, abgebrochen"
@@ -32759,7 +32823,7 @@ function godFarmLauf(fertig) {
                 const p = aw.plan[i++];
                 const warte = letzterStart ? Math.max(0, pause() - (Date.now() - letzterStart)) : 0;
                 setTimeout(() => {
-                    if (isBotProtectionActive()) { naechster(); return; }
+                    if (isBotProtectionActive() || godFarmAbbruchGrund) { i--; naechster(); return; }
                     letzterStart = Date.now();
                     try { touchProcessLock("godfarm"); } catch (e) { }
                     const sendUrl = seite.sendLink.replace(/village=(\d+)/, "village=" + p.quelle);
@@ -32773,6 +32837,7 @@ function godFarmLauf(fertig) {
                         if (echt) {
                             gesendet++; fehlerFolge = 0; proArt[p.art]++;
                             stunde.push(Date.now());
+                            gesendetZiele.push({ targetId: p.ziel.id, targetLabel: p.ziel.x + "|" + p.ziel.y });
                             // Ankunft neu gerechnet ab dem tatsaechlichen Versand.
                             log[p.ziel.id] = Date.now() + (p.laufzeitMs || 0);
                             try { incrementFarmCounter(p.art === "B" ? "tw_farm_attacks_sent_b" : "tw_farm_attacks_sent_a"); } catch (e) { }
