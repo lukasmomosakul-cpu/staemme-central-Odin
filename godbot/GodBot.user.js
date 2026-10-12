@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      600
+// @version      601
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32307,12 +32307,17 @@ function godFarmLog() {
 // FarmGod auf keinem Weg (Fahrplan, faelliger Neustart, Farm-Knopf,
 // triggerFarmRun). Der FarmGod-Schalter selbst bleibt stehen - wird
 // GodBot-Farm wieder ausgeschaltet, laeuft FarmGod wie vorher weiter.
-let godFarmVorrangGemeldetAt = 0;
+// v601: Zeitpunkt im localStorage - im Speicher der Seite ging er bei jedem
+// Neuladen verloren (Protokoll 12.10. 17:15-17:42: 15 gleiche Zeilen in 27
+// Min. bei 54 Ladevorgaengen). Die Zeilen fuellten die 300-KB-Mitschrift.
+const GODFARM_VORRANG_LOG_KEY = "godfarm_vorrang_log_at";
 function godFarmVorrang(stelle) {
     let an = false;
     try { an = godFarmModus() === "godbot"; } catch (e) { an = false; }
-    if (an && Date.now() - godFarmVorrangGemeldetAt > 10 * 60 * 1000) {
-        godFarmVorrangGemeldetAt = Date.now();
+    let zuletzt = 0;
+    try { zuletzt = parseInt(localStorage.getItem(GODFARM_VORRANG_LOG_KEY) || "0", 10) || 0; } catch (e) { }
+    if (an && Date.now() - zuletzt > 60 * 60 * 1000) {
+        try { localStorage.setItem(GODFARM_VORRANG_LOG_KEY, String(Date.now())); } catch (e) { }
         console.log(`[TW] FarmGod startet nicht (${stelle}) - Farmmethode ist GodBot-Farm.`);
     }
     return an;
@@ -32809,6 +32814,17 @@ function godFarmLauf(fertig) {
             const startZeit = Date.now();
             let i = 0, gesendet = 0, fehlerFolge = 0, letzterStart = 0, stop = "";
             const gesendetZiele = [];
+            // v601: Seitenwechsel mitten im Lauf (12.10. 17:35:24 "Seitenwechsel
+            // waehrend godfarm") - bisher gingen die Ankuenfte der schon
+            // gesendeten Angriffe verloren, weil sie erst am Laufende
+            // geschrieben werden. Dann haette der naechste Lauf dieselben
+            // Ziele zu frueh erneut angegriffen.
+            const sichern = () => {
+                if (!gesendet) return;
+                try { localStorage.setItem(GODFARM_LOG_KEY, JSON.stringify(log)); } catch (e) { }
+                try { localStorage.setItem(GODFARM_STUNDE_KEY, JSON.stringify(stunde)); } catch (e) { }
+            };
+            try { window.addEventListener("pagehide", sichern); } catch (e) { }
             const proArt = { A: 0, B: 0 };
             const naechster = () => {
                 if (!stop && godFarmAbbruchGrund) stop = `Vorrang ${godFarmAbbruchGrund}`;
@@ -32819,9 +32835,9 @@ function godFarmLauf(fertig) {
                 if (stop || i >= aw.plan.length || fehlerFolge >= 2 || isBotProtectionActive()) {
                     // Einmal je Lauf schreiben - sonst gaelte der Schluessel dem
                     // Odin-Abgleich als Laufzeitwert und ginge nie hoch.
+                    try { window.removeEventListener("pagehide", sichern); } catch (e) { }
                     if (gesendet) {
-                        try { localStorage.setItem(GODFARM_LOG_KEY, JSON.stringify(log)); } catch (e) { }
-                        try { localStorage.setItem(GODFARM_STUNDE_KEY, JSON.stringify(stunde)); } catch (e) { }
+                        sichern();
                         try { farmGebietMerken(gesendetZiele); } catch (e) { }
                     }
                     const uebrig = aw.plan.length - i + (g.rest || 0);
@@ -32947,7 +32963,9 @@ function godFarmLauf(fertig) {
             }
             mitDoerfern();
         })
-        .catch(e => ende({ fehler: true, gesendet: 0, anfragen, text: "Farm-Seite nicht ladbar: " + (e && e.message || e) }));
+        // v601: Netzfehler ("Failed to fetch", 12.10. 16:45:03) sind kein Fehler
+        // von GodBot-Farm - sie zaehlen nicht fuer den Rueckfall auf FarmGod.
+        .catch(e => ende({ fehler: false, gesendet: 0, anfragen, text: "Farm-Seite nicht ladbar (Netz): " + (e && e.message || e) }));
     return true;
 }
 
