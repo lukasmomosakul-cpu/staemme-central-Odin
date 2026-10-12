@@ -45,3 +45,7 @@ Siehe ANFRAGEN.md.
 | 31 | barracks (Rekrutierungsschleife, current_order) | de259 | desktop | 26.9.2026, 14:16:25 | tr.lit > td.lit-item > span.timer, cancelOrder | ANFRAGEN.md Nr. 4 |
 | 32 | am_farm (Farm-Assistent) | de260 | mobil | 11.10.2026, 23:13:44 | tr#village_<id> (3 Zeilen je Dorf), dots/*, max_loot/0|1, command/attack (Anzahl im title), Wall, Entfernung, send_units_link, farm.current_units, farm.templates | godbot-seite-am_farm_2026-10-11_2313.txt |
 | 33 | am_farm (Farm-Assistent) | de260 | desktop | 11.10.2026, 23:14:36 | wie 32, eine Zeile je Dorf; sendUnits(this, Ziel, Vorlage) mit Einheiten/Beute/Laufzeit im data-title | godbot-seite-am_farm_2026-10-11_2314.txt |
+| 34 | overview_villages&mode=combined (Kombiniert) | de260 | mobil | 12.10.2026, 06:51:40 | .overview-container-item je Dorf, span.quickedit-vn[data-id], .unit-row-item (img unit_<x>@2x + span.unit-row-name), nur vorhandene Einheiten | godbot-seite-overview_villages_2026-10-12_0651.txt |
+| 35 | overview_villages (Kombiniert) | de260 | desktop | 12.10.2026, 06:52:08 | table#combined_table, Kopf img unit_<x>.webp, tr.nowrap, td.unit-item (auch hidden) | godbot-seite-overview_villages_2026-10-12_0652.txt |
+| 36 | am_farm, Haken "Zeige nur Angriffe, die von diesem Dorf ausgingen" AUS | de260 | mobil | 12.10.2026, 06:53:33 | #all_village_checkbox ohne checked, #attacked_checkbox | godbot-seite-am_farm_2026-10-12_0653.txt |
+| 37 | am_farm, Haken AUS | de260 | desktop | 12.10.2026, 06:54:05 | wie 36 | godbot-seite-am_farm_2026-10-12_0654.txt |
