@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      603
+// @version      604
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -1986,6 +1986,20 @@
 // (botProtectionHandled bzw. tw_bot_gesperrt_seit). Nur der Waechter
 // selbst fragt weiter botMarkerSichtbar() - er muss die Entwarnung
 // ja feststellen koennen.
+// v604 - EIN TRICHTER FUER VERSAND-ANTWORTEN (TribalWars.post).
+// Bisher pruefte nur die GodBot-Farm (v600) die Antwort selbst auf eine
+// Botschutz-Kennung; der FarmGod-Direktversand verliess sich auf den
+// Waechter (0,5-1,8 s) - bei 230-290 ms Takt gingen so noch Angriffe nach
+// dem Captcha raus. Beide Wege nutzen jetzt diese eine Pruefung.
+// Rueckgabe true = Botschutz erkannt, alles angehalten.
+function versandAntwortBotschutz(r, quelle) {
+    let roh = "";
+    try { roh = JSON.stringify(r === undefined ? "" : r); } catch (e) { roh = String(r); }
+    if (!/bot_?protect|botprotection|bot_check|captcha/i.test(String(roh || ""))) return false;
+    haltAllAutomation(String(quelle || "versand") + "-antwort [" + String(roh).slice(0, 120) + "]");
+    return true;
+}
+
 function isBotProtectionActive() {
     if (botMarkerSichtbar()) return true;
     try { if (botProtectionHandled) return true; } catch (e) { }
@@ -2047,7 +2061,18 @@ function botMarkerSichtbar() {
             frameWin = seitenWin(frame.contentWindow);
         } catch (e) { }
         if (docHasBotProtection(frameDoc, frame.getAttribute("src"))) return true;
-        if (frameWin && frameWin.hcaptcha !== undefined) return true;
+        // v604: Liegt im Arbeitsrahmen eine fremde Herkunft (Netzfehlerseite,
+        // Weiterleitung zur Anmeldung), wirft schon das LESEN von .hcaptcha
+        // einen SecurityError. Belegt 5x seit 13.09., zuletzt 12.10. 12:29:37
+        // (Ares20 de256, zeitgleich "Unable to resolve host"). Dann warf
+        // isBotProtectionActive() selbst - und jede der Abfragestellen brach
+        // mittendrin ab, auch der Job-Takt alle 5 s. Wie bei den
+        // Angriffsrahmen unten: abfangen. Ein unlesbarer fremder Rahmen ist
+        // kein Botschutz-Beleg; die Abmelde-/Netzfehler-Erkennung kuemmert
+        // sich um ihn.
+        try {
+            if (frameWin && frameWin.hcaptcha !== undefined) return true;
+        } catch (e) { }
     }
 
     // 01.09.2026 WIEDERHERGESTELLT: Die Schleife ueber activeAttackFrames
@@ -17004,51 +17029,70 @@ function botMarkerSichtbar() {
         return off;
     }
 
+    // v604 - LATENZ OHNE EIGENE ANFRAGE.
+    //
+    // Bisher: vor JEDEM geplanten Angriff und jedem Rausstellen 4x
+    // /favicon.ico mit cache:no-store im 120-ms-Abstand. Kein Browser tut
+    // das, und twCountRequest zaehlte es nicht mit - ein Anfragemuster, das
+    // in der eigenen Messung unsichtbar blieb.
+    //
+    // Jetzt aus den Zeitmessungen, die der Browser fuer bereits geladene
+    // Anfragen DIESER Herkunft ohnehin fuehrt (Navigation Timing der
+    // Bestaetigungsseite + Resource Timing der Spiel-Ajax-Abrufe):
+    //   1. TCP-Aufbau (secureConnectionStart - connectStart) = reine RTT,
+    //      wo die Verbindung neu aufgebaut wurde;
+    //   2. sonst Minimum von responseStart - requestStart (RTT + Serverzeit,
+    //      daher Minimum ueber alle Eintraege).
+    // Gleiche Rechnung wie vorher: RTT/2 x 0,7, hoechstens 250 ms.
+    // 0 Anfragen. Ohne brauchbare Werte: zuletzt gemessener Wert, sonst 0.
+    let latenzZuletztMs = null;
     function measureNetworkLatencyMs(win, callback) {
+        let fertig = false;
+        const ende = (ms) => { if (fertig) return; fertig = true; callback(ms); };
         try {
-            if (!win || typeof win.fetch !== "function" || !win.location) {
-                console.warn("[TW] Angriffsplaner: Latenzmessung nicht moeglich (kein fetch/Window) - nutze 0ms Kompensation.");
-                callback(0);
+            const perf = win && win.performance;
+            let herkunft = "";
+            try { herkunft = String(win.location.origin || ""); } catch (e) { }
+            if (!perf || typeof perf.getEntriesByType !== "function" || !herkunft) {
+                const ersatz = latenzZuletztMs === null ? 0 : latenzZuletztMs;
+                console.warn(`[TW] Angriffsplaner: Latenz nicht ablesbar (kein Zugriff auf Zeitmessung) - nutze ${ersatz}ms.`);
+                ende(ersatz);
                 return;
             }
-            const sampleUrl = win.location.origin + "/favicon.ico";
-            const samples = [];
-            const TOTAL_SAMPLES = 4;
-            const GAP_MS = 120;
-            let done = 0;
+            const eintraege = [].concat(
+                Array.from(perf.getEntriesByType("navigation") || []),
+                Array.from(perf.getEntriesByType("resource") || [])
+            ).filter(e => e && String(e.name || "").indexOf(herkunft) === 0);
 
-            function finish() {
-                if (!samples.length) {
-                    console.warn("[TW] Angriffsplaner: Latenzmessung lieferte keine brauchbaren Samples - nutze 0ms Kompensation.");
-                    callback(0);
-                    return;
-                }
-                samples.sort((a, b) => a - b);
-                const minRtt = samples[0];
-                const rawOneWayMs = minRtt / 2;
-
-                const SAFETY_FACTOR = 0.7;
-                const MAX_COMPENSATION_MS = 250;
-                const oneWayMs = Math.min(Math.round(rawOneWayMs * SAFETY_FACTOR), MAX_COMPENSATION_MS);
-                console.log(`[TW] Angriffsplaner: Latenzmessung - RTT-Samples(ms)=[${samples.map(s => Math.round(s)).join(", ")}] -> roh=${Math.round(rawOneWayMs)}ms -> Kompensation nach Sicherheitsabschlag=${oneWayMs}ms.`);
-                callback(oneWayMs);
+            const tcp = [], antwort = [];
+            for (const e of eintraege) {
+                const sc = Number(e.secureConnectionStart) || 0;
+                const cs = Number(e.connectStart) || 0;
+                if (sc > 0 && cs > 0 && sc > cs) tcp.push(sc - cs);
+                const rq = Number(e.requestStart) || 0;
+                const rs = Number(e.responseStart) || 0;
+                if (rq > 0 && rs > rq) antwort.push(rs - rq);
             }
-
-            function sample() {
-                const t0 = performance.now();
-                win.fetch(sampleUrl, { cache: "no-store", credentials: "include" })
-                    .then(() => { samples.push(performance.now() - t0); })
-                    .catch(() => { })
-                    .finally(() => {
-                        done++;
-                        if (done < TOTAL_SAMPLES) setTimeout(sample, GAP_MS);
-                        else finish();
-                    });
+            const rttListe = tcp.length ? tcp : antwort;
+            if (!rttListe.length) {
+                const ersatz = latenzZuletztMs === null ? 0 : latenzZuletztMs;
+                console.warn(`[TW] Angriffsplaner: keine Zeitmessung dieser Herkunft (${eintraege.length} Eintraege) - nutze ${ersatz}ms.`);
+                ende(ersatz);
+                return;
             }
-            sample();
+            const minRtt = Math.min.apply(null, rttListe);
+            const rawOneWayMs = minRtt / 2;
+            const SAFETY_FACTOR = 0.7;
+            const MAX_COMPENSATION_MS = 250;
+            const oneWayMs = Math.max(0, Math.min(Math.round(rawOneWayMs * SAFETY_FACTOR), MAX_COMPENSATION_MS));
+            latenzZuletztMs = oneWayMs;
+            console.log(`[TW] Angriffsplaner: Latenz aus Browser-Zeitmessung (0 Anfragen) - ` +
+                `${tcp.length ? "TCP-Aufbau" : "Antwortbeginn"}, min RTT ${Math.round(minRtt)}ms ` +
+                `aus ${rttListe.length} Wert(en) -> roh=${Math.round(rawOneWayMs)}ms -> Kompensation=${oneWayMs}ms.`);
+            ende(oneWayMs);
         } catch (e) {
             console.warn("[TW] Angriffsplaner: Fehler bei der Latenzmessung.", e);
-            callback(0);
+            ende(latenzZuletztMs === null ? 0 : latenzZuletztMs);
         }
     }
 
@@ -32942,12 +32986,8 @@ function godFarmLauf(fertig) {
                         beantwortet = true;
                         // v600: Botschutz-Kennung in der Antwort selbst -> sofort halten
                         // (sonst erst ueber den Waechter, 0,5-1,8 s spaeter).
-                        try {
-                            const roh = JSON.stringify(r || "");
-                            if (/bot_?protect|botprotection|bot_check|captcha/i.test(roh)) {
-                                haltAllAutomation("godfarm-antwort [" + roh.slice(0, 120) + "]");
-                            }
-                        } catch (e) { }
+                        // v604: gemeinsamer Trichter mit dem FarmGod-Direktversand.
+                        try { versandAntwortBotschutz(r, "godfarm"); } catch (e) { }
                         const echt = ok && r && r.success && String(r.target_village) === String(p.ziel.id);
                         if (echt) {
                             gesendet++; fehlerFolge = 0; proArt[p.art]++;
@@ -46465,6 +46505,16 @@ function truppenSchreibLauf(callback, alleSchreiben) {
                     return;
                 }
 
+                // v604: Botschutz kann auch ANDERSWO anschlagen (Waechter,
+                // anderer Rahmen) - dann kein weiteres Buendel absenden.
+                if (isBotProtectionActive()) {
+                    console.warn(`[TW] Truppen: Schreiblauf nach ${i} von ${gruppen.length} ` +
+                        "Buendel(n) beendet - Botschutz aktiv.");
+                    haltAllAutomation("truppenSchreibLauf:zwischen");
+                    fertig(gesetzt, offen.length, "Botschutz");
+                    return;
+                }
+
                 const gruppe = gruppen[i++];
                 bauFortschrittSetzen(`Truppen-Soll ${i}/${gruppen.length}`);
                 truppenBuendelSchreiben(form, gruppe, nurBekannte, (ok, schiefe, grund, nachher) => {
@@ -57858,12 +57908,20 @@ function sendFarmRowDirect(onDone) {
                 farmSendOkCount++;
                 bumpFarmGodProgressBar();
                 incrementFarmCounter(istB ? "tw_farm_attacks_sent_b" : "tw_farm_attacks_sent_a");
+                // v604: Botschutz-Kennung in der Antwort -> sofort halten,
+                // kein weiterer Angriff (vorher erst ueber den Waechter).
+                let gesperrt = false;
+                try { gesperrt = versandAntwortBotschutz(r, "farmgod"); } catch (e) { }
+                if (gesperrt) { einmal("botschutz", "Botschutz-Kennung in der Antwort"); return; }
                 einmal("ok", (r && r.success) ? String(r.success) : "");
             },
             (r) => {
                 // Auch der Fehlerfall entfernt die Zeile - sonst waehlt der
                 // naechste Durchgang dieselbe wieder und laeuft fest.
                 row.remove();
+                let gesperrt = false;
+                try { gesperrt = versandAntwortBotschutz(r, "farmgod"); } catch (e) { }
+                if (gesperrt) { einmal("botschutz", "Botschutz-Kennung in der Antwort"); return; }
                 farmSendFehlerFolge++;
                 // 01.09.2026: "ohne Angabe" war eine Sackgasse. Am 01.09.
                 // um 13:37:47 haben drei Ablehnungen in Folge - alle aus
@@ -57906,6 +57964,13 @@ function sendFarmRowDirect(onDone) {
 
 function sendNextFarmAttack(callback) {
     sendFarmRowDirect((art, text) => {
+        // v604: Botschutz in der Versand-Antwort - haltAllAutomation() lief
+        // schon. Kein callback: die Sendeschleife endet hier, und vor allem
+        // NICHT der Enter-Ausweichweg unten.
+        if (art === "botschutz") {
+            console.warn("[TW] Farm-Versand: Botschutz in der Antwort - Sendeschleife beendet.");
+            return;
+        }
         if (art === "ok" || art === "leer") {
             if (art === "ok" && text) console.log(`[TW] Farm-Versand bestaetigt: ${text}`);
             callback();

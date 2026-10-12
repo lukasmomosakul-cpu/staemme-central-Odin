@@ -3807,11 +3807,17 @@ public class GameWebViewActivity extends Activity {
       w.setStatus("Proxy-Fehler: "+f+" - Welt wird angehalten");
       final String grund=f;
       runOnUiThread(()->{ try{ if(w.webView!=null){ w.webView.stopLoading(); w.sperrseiteZeigen(grund);
-        taktHandler.postDelayed(()->{ if(!w.geschlossen&&w.proxySperre)w.laden(); },60_000L); } }catch(Exception ig){} });
-     }else if(geaendert||w.proxySperre){
+        w.sperrNeuversuchPlanen(); } }catch(Exception ig){} });
+     }else if(geaendert){
       w.proxySperre=false;
-      w.setStatus(geaendert?"Proxy geändert - Welt lädt neu":"Proxy wieder in Ordnung - Welt lädt");
+      w.setStatus("Proxy geändert - Welt lädt neu");
       runOnUiThread(()->{ try{ if(w.webView!=null)w.laden(); }catch(Exception ig){} });
+     }else if(w.proxySperre){
+      // 2.0.58: Sperre steht (z. B. IP-Konflikt ohne Proxy). proxyPruefen()
+      // ohne Volltest sagt dazu nichts - es meldete faelschlich "wieder in
+      // Ordnung" und startete eine zweite 60-s-Kette. Jetzt: nur sicherstellen,
+      // dass der EINE Neuversuch (laden() mit Volltest) geplant ist.
+      runOnUiThread(()->{ try{ if(w.webView!=null&&!w.geschlossen)w.sperrNeuversuchPlanen(); }catch(Exception ig){} });
      }else if(OdinProxy.hatProxy(w.gameAccountId)){
       OdinProxy.Zugang z=OdinProxy.lesen(w.gameAccountId,w.proxyRoh);
       if(z!=null)w.proxyIpMelden(z);
@@ -4912,6 +4918,26 @@ public class GameWebViewActivity extends Activity {
   // 2.0.21: WebRTC-Schutz (RTC_SCHUTZ) in dieser WebView aktiv? Pruefung
   // in dieser Ladung erledigt? Leck festgestellt (bleibt bis App-Neustart)?
   volatile boolean rtcSchutz=false, rtcGeprueft=false, rtcLeck=false;
+  // 2.0.58: EIN Neuversuch je Welt. Vorher legte jeder 10-Min-Takt eine
+  // weitere 60-s-Kette an (gemessen 11.10.: +1 Kette je 10 Min, nach 5 Std.
+  // 25 Sperr-Meldungen/Min). removeCallbacks vor jedem Planen = nie mehr als
+  // eine Kette. laden() prueft immer voll (fail closed) und plant bei
+  // fortbestehender Sperre selbst neu.
+  final Runnable sperrNeuversuch=()->{
+   if(!Welt.this.geschlossen&&Welt.this.proxySperre&&Welt.this.webView!=null)Welt.this.laden();
+  };
+  void sperrNeuversuchPlanen(){
+   taktHandler.removeCallbacks(sperrNeuversuch);
+   taktHandler.postDelayed(sperrNeuversuch,60_000L);
+  }
+  // 2.0.58: gleiche Sperr-Meldung hoechstens alle 30 Min ins Protokoll
+  // (Grund geaendert = sofort). Die Sperrseite zeigt den Grund ohnehin.
+  String sperrMeldungGrund=null; long sperrMeldungAt=0L;
+  boolean sperrMeldungFaellig(String grund){
+   long j=System.currentTimeMillis();
+   if(grund!=null&&grund.equals(sperrMeldungGrund)&&j-sperrMeldungAt<30*60_000L)return false;
+   sperrMeldungGrund=grund; sperrMeldungAt=j; return true;
+  }
   Welt(String id,String name,String welt){
    gameAccountId=nz(id);
    kopfName=nz(name).isEmpty()?gameAccountId:nz(name);
@@ -5157,13 +5183,13 @@ public class GameWebViewActivity extends Activity {
       // GodBot, keine einzige Anfrage an die Spielserver. Statt der Welt
       // erscheint eine Sperrseite; alle 60 s neuer Versuch.
       proxySperre=true;
-      melde("FEHLER","SPERRE: "+fehler+" - Konto wird NICHT gestartet (neuer Versuch in 60 s)");
+      if(sperrMeldungFaellig(fehler))melde("FEHLER","SPERRE: "+fehler+" - Konto wird NICHT gestartet (neuer Versuch alle 60 s, gleiche Meldung höchstens alle 30 Min)");
       wechselIndikatorWeg();
       sperrseiteZeigen(fehler);
-      taktHandler.postDelayed(()->{ if(!geschlossen&&proxySperre&&webView==ziel_v)laden(); },60_000L);
+      sperrNeuversuchPlanen();
       return;
      }
-     if(proxySperre){ proxySperre=false; melde("WICHTIG","Sperre aufgehoben - Prüfung ok, Konto startet"); }
+     if(proxySperre){ proxySperre=false; sperrMeldungGrund=null; taktHandler.removeCallbacks(sperrNeuversuch); melde("WICHTIG","Sperre aufgehoben - Prüfung ok, Konto startet"); }
      if(!darf){ leaseSeiteZeigen(halter); return; }
      leaseSeite=false;
      ziel_v.loadUrl(ziel_u);
@@ -5369,7 +5395,7 @@ public class GameWebViewActivity extends Activity {
     proxySperre=true;
     melde("FEHLER","PROXY-SPERRE im Betrieb: "+konflikt+" - Konto wird angehalten");
     runOnUiThread(()->{ try{ if(webView!=null&&!geschlossen){ webView.stopLoading(); sperrseiteZeigen(konflikt);
-      taktHandler.postDelayed(()->{ if(!geschlossen&&proxySperre)laden(); },60_000L); } }catch(Exception ig){} });
+      sperrNeuversuchPlanen(); } }catch(Exception ig){} });
     return;
    }
    if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
@@ -5451,7 +5477,7 @@ public class GameWebViewActivity extends Activity {
    proxySperre=true;
    melde("FEHLER","IP-SPERRE im Betrieb: "+grund+" - Konto wird angehalten");
    runOnUiThread(()->{ try{ if(webView!=null&&!geschlossen){ webView.stopLoading(); sperrseiteZeigen(grund);
-     taktHandler.postDelayed(()->{ if(!geschlossen&&proxySperre)laden(); },60_000L); } }catch(Exception ig){} });
+     sperrNeuversuchPlanen(); } }catch(Exception ig){} });
   }
   private void ladeSchichtZeigenWennAngezeigt(){ if(aktiv==this)ladeSchichtZeigen(weltName); }
   // Leiste der Ansicht zeigt nur den Stand der angezeigten Welt; der Stand
