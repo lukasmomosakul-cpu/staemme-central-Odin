@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      601
+// @version      602
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32387,6 +32387,63 @@ function godFarmTitelLesen(a) {
     return { einheiten, beute: bm ? parseInt(bm[1], 10) : null, laufzeitMs };
 }
 
+// v602: "heute um 06:45:10", "gestern um 23:01:02", "am 11.10. um 09:26:05"
+// (Farm-Assistent, Berichtsspalte) -> ms. Server- und Geraetezeit liegen
+// bei uns innerhalb weniger Sekunden; fuer "neuer als" reicht das.
+function godFarmZeitLesen(text) {
+    const t = String(text || "");
+    const m = t.match(/(heute|gestern|am\s+(\d{1,2})\.(\d{1,2})\.(\d{2,4})?)\s+um\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (!m) return null;
+    const d = new Date();
+    if (m[1] === "gestern") d.setDate(d.getDate() - 1);
+    else if (m[2]) {
+        let jahr = d.getFullYear();
+        if (m[4]) jahr = m[4].length === 2 ? 2000 + parseInt(m[4], 10) : parseInt(m[4], 10);
+        d.setFullYear(jahr, parseInt(m[3], 10) - 1, parseInt(m[2], 10));
+        if (!m[4] && d.getTime() > Date.now() + 86400000) d.setFullYear(jahr - 1);
+    }
+    d.setHours(parseInt(m[5], 10), parseInt(m[6], 10), m[7] ? parseInt(m[7], 10) : 0, 0);
+    return d.getTime();
+}
+
+// v602: Ziel-Stand (Karte, spaeter Katapult-Planer) auch aus dem Farm-
+// Assistenten - bisher NUR aus Berichten, die von Hand geoeffnet wurden.
+// Der Farm-Assistent zeigt je Ziel den letzten Bericht: Ergebnis-Punkt mit
+// Titel (belegt: gruen = "Voelliger Sieg"; gelb/rot = Verluste laut
+// Spiel-Legende, in unseren Seitenquellen noch nicht belegt - darum wird
+// der Titel des Spiels mitgespeichert und so angezeigt), Wall (nur nach
+// Spaehung) und die Berichts-ID. Kaserne steht dort NICHT - die kommt
+// weiter nur aus Spaeherberichten.
+// Regeln: nur wenn der Farm-Bericht NEUER ist als der gemerkte; war genau
+// dieser Bericht schon offen (gleiche ID), bleibt die genaue Zahl stehen.
+function godFarmZielStandAusFarm(seite) {
+    if (!seite || !seite.ziele || !seite.ziele.length) return 0;
+    let alle = {};
+    try { alle = JSON.parse(localStorage.getItem(ZIEL_STAND_KEY) || "{}") || {}; } catch (e) { alle = {}; }
+    let geaendert = 0;
+    seite.ziele.forEach(z => {
+        if (!z.dot || !z.berichtZeit) return;
+        const alt = alle[z.id] || {};
+        if (alt.bericht && z.berichtId && String(alt.bericht) === String(z.berichtId)) return;
+        if (alt.zeit && z.berichtZeit <= alt.zeit) return;
+        const neu = Object.assign({}, alt, {
+            x: z.x, y: z.y, spieler: alt.spieler || "0", zeit: z.berichtZeit,
+            bericht: z.berichtId || alt.bericht, quelle: "farm",
+            verluste: z.dot === "green" ? 0 : 1,
+            verlusteArt: z.dot === "red" ? "alle" : (z.dot === "yellow" ? "teil" : null),
+            farmErgebnis: z.dotTitel || null
+        });
+        if (typeof z.wall === "number") {
+            neu.gebaeude = Object.assign({}, alt.gebaeude || {}, { wall: z.wall });
+        }
+        alle[z.id] = neu;
+        geaendert++;
+    });
+    if (!geaendert) return 0;
+    try { localStorage.setItem(ZIEL_STAND_KEY, JSON.stringify(alle)); } catch (e) { }
+    return geaendert;
+}
+
 function godFarmSeiteLesen(doc, html, eigen) {
     const out = { ok: false, fehler: null, sendLink: null, einheiten: null, vorlagen: {}, ziele: [], seiten: 1,
         eigen: eigen ? Object.assign({}, eigen) : null };
@@ -32441,11 +32498,21 @@ function godFarmSeiteLesen(doc, html, eigen) {
             const t = rc && rc.nextElementSibling ? String(rc.nextElementSibling.textContent || "").trim() : "";
             if (/^\d+$/.test(t)) wall = parseInt(t, 10);
         }
+        // v602: letzter Bericht je Ziel - Link "...screen=report&mode=all&view=<id>"
+        // und Zeit "heute um 06:45:10" (desktop in derselben Zeile, mobil in
+        // der zweiten tr.report_<id>; Seitenquellen 36/37).
+        let berichtId = null, berichtZeit = null;
+        const bm = h.match(/screen=report&(?:amp;)?mode=all&(?:amp;)?view=(\d+)/);
+        if (bm) berichtId = bm[1];
+        let gruppenText = "";
+        doc.querySelectorAll("tr.report_" + id).forEach(r => { gruppenText += " " + (r.textContent || ""); });
+        berichtZeit = godFarmZeitLesen(gruppenText);
         const ziel = {
             id, x, y,
             dist: eigen ? Math.hypot(x - eigen.x, y - eigen.y) : null,
             dot, voll: ml === "1" ? true : (ml === "0" ? false : null),
-            laufend, wall, vorlagen: {}
+            laufend, wall, vorlagen: {}, berichtId, berichtZeit,
+            dotTitel: (() => { const im = tr.querySelector('img[src*="dots/"]'); return im ? String(im.getAttribute("data-title") || im.getAttribute("title") || "").trim() : ""; })()
         };
         doc.querySelectorAll("a.farm_village_" + id).forEach(a => {
             const om = String(a.getAttribute("onclick") || "").match(/sendUnits\(this,\s*(\d+),\s*(\d+)\)/);
@@ -32777,6 +32844,7 @@ function godFarmLauf(fertig) {
                 farmGebietMerken(seite.ziele.filter(z => z.laufend > 0)
                     .map(z => ({ targetId: z.id, targetLabel: z.x + "|" + z.y })));
             } catch (e) { }
+            try { godFarmZielStandAusFarm(seite); } catch (e) { }
             const hinweise = [];
             if (/Accountmanager\.farm\.hide_attacked\s*=\s*true/.test(html)) {
                 hinweise.push("Farm-Assistent blendet angegriffene Doerfer aus (Haken setzen)");
@@ -52865,7 +52933,9 @@ function zielStandMerken(z, berichtId) {
     if (alt.zeit && z.zeit && z.zeit < alt.zeit) return;
     const neu = Object.assign({}, alt, {
         x: z.x, y: z.y, spieler: z.spieler, zeit: z.zeit || Date.now(), bericht: berichtId || alt.bericht,
-        verluste: typeof z.verluste === "number" ? z.verluste : alt.verluste
+        verluste: typeof z.verluste === "number" ? z.verluste : alt.verluste,
+        // v602: geoeffneter Bericht ist genauer als der Farm-Assistent.
+        quelle: "bericht", verlusteArt: null, farmErgebnis: null
     });
     if (z.gebaeude) { neu.gebaeude = z.gebaeude; neu.gebaeudeZeit = z.zeit || Date.now(); }
     alle[z.id] = neu;
@@ -53275,7 +53345,9 @@ function openOdinKarte() {
             const markiert = !(z.quittiert && z.quittiert >= (z.zeit || 0)) &&
                 (z.verluste > 0 || (g.wall || 0) > 0 || (g.barracks || 0) > 0);
             zeile2 = `<div style="margin-top:3px;color:#d6c9a3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Letzter Bericht${alter !== null ? ` vor ${alter} Std.` : ""}: ` +
-                `Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}` +
+                (z.quelle === "farm"
+                    ? `${String(z.farmErgebnis || (z.verluste > 0 ? "Verluste" : "keine Verluste")).replace(/</g, "&lt;")} · Farm-Assistent`
+                    : `Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}`) +
                 (z.gebaeude ? ` · Wall ${g.wall || 0} · Kaserne ${g.barracks || 0}` : "") +
                 (markiert ? ` <button data-k="quitt" style="margin-left:6px;padding:1px 7px;border-radius:5px;border:1px solid #6a5a32;background:#3a3020;color:#f0dca8;">Markierung entfernen</button>` : "") +
                 `</div>`;
@@ -59517,6 +59589,14 @@ if (location.href.includes("mode=scavenge_mass")) {
         if (location.href.includes("screen=am_farm")) {
             waitForElement("#plunder_list", () => {
                 try { cacheFarmTemplateUnits(document); } catch (e) { }
+                // v602: auch beim Oeffnen von Hand den Ziel-Stand nachfuehren.
+                try {
+                    const gd = game_data;
+                    const sv = godFarmSeiteLesen(document, document.documentElement.innerHTML,
+                        { id: String(gd.village.id), x: Number(gd.village.x), y: Number(gd.village.y) });
+                    const n = godFarmZielStandAusFarm(sv);
+                    if (n) console.log(`[TW] Ziel-Stand: ${n} Ziel(e) aus dem Farm-Assistenten nachgefuehrt.`);
+                } catch (e) { }
             });
         }
 
