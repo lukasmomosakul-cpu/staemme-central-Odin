@@ -1,11 +1,11 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
 const captcha=fs.readFileSync(SQ+'03_de252_Botschutz-Captcha_desktop.html','utf8');
 const combi=fs.readFileSync(SQ+'35_de260_overview_combined_desktop.html','utf8');
 const farm6=fs.readFileSync(SQ+'38_de260_am_farm_seite1von6_mobil.html','utf8');
-const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
+const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
 function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null}){
  const dom=new JSDOM('<html><body>'+(botImDok?'<div id="bot_check">Bot-Schutz</div>':'')+'</body></html>',{url:'https://de260.die-staemme.de/game.php?village=6863&screen=overview',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;const st={abrufe:[],posts:[],fehler:[]};
@@ -82,6 +82,9 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
  x=welt({farmHtml:farm6,seiten:(n)=>n===2?'netz':farm});s=await lauf(x.T);
  t('K3 Netzfehler auf Seite 3: Lauf geht weiter, als fehlend gemeldet, kein Fehl-Lauf',
    s&&s.fehler===false&&/5\/6 Seiten gelesen \(1 fehlen\)/.test(s.text)&&s.gesendet>0,JSON.stringify(s&&s.text));
+ // L (v606): App-Leiste/Dashboard - GodBot-Farm-Lauf (Sperre "godfarm") meldet "farm" = gelb "laeuft".
+ x=welt({});const st0=x.T.odinSteuerstand().laeuft;x.T.acquireProcessLock('godfarm');const st1=x.T.odinSteuerstand();x.T.releaseProcessLock('godfarm');
+ t('L GodBot-Farm aktiv: Stand meldet laeuft="farm" (Sperre "godfarm"), danach wieder frei',st0===null&&st1.laeuft==='farm'&&st1.sperre==='godfarm'&&x.T.odinSteuerstand().laeuft===null,JSON.stringify([st0,st1.laeuft,st1.sperre]));
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

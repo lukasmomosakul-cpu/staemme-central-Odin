@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      605
+// @version      606
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -64870,7 +64870,17 @@ if (location.href.includes("mode=scavenge_mass")) {
                 rohstoffe: parseInt(localStorage.getItem("tw_next_resource_scan_at") || "0", 10) || null
             };
         } catch (e) { }
-        try { out.laeuft = currentProcessOwner() || null; } catch (e) { out.laeuft = null; }
+        // v606 (Fetteruruk 13.10.: "Farmen bleibt gruen, soll gelb sein wenn
+        // gerade aktiv"): GodBot-Farm laeuft unter der eigenen Sperre
+        // "godfarm" (v596). App-Leiste und Dashboard vergleichen "laeuft" mit
+        // "farm" - darum hier auf den Bereich abbilden, wie hubModuleState()
+        // es fuer die Kacheln im Spiel schon tut. Die echte Sperre steht
+        // weiter in "sperre".
+        try {
+            const owner = currentProcessOwner() || null;
+            out.sperre = owner;
+            out.laeuft = owner === "godfarm" ? "farm" : owner;
+        } catch (e) { out.laeuft = null; out.sperre = null; }
 
         // 25.09.2026: Probleme wie das rote "!" der Kacheln im Spiel. Ohne
         // sie zeigte die Leiste "Bau · an", waehrend der Manager im Spiel
