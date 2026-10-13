@@ -1,4 +1,4 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609; Pakete seit v610): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
@@ -92,24 +92,28 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
  const zl=[{id:'1',x:1,y:0,dist:2,gebaeude:null,verluste:0},{id:'2',x:1,y:1,dist:3,gebaeude:{main:3,wall:0},verluste:0},
    {id:'3',x:2,y:1,dist:4,gebaeude:{main:5,barracks:2,wall:0},verluste:0},{id:'4',x:3,y:1,dist:5,gebaeude:{main:1,wall:1},verluste:0},
    {id:'5',x:0,y:1,dist:1,gebaeude:{main:1,wall:0},verluste:0},{id:'6',x:0,y:0,dist:0.5,gebaeude:{main:4},verluste:1}];
- let e=E(zl,{ziele:{},lern:{}},cfgK,{spy:5,catapult:10,ram:2,axe:20});
- const kurz=(e)=>e.aktionen.map(a=>a.ziel.id+':'+a.art+':'+JSON.stringify(a.truppen)+':'+(a.geb||'-')).join(' ');
- t('M1 (v608) naechste zuerst, ohne Grenze: Spaeher; HG 3->1 = 4 Kats; Kaserne 2->0 = 4 Kats; Wall nur Rammen - jeder Beschuss mit 5 Axt + 1 Spaeher',
-   kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":4,"spy":1,"axe":5}:main 3:beschuss:{"catapult":4,"spy":1,"axe":5}:barracks 4:beschuss:{"ram":2,"spy":1,"axe":5}:-'&&e.gruende.fertig===1&&e.gruende.verluste===1&&!e.gruende.grenze,kurz(e)+' '+JSON.stringify(e.gruende));
- e=E(zl,{ziele:{},lern:{}},Object.assign({},cfgK,{maxOffen:2}),{spy:5,catapult:10,ram:2,axe:20});
- t('M2 Grenze nur, wenn gesetzt (2): nur die beiden naechsten',kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":4,"spy":1,"axe":5}:main'&&e.gruende.grenze===2,kurz(e));
+ let e=E(zl,{ziele:{},lern:{}},cfgK,{spy:8,catapult:10,ram:2,axe:30});
+ const kurz=(e)=>e.aktionen.map(a=>a.ziel.id+':'+a.art+':'+(a.pakete?a.pakete.map(p=>JSON.stringify(p.truppen)).join('|'):JSON.stringify(a.truppen))+':'+(a.geb||'-')).join(' ');
+ t('M1 (v610) naechste zuerst: Spaeher; HG 3->1 = 2 Pakete zu 2 Kats; Kaserne 2->0 = 2 Pakete; Wall nur Rammen - jedes Paket mit 5 Axt + 1 Spaeher',
+   kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:main 3:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:barracks 4:beschuss:{"ram":2,"spy":1,"axe":5}:-'&&e.gruende.fertig===1&&e.gruende.verluste===1&&!e.gruende.grenze,kurz(e)+' '+JSON.stringify(e.gruende));
+ e=E(zl,{ziele:{},lern:{}},Object.assign({},cfgK,{maxOffen:2}),{spy:8,catapult:10,ram:2,axe:30});
+ t('M2 Grenze nur, wenn gesetzt (2): nur die beiden naechsten',kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:main'&&e.gruende.grenze===2,kurz(e));
  e=E(zl,{ziele:{},lern:{}},cfgK,{spy:2,catapult:3,ram:0,axe:10});
- t('M3 knappe Truppen: 3 Kats reichen fuer 1 Stufe (2 Kats), Rest wartet auf Spaeher',kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":2,"spy":1,"axe":5}:main'&&e.gruende.keineSpaeher===2&&/mehr Katapulte fehlen/.test(e.aktionen[1].grund),kurz(e)+' '+JSON.stringify(e.gruende));
+ t('M3 knappe Truppen: 3 Kats reichen fuer 1 Paket (2 Kats), Rest wartet auf Spaeher',kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":2,"spy":1,"axe":5}:main'&&e.gruende.keineSpaeher===2&&/Truppen fehlen/.test(e.aktionen[1].grund),kurz(e)+' '+JSON.stringify(e.gruende));
  const hg11=[{id:'9',x:1,y:1,dist:1,gebaeude:{main:11,wall:0},verluste:0}];
- e=E(hg11,{ziele:{},lern:{}},cfgK,{spy:1,catapult:100,axe:5});
- const e2=E(hg11,{ziele:{},lern:{},faktor:{main:1.25}},cfgK,{spy:1,catapult:100,axe:5});
- t('M9 Tabelle: HG 11->1 = 3x4 + 5x3 + 2x2 = 31 Kats; mit Faktor 1,25 je Stufe aufgerundet',e.aktionen[0].truppen.catapult===31&&e2.aktionen[0].truppen.catapult===3*5+5*4+2*3,JSON.stringify([e.aktionen[0].truppen,e2.aktionen[0].truppen]));
+ e=E(hg11,{ziele:{},lern:{}},cfgK,{spy:20,catapult:100,axe:100});
+ const e2=E(hg11,{ziele:{},lern:{},faktor:{main:1.25}},cfgK,{spy:20,catapult:100,axe:100});
+ const ks=(x)=>x.aktionen[0].pakete.map(p=>p.truppen.catapult).join(',');
+ t('M9 Tabelle je Paket: HG 11->1 = 10 Pakete 4,4,4,3,3,3,3,3,2,2 (31); Faktor 1,25 aufgerundet',ks(e)==='4,4,4,3,3,3,3,3,2,2'&&e.aktionen[0].truppen.catapult===31&&ks(e2)==='5,5,5,4,4,4,4,4,3,3',ks(e)+' / '+ks(e2));
+ const e4=E(hg11,{ziele:{},lern:{}},cfgK,{spy:3,catapult:100,axe:100});
+ t('M10 Pakete begrenzt durch Spaeher (3) -> 3 Pakete, HG 11->8',e4.aktionen[0].pakete.length===3&&/11→8 in 3 Paket/.test(e4.aktionen[0].grund),e4.aktionen[0].grund);
  e=E([zl[1]],{ziele:{},lern:{}},cfgK,{spy:1,catapult:4,light:10});
  const e3=E([zl[1]],{ziele:{},lern:{}},cfgK,{spy:1,catapult:4});
- t('M8 Begleitung: ohne Aexte 5 LKav, ganz ohne Begleitung kein Beschuss',JSON.stringify(e.aktionen[0].truppen)==='{"catapult":4,"spy":1,"light":5}'&&e3.aktionen.length===0&&e3.gruende.keineBegleitung===1,JSON.stringify([e.aktionen[0]&&e.aktionen[0].truppen,e3.gruende]));
- let sl={ziele:{},lern:{}};x.T.autoKatLernen(sl,{beschuss:{geb:'main',kats:4,rammen:2,geplant:2,vorher:{main:3,wall:2}}},{main:1,wall:2});
- const l1=JSON.stringify([sl.faktor,sl.lern]);sl={ziele:{},lern:{}};x.T.autoKatLernen(sl,{beschuss:{geb:'main',kats:4,geplant:2,vorher:{main:3}}},{main:2});
- t('M4 Lernen: Tabelle stimmt -> Faktor 1; nur 1 von 2 Stufen -> Faktor 1,25; Rammen ohne Wirkung -> 4 je Stufe',l1==='[{"main":1},{"wall":4}]'&&sl.faktor.main===1.25,l1+' '+JSON.stringify(sl.faktor));
+ t('M8 Begleitung: ohne Aexte 5 LKav (1 Spaeher -> 1 Paket), ganz ohne Begleitung kein Beschuss',JSON.stringify(e.aktionen[0].truppen)==='{"catapult":2,"spy":1,"light":5}'&&e3.aktionen.length===0&&e3.gruende.keineBegleitung===1,JSON.stringify([e.aktionen[0]&&e.aktionen[0].truppen,e3.gruende]));
+ let sl={ziele:{},lern:{}};x.T.autoKatLernen(sl,{beschuss:{geb:'main',kats:4,rammen:2,geplant:2,pakete:2,vorher:{main:3,wall:2}}},{main:1,wall:2});
+ const l1=JSON.stringify([sl.faktor,sl.lern]);sl={ziele:{},lern:{}};x.T.autoKatLernen(sl,{beschuss:{geb:'main',kats:4,geplant:2,pakete:2,vorher:{main:3}}},{main:2});
+ const sl2={ziele:{},lern:{}};x.T.autoKatLernen(sl2,{beschuss:{geb:'main',kats:4,geplant:2,vorher:{main:3}}},{main:2});
+ t('M4 Lernen: Tabelle stimmt -> Faktor 1; nur 1 von 2 Stufen -> Faktor 1,25; Rammen ohne Wirkung -> 4 je Stufe',l1==='[{"main":1},{"wall":4}]'&&sl.faktor.main===1.25&&!sl2.faktor,l1+' '+JSON.stringify(sl.faktor));
  const T0=Date.now()+3600000;x.w.localStorage.setItem('tw_autokat_stand',JSON.stringify({ziele:{'9':{offen:{art:'spaeher',ankunft:T0}}},lern:{}}));
  t('M5 Farm-Sperre: nach unserer Ankunft (15 Min.) gesperrt, davor frei',x.T.autoKatFarmSperrt('9',T0+5*60000)===true&&x.T.autoKatFarmSperrt('9',T0-10*60000)===false&&x.T.autoKatFarmSperrt('9',T0+20*60000)===false&&x.T.autoKatFarmSperrt('8',T0)===false);
  // M6: ganzer Takt nach einem Farm-Lauf (Seitenquelle 38: 6 Spaeher, 0 Kats).
@@ -137,6 +141,19 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
    s2&&s2.gesendet===0&&/nichts zu senden/.test(s2.text)&&/frühestens wieder ab \d\d:\d\d/.test(s2.text)&&x.w.localStorage.getItem('godfarm_jetzt_at')===null,JSON.stringify(s2&&s2.text));
  const ge=JSON.parse(x.w.localStorage.getItem('godbot_autokat_einheiten')||'null');
  t('N2 Truppenzahlen fuer Auto-Kat dauerhaft gemerkt, Takt ueber den Fahrplan faellig',ge&&ge.vid==='6863'&&ge.u&&typeof ge.u.spy==='number'&&x.T.autoKatFaellig()===true,JSON.stringify(ge));
+ // M11 (v610): Takt legt je Paket einen Planer-Eintrag an, nacheinander, mit Zielgebaeude.
+ x=welt({mapJson:[{x:560,y:540,data:{x:560,y:540,villages:{'1':{'12':[7001,0,0,60,0]}},players:{}}}]});
+ x.w.localStorage.setItem('tw_world_info',JSON.stringify({world:'de260.die-staemme.de',at:Date.now(),speed:1.6,unitSpeed:0.625,fakeLimit:0,unitSpeeds:{spy:9,axe:18,light:10,ram:30,catapult:30}}));
+ x.w.localStorage.setItem('tw_ziel_stand',JSON.stringify({'7001':{x:561,y:552,spieler:'0',zeit:Date.now()-3600000,verluste:0,gebaeude:{main:3,wall:0}}}));
+ x.w.localStorage.setItem('tw_autokat_cfg',JSON.stringify({an:true,v:2}));
+ x.w.localStorage.setItem('godbot_autokat_einheiten',JSON.stringify({vid:'6863',at:Date.now(),u:{spy:10,axe:20,catapult:6,ram:0,light:0}}));
+ const tk=await new Promise(res=>{const r=x.T.autoKatTakt(res);if(!r)res(null);});
+ const at11=(JSON.parse(x.w.localStorage.getItem('tw_attack_plans')||'{}')['tw-autokat']||{}).attacks||[];
+ const of11=x.T.autoKatStand().ziele['7001'];
+ t('M11 Takt: HG 3 -> 2 Eintraege (je 2 Kats + 5 Axt + 1 Spaeher, Ziel Hauptgebaeude), 2-5 s nacheinander, beide im Ziel-Stand',
+   at11.length===2&&at11.every(a=>JSON.stringify(a.troops)==='{"catapult":2,"spy":1,"axe":5}'&&a.targetBuilding==='Hauptgebäude'&&a.unitLabel==='catapult')&&
+   at11[1].startsAtMs-at11[0].startsAtMs>=2000&&at11[1].startsAtMs-at11[0].startsAtMs<=5000&&of11&&of11.offen&&of11.offen.eintraege.length===2&&of11.offen.ankunft===at11[1].arrivesAtMs&&of11.beschuss.pakete===2,
+   JSON.stringify([tk,at11.map(a=>[a.troops,a.targetBuilding,a.startsAtMs]),of11]));
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

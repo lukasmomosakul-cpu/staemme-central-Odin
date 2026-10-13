@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      609
+// @version      610
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33220,7 +33220,8 @@ function godFarmLauf(fertig) {
 //    de260 13.10. - Kaserne nur bei HG 5, Wall nirgends.
 // Katapulte je Stufe (v608, Angabe Fetteruruk): bis 3: 2, bis 8: 3, bis 11: 4;
 // gelernt wird nur ein Korrekturfaktor. Rammen je Wallstufe: gelernt.
-// Jeder Beschuss: alle verfuegbaren Katapulte, Begleitung + 1 Spaeher.
+// Jeder Beschuss: ein Paket je Stufe (v610) mit Begleitung + 1 Spaeher,
+// solange Katapulte reichen.
 // Ob die Gebaeude im Beschuss-Bericht vor oder nach dem Beschuss gelten,
 // ist nicht belegt: nur eine gesunkene Stufe zaehlt, sonst Spaeher hinterher.
 // Ablauf je Takt (nach einem GodBot-Farm-Lauf, alle 20-40 Min.):
@@ -33375,28 +33376,39 @@ function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
             begleit = begleit !== "light" && (frei.light || 0) >= cfg.begleitAnzahl ? "light" : null;
         }
         if (!begleit) { zaehle("keineBegleitung"); return; }
-        const truppen = {};
+        // v610 (Fetteruruk 14.10.): EIN Paket je Stufe - die Wirkung von
+        // Katapulten addiert sich nicht; HG 3 -> 1 = zwei Pakete zu je 2.
+        // Jedes Paket hat Begleitung + 1 Spaeher, Rammen fahren im ersten
+        // Paket mit (nur bei Wall). Reichen Katapulte, Begleitung oder
+        // Spaeher nicht fuer alle Stufen, gehen so viele Pakete, wie reichen.
+        let rammen = 0;
         if (wall > 0) {
             const brauche = Math.ceil(autoKatJeStufe(stand, "wall") * wall);
-            const r = Math.min(frei.ram || 0, brauche);
-            if (r < Math.ceil(autoKatJeStufe(stand, "wall"))) { zaehle("keineRammen"); return; }
-            truppen.ram = r;
+            rammen = Math.min(frei.ram || 0, brauche);
+            if (rammen < Math.ceil(autoKatJeStufe(stand, "wall"))) { zaehle("keineRammen"); return; }
         }
-        let stufen = 0;
+        const pakete = [];
         if (geb) {
-            stufen = autoKatStufenMit(stand, geb, von, bis, frei.catapult || 0);
-            if (stufen > 0) truppen.catapult = autoKatKatsFuer(stand, geb, von, von - stufen);
-            else if (!truppen.ram) { zaehle("keineKatapulte"); return; }
+            let kats = frei.catapult || 0, spy = frei.spy || 0, beg = frei[begleit] || 0;
+            for (let l = von; l > bis; l--) {
+                const k = Math.ceil(autoKatKatsJeStufe(l) * autoKatFaktor(stand, geb));
+                if (kats < k || spy < 1 || beg < cfg.begleitAnzahl) break;
+                kats -= k; spy--; beg -= cfg.begleitAnzahl;
+                pakete.push({ stufe: l, truppen: { catapult: k, spy: 1, [begleit]: cfg.begleitAnzahl } });
+            }
+            if (!pakete.length && !rammen) { zaehle("keineKatapulte"); return; }
         }
-        truppen.spy = 1;
-        truppen[begleit] = (truppen[begleit] || 0) + cfg.begleitAnzahl;
-        Object.keys(truppen).forEach(u => { frei[u] = (frei[u] || 0) - truppen[u]; });
+        if (!pakete.length) pakete.push({ stufe: null, truppen: { spy: 1, [begleit]: cfg.begleitAnzahl } });
+        if (rammen) pakete[0].truppen = Object.assign({ ram: rammen }, pakete[0].truppen);
+        const summe = {};
+        pakete.forEach(p => Object.keys(p.truppen).forEach(u => { summe[u] = (summe[u] || 0) + p.truppen[u]; }));
+        Object.keys(summe).forEach(u => { frei[u] = (frei[u] || 0) - summe[u]; });
         offen++;
-        const mitKat = !!truppen.catapult;
-        aktionen.push({ ziel: z, art: "beschuss", truppen, geb: mitKat ? geb : null, geplant: mitKat ? stufen : 0,
+        const stufen = pakete.filter(p => p.truppen.catapult).length;
+        aktionen.push({ ziel: z, art: "beschuss", truppen: summe, pakete, geb: stufen ? geb : null, geplant: stufen,
             vorher: { wall, barracks: kaserne, main: hg },
-            grund: [wall ? `Wall ${wall}` : "", mitKat ? `${AUTOKAT_GEB_NAME[geb]} ${von}→${von - stufen}` +
-                (von - stufen > bis ? ` (Ziel ${bis}, mehr Katapulte fehlen)` : "") : ""].filter(Boolean).join(", ") });
+            grund: [wall ? `Wall ${wall}` : "", stufen ? `${AUTOKAT_GEB_NAME[geb]} ${von}→${von - stufen} in ${stufen} Paket(en)` +
+                (von - stufen > bis ? ` (Ziel ${bis}, Truppen fehlen)` : "") : ""].filter(Boolean).join(", ") });
     });
     return { aktionen, gruende };
 }
@@ -33408,7 +33420,7 @@ function autoKatLernen(stand, zs, neu) {
     const b = zs && zs.beschuss;
     if (!b || !neu) return [];
     const out = [];
-    if (b.geb && b.kats && b.vorher && typeof b.vorher[b.geb] === "number" && typeof neu[b.geb] === "number") {
+    if (b.pakete && b.geb && b.kats && b.vorher && typeof b.vorher[b.geb] === "number" && typeof neu[b.geb] === "number") {
         const gefallen = b.vorher[b.geb] - neu[b.geb];
         const geplant = b.geplant || 0;
         if (!stand.faktor) stand.faktor = {};
@@ -33482,14 +33494,22 @@ function autoKatTakt(fertig) {
     Object.keys(stand.ziele).forEach(id => {
         const zs = stand.ziele[id];
         if (!zs.offen) return;
-        const a = nachId[zs.offen.eintrag];
-        if (!a || a.failed) {
+        // v610: mehrere Eintraege je Ziel (ein Paket je Stufe).
+        const liste = (zs.offen.eintraege || [zs.offen.eintrag]).map(i => nachId[i]);
+        const fehl = liste.filter(a => !a || a.failed);
+        const weg = liste.filter(a => a && a.sent);
+        if (fehl.length === liste.length) {
+            const a = liste[0];
             meldung.push(`${zs.x}|${zs.y}: Eintrag ${a ? "fehlgeschlagen (" + (a.failReason || "?") + ")" : "verschwunden"} - 2 Std. Pause`);
             zs.sperreBis = Date.now() + 2 * 3600000;
             delete zs.offen;
             return;
         }
-        if (a.sent && zs.offen.ankunft + 60000 < jetzt) {
+        if (fehl.length + weg.length === liste.length && zs.offen.ankunft + 60000 < jetzt) {
+            if (fehl.length) {
+                meldung.push(`${zs.x}|${zs.y}: ${fehl.length} von ${liste.length} Paket(en) nicht gesendet`);
+                if (zs.beschuss) zs.beschuss.geplant = weg.filter(a => a.troops && a.troops.catapult).length;
+            }
             zs.warte = { art: zs.offen.art, ankunft: zs.offen.ankunft, berichtVorher: zs.offen.berichtVorher || null, versuche: 0 };
             delete zs.offen;
         }
@@ -33585,40 +33605,50 @@ function autoKatTakt(fertig) {
                     ankunft = flog[z.id] + 90000 + humanDelay(0, 60000);
                     start = ankunft - lauf * 1000;
                 }
-                const eintrag = {
-                    id: "akat-" + Date.now() + "-" + Math.floor(Math.random() * 100000),
-                    type: "attack",
-                    attacker: getVillageDisplayNameWithCoord(vid) || von,
-                    fromCoord: von,
-                    unitLabel: langsam,
-                    targetPlayer: "Barbarendorf",
-                    toCoord: nach,
-                    startsAtMs: start,
-                    arrivesAtMs: ankunft,
-                    startsAtLabel: supportPlanTimeLabel(start),
-                    arrivesAtLabel: supportPlanTimeLabel(ankunft),
-                    villageId: vid,
-                    targetId: String(z.id),
-                    targetBuilding: ak.geb ? AUTOKAT_GEB_NAME[ak.geb] : null,
-                    troops: Object.assign({}, ak.truppen),
-                    topUp: false, topUpUnits: [],
-                    sent: false, sentAt: null, failed: false, failReason: null
-                };
-                plan.attacks.push(eintrag);
+                // v610: je Paket ein Eintrag, 2-5 s nacheinander - gleiche
+                // Laufzeit, also kommen sie in dieser Reihenfolge an.
+                const pakete = ak.pakete || [{ truppen: ak.truppen }];
+                const ids = [];
+                let s0 = start, a0 = ankunft;
+                pakete.forEach((p, i) => {
+                    if (i > 0) { const d = humanDelay(2000, 5000); s0 += d; a0 += d; }
+                    const eintrag = {
+                        id: "akat-" + Date.now() + "-" + i + "-" + Math.floor(Math.random() * 100000),
+                        type: "attack",
+                        attacker: getVillageDisplayNameWithCoord(vid) || von,
+                        fromCoord: von,
+                        unitLabel: langsam,
+                        targetPlayer: "Barbarendorf",
+                        toCoord: nach,
+                        startsAtMs: s0,
+                        arrivesAtMs: a0,
+                        startsAtLabel: supportPlanTimeLabel(s0),
+                        arrivesAtLabel: supportPlanTimeLabel(a0),
+                        villageId: vid,
+                        targetId: String(z.id),
+                        targetBuilding: (ak.geb && p.truppen.catapult) ? AUTOKAT_GEB_NAME[ak.geb] : null,
+                        troops: Object.assign({}, p.truppen),
+                        topUp: false, topUpUnits: [],
+                        sent: false, sentAt: null, failed: false, failReason: null
+                    };
+                    plan.attacks.push(eintrag);
+                    ids.push(eintrag.id);
+                });
+                ankunft = a0;
                 const zs = stand.ziele[z.id] = stand.ziele[z.id] || {};
-                zs.offen = { art: ak.art, eintrag: eintrag.id, ankunft, berichtVorher: (zielStand[z.id] || {}).bericht || null };
+                zs.offen = { art: ak.art, eintraege: ids, ankunft, berichtVorher: (zielStand[z.id] || {}).bericht || null };
                 if (ak.art === "spaeher") {
                     delete zs.nachBeschuss;
                     const p = punkteVon[z.id];
                     if (typeof p === "number" && p) zs.punkte = p;
                 } else {
                     zs.beschuss = { geb: ak.geb, kats: ak.truppen.catapult || 0, rammen: ak.truppen.ram || 0, geplant: ak.geplant || 0,
-                        vorher: ak.vorher, at: Date.now() };
+                        pakete: (ak.pakete || []).length, vorher: ak.vorher, at: Date.now() };
                 }
                 angelegt++;
                 meldung.push(`${nach} (${z.dist.toFixed(1)} F.): ${ak.art === "spaeher" ? "Späher" : "Beschuss"} - ${ak.grund}, ` +
-                    Object.keys(ak.truppen).map(u => ak.truppen[u] + " " + u).join(" + ") +
-                    (eintrag.targetBuilding ? `, Ziel ${eintrag.targetBuilding}` : "") +
+                    pakete.map(p => Object.keys(p.truppen).map(u => p.truppen[u] + " " + u).join(" + ")).join(" | ") +
+                    (ak.geb ? `, Ziel ${AUTOKAT_GEB_NAME[ak.geb]}` : "") +
                     `, Abflug ${supportPlanTimeLabel(start)}`);
             });
             plans[AUTOKAT_PLAN_ID] = plan;
