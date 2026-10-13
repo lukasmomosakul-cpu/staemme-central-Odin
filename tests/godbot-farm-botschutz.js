@@ -1,11 +1,12 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
 const captcha=fs.readFileSync(SQ+'03_de252_Botschutz-Captcha_desktop.html','utf8');
 const combi=fs.readFileSync(SQ+'35_de260_overview_combined_desktop.html','utf8');
+const farm6=fs.readFileSync(SQ+'38_de260_am_farm_seite1von6_mobil.html','utf8');
 const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
-function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false}){
+function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null}){
  const dom=new JSDOM('<html><body>'+(botImDok?'<div id="bot_check">Bot-Schutz</div>':'')+'</body></html>',{url:'https://de260.die-staemme.de/game.php?village=6863&screen=overview',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;const st={abrufe:[],posts:[],fehler:[]};
  w.addEventListener('error',e=>st.fehler.push(String(e.error&&e.error.stack||e.message).slice(0,200)));
@@ -14,7 +15,9 @@ function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwo
  w.localStorage.setItem('tw_godfarm_cfg',JSON.stringify({modus:'godbot',abstandMin:15,tempo:'zuegig'}));
  w.localStorage.setItem('godfarm_befehle_at',String(Date.now()));
  w.TribalWars={post:(u,_,d,ok,err)=>{st.posts.push(d);setTimeout(()=>{ if(postAntwort&&st.posts.length===postAntwort.nach) (postAntwort.fehler?err:ok)(postAntwort.r); else ok({success:'x',target_village:Number(d.target),current_units:{}}); },10);}};
- w.fetch=(u)=>{u=String(u);st.abrufe.push(u);const istFarm=/screen=am_farm$/.test(u),istCombi=/mode=combined/.test(u);
+ w.fetch=(u)=>{u=String(u);st.abrufe.push(u);const fp=u.match(/Farm_page=(\d+)/);
+   if(fp&&seiten){const h=seiten(Number(fp[1]));if(h==='netz')return Promise.reject(new Error('Failed to fetch'));return Promise.resolve({ok:true,status:200,url:'https://de260.die-staemme.de'+u,text:()=>Promise.resolve(h)});}
+   const istFarm=/screen=am_farm$/.test(u),istCombi=/mode=combined/.test(u);
    const html=istFarm?farmHtml:(istCombi?combiHtml:'<html><body>ok</body></html>');
    const url='https://de260.die-staemme.de'+(istFarm&&farmUrl?farmUrl:u);
    return Promise.resolve({ok:true,status:200,url,text:()=>Promise.resolve(html),json:()=>Promise.reject(new Error('x'))});};
@@ -68,6 +71,17 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
  t('J Latenz ohne Anfrage: min RTT 60 ms gleiche Herkunft -> 21 ms, CDN ignoriert, 0 Abrufe',lat===21&&x.st.abrufe.length===vor,String(lat));
  const lat2=await new Promise(res=>x.T.measureNetworkLatencyMs({location:{origin:o},performance:{getEntriesByType:()=>[]}},res));
  t('J2 ohne Zeitmessung: zuletzt gemessener Wert',lat2===21,String(lat2));
+ // K (v605): Farm-Assistent mit 6 Seiten (Seitenquelle 38, Seitengroesse 10).
+ const fpNr=(st)=>st.abrufe.map(u=>(u.match(/Farm_page=(\d+)/)||[])[1]).filter(Boolean).map(Number);
+ x=welt({farmHtml:farm6,seiten:()=>farm});s=await lauf(x.T);
+ t('K1 6 Seiten: Folgeseiten 1-5 aus der Seitenleiste geholt, Ziele zusammengefuehrt, angegriffen',
+   s&&JSON.stringify(fpNr(x.st))==='[1,2,3,4,5]'&&x.st.abrufe.filter(u=>/am_farm/.test(u)).length===6&&/6\/6 Seiten gelesen/.test(s.text)&&s.gesendet>0&&!x.T.isBotProtectionActive(),JSON.stringify([fpNr(x.st),s&&s.anfragen,s&&s.text]));
+ x=welt({farmHtml:farm6,seiten:(n)=>n===3?captcha:farm});s=await lauf(x.T);
+ t('K2 Botschutz auf Seite 4: keine weitere Seite, KEIN Angriff, alles angehalten',
+   s&&JSON.stringify(fpNr(x.st))==='[1,2,3]'&&x.st.posts.length===0&&x.T.isBotProtectionActive()&&s.fehler===false,JSON.stringify([fpNr(x.st),x.st.posts.length,s&&s.text]));
+ x=welt({farmHtml:farm6,seiten:(n)=>n===2?'netz':farm});s=await lauf(x.T);
+ t('K3 Netzfehler auf Seite 3: Lauf geht weiter, als fehlend gemeldet, kein Fehl-Lauf',
+   s&&s.fehler===false&&/5\/6 Seiten gelesen \(1 fehlen\)/.test(s.text)&&s.gesendet>0,JSON.stringify(s&&s.text));
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

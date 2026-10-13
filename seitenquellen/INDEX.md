@@ -49,3 +49,4 @@ Siehe ANFRAGEN.md.
 | 35 | overview_villages (Kombiniert) | de260 | desktop | 12.10.2026, 06:52:08 | table#combined_table, Kopf img unit_<x>.webp, tr.nowrap, td.unit-item (auch hidden) | godbot-seite-overview_villages_2026-10-12_0652.txt |
 | 36 | am_farm, Haken "Zeige nur Angriffe, die von diesem Dorf ausgingen" AUS | de260 | mobil | 12.10.2026, 06:53:33 | #all_village_checkbox ohne checked, #attacked_checkbox | godbot-seite-am_farm_2026-10-12_0653.txt |
 | 37 | am_farm, Haken AUS | de260 | desktop | 12.10.2026, 06:54:05 | wie 36 | godbot-seite-am_farm_2026-10-12_0654.txt |
+| 38 | am_farm, Seite 1 von 6 | de260 | mobil | 13.10.2026, 09:25:13 | .paged-nav-item zweimal (oben/unten), Links ...&order=distance&dir=asc&Farm_page=N (N ab 0 = Seite 1), #farm_pagesize value=10, Accountmanager.change_pagesize_link (ajaxaction=set_page_size) | godbot-seite-am_farm_2026-10-13_0925.txt |

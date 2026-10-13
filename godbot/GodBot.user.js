@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      604
+// @version      605
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32292,6 +32292,12 @@ const GODFARM_STAND_KEY = "tw_godfarm_stand";
 const GODFARM_LOG_KEY = "tw_godfarm_ankunft";
 const GODFARM_MAX_ANGRIFFE = 80;          // v598: Haeppchen je Lauf
 const GODFARM_LAUF_MAX_MS = 90 * 1000;      // v598: Sperre hoechstens ~90 s am Stueck
+// v605: Farm-Assistent ueber mehrere Seiten (Seitenquelle 38: 6 Seiten bei
+// Seitengroesse 10). Folgeseiten werden aus den Links der Seitenleiste
+// gebaut ("...&order=distance&dir=asc&Farm_page=N", N ab 0 = Seite 1) und
+// nacheinander mit Lesepause geholt - wie Weiterblaettern von Hand.
+const GODFARM_MAX_SEITEN = 30;
+const GODFARM_SEITEN_PAUSE = [600, 1500];
 let godFarmLaeuft = false;
 let godFarmAbbruchGrund = "";   // v599: gesetzt von preemptRaubzugFarmen
 
@@ -32514,8 +32520,7 @@ function godFarmSeiteLesen(doc, html, eigen) {
     }
     // Die Seitenleiste steht zweimal (oben und unten, beide id=plunder_list_nav,
     // Seitenquellen 32/33) - gezaehlt werden verschiedene Seitennummern.
-    out.seiten = Math.max(1, new Set([...doc.querySelectorAll(".paged-nav-item")]
-        .map(e => String(e.textContent || "").replace(/\D/g, "")).filter(Boolean)).size);
+    out.seiten = godFarmSeitenNav(doc).seiten;   // v605: hoechste Nummer
 
     doc.querySelectorAll('tr[id^="village_"]').forEach(tr => {
         const id = (tr.id.match(/^village_(\d+)$/) || [])[1];
@@ -32574,6 +32579,27 @@ function godFarmSeiteLesen(doc, html, eigen) {
     if (!out.sendLink) { out.fehler = "Versandadresse (send_units_link) fehlt auf der Seite."; return out; }
     if (!out.einheiten) { out.fehler = "Truppen im Dorf (farm.current_units) nicht lesbar."; return out; }
     out.ok = true;
+    return out;
+}
+
+// v605: Seitenleiste des Farm-Assistenten. Steht zweimal (oben/unten);
+// Seitenzahl = hoechste Nummer (nicht Anzahl der Eintraege - eine gekuerzte
+// Leiste zeigt nicht jede Nummer). url(nr) ersetzt Farm_page in einem
+// ECHTEN Link der Leiste; ohne Link (nur eine Seite) url = null.
+function godFarmSeitenNav(doc) {
+    const out = { seiten: 1, url: null, seitenGroesse: null };
+    if (!doc) return out;
+    let max = 1, href = null;
+    doc.querySelectorAll(".paged-nav-item").forEach(e => {
+        const n = parseInt(String(e.textContent || "").replace(/\D/g, ""), 10);
+        if (n > max) max = n;
+        const h = e.getAttribute ? String(e.getAttribute("href") || "") : "";
+        if (h && /screen=am_farm/.test(h) && /[?&]Farm_page=\d+/.test(h)) href = h;
+    });
+    out.seiten = max;
+    if (href) out.url = (nr) => href.replace(/([?&]Farm_page=)\d+/, "$1" + nr);
+    const ps = doc.querySelector("#farm_pagesize");
+    if (ps) out.seitenGroesse = parseInt(ps.getAttribute("value") || ps.value, 10) || null;
     return out;
 }
 
@@ -32862,8 +32888,44 @@ function godFarmLauf(fertig) {
             return { html, doc, echt, gesperrt };
         });
     });
-    seiteHolen(url)
-        .then(({ html, doc, echt, gesperrt }) => {
+    // v605: Seite 1 und - laut Seitenleiste - alle weiteren, nacheinander.
+    // Botschutz auf irgendeiner Seite = gesperrt (der Halt lief schon in
+    // htmlDocBlocked/frameDocBlocked). Eine nicht ladbare Folgeseite bricht
+    // den Lauf nicht ab, sie wird als fehlend gemeldet.
+    const farmSeitenHolen = () => seiteHolen(url).then(erste => {
+        erste.weitere = [];
+        erste.fehlendeSeiten = 0;
+        if (erste.gesperrt || !erste.doc || !/screen=am_farm/.test(erste.echt)) return erste;
+        const nav = godFarmSeitenNav(erste.doc);
+        erste.nav = nav;
+        if (nav.seiten <= 1) return erste;
+        if (!nav.url) { erste.fehlendeSeiten = nav.seiten - 1; return erste; }
+        const bis = Math.min(nav.seiten, GODFARM_MAX_SEITEN);
+        erste.fehlendeSeiten = nav.seiten - bis;
+        let nr = 1;
+        const naechste = () => {
+            if (nr >= bis) return Promise.resolve(erste);
+            if (godFarmAbbruchGrund || automationOnHold()) { erste.fehlendeSeiten += bis - nr; return Promise.resolve(erste); }
+            return new Promise(r => setTimeout(r, humanDelay(GODFARM_SEITEN_PAUSE[0], GODFARM_SEITEN_PAUSE[1])))
+                .then(() => {
+                    if (isBotProtectionActive()) { erste.gesperrt = true; return erste; }
+                    try { touchProcessLock("godfarm"); } catch (e) { }
+                    const u = nav.url(nr);
+                    anfragen++;
+                    twCountRequest(u, "auto", "godfarm-seite");
+                    return seiteHolen(u).catch(() => null).then(f => {
+                        if (f && f.gesperrt) { erste.gesperrt = true; return erste; }
+                        if (f && f.doc && /screen=am_farm/.test(f.echt)) erste.weitere.push(f);
+                        else erste.fehlendeSeiten++;
+                        nr++;
+                        return naechste();
+                    });
+                });
+        };
+        return naechste();
+    });
+    farmSeitenHolen()
+        .then(({ html, doc, echt, gesperrt, weitere, fehlendeSeiten, nav }) => {
             // Botschutz ist kein Fehler von GodBot-Farm: kein Rueckfall-Zaehler,
             // der Halt (haltAllAutomation) ist schon passiert.
             if (gesperrt || isBotProtectionActive()) {
@@ -32880,6 +32942,21 @@ function godFarmLauf(fertig) {
             const seite = godFarmSeiteLesen(doc, html, eigen);
             if (!seite.ok) { ende({ fehler: true, gesendet: 0, anfragen, text: seite.fehler }); return; }
             seite.eigen = eigen;
+            // v605: Ziele der Folgeseiten dazu (doppelte IDs nur einmal).
+            seite.gelesen = 1;
+            seite.fehlend = fehlendeSeiten || 0;
+            (weitere || []).forEach(w => {
+                const s2 = godFarmSeiteLesen(w.doc, w.html, eigen);
+                if (!s2.ok) { seite.fehlend++; return; }
+                seite.gelesen++;
+                const da = new Set(seite.ziele.map(z => z.id));
+                s2.ziele.forEach(z => { if (!da.has(z.id)) seite.ziele.push(z); });
+                Object.keys(s2.vorlagen).forEach(k => {
+                    const v = seite.vorlagen[k];
+                    if (!v) seite.vorlagen[k] = s2.vorlagen[k];
+                    else if (v.beute === null && s2.vorlagen[k].beute !== null) v.beute = s2.vorlagen[k].beute;
+                });
+            });
             // v599: Karte - Farmgebiet auch bei GodBot-Farm pflegen (bisher nur
             // aus FarmGod-Plaenen; FetterOrk de260: tw_farm_gebiet stand seit
             // dem Umstieg 11.10. 22:21 UTC auf 17 von 30 Zielen). Alles mit
@@ -32890,6 +32967,10 @@ function godFarmLauf(fertig) {
             } catch (e) { }
             try { godFarmZielStandAusFarm(seite); } catch (e) { }
             const hinweise = [];
+            if (seite.seiten > 1 && nav && nav.seitenGroesse) {
+                hinweise.push(`Seitengroesse ${nav.seitenGroesse}: ${seite.seiten} Abrufe je Lauf - ` +
+                    "im Farm-Assistenten groesser stellen spart Abrufe");
+            }
             if (/Accountmanager\.farm\.hide_attacked\s*=\s*true/.test(html)) {
                 hinweise.push("Farm-Assistent blendet angegriffene Doerfer aus (Haken setzen)");
             }
@@ -32908,7 +32989,8 @@ function godFarmLauf(fertig) {
             const ausgelassen = `ausgelassen: ${g.abstand} Abstand, ${g.laufend} fremd laufend, ${g.verluste} Verluste, ` +
                 `${g.wall} Wall, ${g.weit} zu weit, ${g.truppen} ohne Truppen` +
                 (g.rest ? `, ${g.rest} im naechsten Haeppchen` : "") +
-                (seite.seiten > 1 ? ` - Achtung: ${seite.seiten} Seiten, gelesen nur Seite 1 (Seitengroesse erhoehen)` : "") +
+                (seite.seiten > 1 ? ` - ${seite.gelesen}/${seite.seiten} Seiten gelesen` +
+                    (seite.fehlend ? ` (${seite.fehlend} fehlen)` : "") : "") +
                 (hinweise.length ? " - Hinweis: " + hinweise.join("; ") : "");
             const dorfText = aw.doerfer > 1 ? ` aus ${aw.doerfer} Doerfern` : "";
             if (!aw.plan.length) {
