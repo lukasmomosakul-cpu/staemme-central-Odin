@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      607
+// @version      608
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33188,11 +33188,11 @@ function godFarmLauf(fertig) {
 //    (Seitenquelle 01). Zielgebaeude-Namen wie CATAPULT_BUILDING_VALUES.
 //  - Kaserne braucht HG 3, Wall braucht Kaserne: 19 gespaehte Barbaren
 //    de260 13.10. - Kaserne nur bei HG 5, Wall nirgends.
-// NICHT BELEGT: wie viele Katapulte/Rammen eine Stufe kosten, und das
-// Format eines Katapult-Berichts. Darum:
-//  - Katapulte/Rammen je Stufe werden GELERNT (Start 2 je Stufe).
-//  - Nach jedem Beschuss geht ein reiner Spaeher hinterher; erst dessen
-//    Bericht (belegtes Format) zeigt, was gefallen ist.
+// Katapulte je Stufe (v608, Angabe Fetteruruk): bis 3: 2, bis 8: 3, bis 11: 4;
+// gelernt wird nur ein Korrekturfaktor. Rammen je Wallstufe: gelernt.
+// Jeder Beschuss: alle verfuegbaren Katapulte, Begleitung + 1 Spaeher.
+// Ob die Gebaeude im Beschuss-Bericht vor oder nach dem Beschuss gelten,
+// ist nicht belegt: nur eine gesunkene Stufe zaehlt, sonst Spaeher hinterher.
 // Ablauf je Takt (nach einem GodBot-Farm-Lauf, alle 20-40 Min.):
 //  1. eigene Eintraege im Plan "Auto-Kat" nachhalten (gesendet/fehlgeschl.)
 //  2. faellige Spaeherberichte lesen (1 Abruf je Bericht, hoechstens 2)
@@ -33205,8 +33205,9 @@ const AUTOKAT_STAND_KEY = "tw_autokat_stand";
 const AUTOKAT_PLAN_ID = "tw-autokat";
 const AUTOKAT_TAKT_MS = [20 * 60000, 40 * 60000];
 const AUTOKAT_KARTE_MAX_ABRUFE = 3;
-const AUTOKAT_BERICHTE_MAX = 2;
-const AUTOKAT_START_JE_STUFE = 2;
+const AUTOKAT_BERICHTE_MAX = 5;
+const AUTOKAT_START_JE_STUFE = 2;   // nur noch Rammen je Wallstufe (gelernt)
+const AUTOKAT_BEGLEIT_EINHEITEN = ["axe", "light", "spear", "sword", "heavy"];
 const AUTOKAT_GEB_NAME = { main: "Hauptgebäude", barracks: "Kaserne" };
 let autoKatEinheiten = null;   // { vid, at, u } - aus dem letzten Farm-Lauf
 let autoKatLaeuft = false;
@@ -33218,13 +33219,18 @@ function autoKatCfg() {
     return {
         an: c.an === true,
         hgZiel: zahl(c.hgZiel, 1, 1, 30),
-        maxOffen: zahl(c.maxOffen, 3, 1, 20),
-        spaeher: zahl(c.spaeher, 1, 1, 50)
+        // v608 (Fetteruruk 13.10.: "warum nur 3? nutze alle Kattas"): ohne
+        // Grenze, es begrenzen nur die Truppen. Ein gespeicherter Wert aus
+        // v607 (Standard 3) gilt nicht weiter.
+        maxOffen: c.v === 2 ? zahl(c.maxOffen, 0, 0, 200) : 0,
+        spaeher: zahl(c.spaeher, 1, 1, 50),
+        begleitEinheit: AUTOKAT_BEGLEIT_EINHEITEN.indexOf(c.begleitEinheit) >= 0 ? c.begleitEinheit : "axe",
+        begleitAnzahl: zahl(c.begleitAnzahl, 5, 1, 500)
     };
 }
 
 function autoKatCfgSetzen(teil) {
-    const c = Object.assign(autoKatCfg(), teil || {});
+    const c = Object.assign(autoKatCfg(), teil || {}, { v: 2 });
     try { localStorage.setItem(AUTOKAT_CFG_KEY, JSON.stringify(c)); } catch (e) { }
     return c;
 }
@@ -33239,6 +33245,30 @@ function autoKatStand() {
 
 function autoKatStandSpeichern(s) {
     try { localStorage.setItem(AUTOKAT_STAND_KEY, JSON.stringify(s)); } catch (e) { }
+}
+
+// v608 (Fetteruruk 13.10., aus dem Spiel): Katapulte fuer EINE Stufe -
+// bis Stufe 3: 2, bis Stufe 8: 3, bis Stufe 11: 4. Darueber nicht
+// angegeben: 4. Gelernt wird nur noch ein Korrekturfaktor je Gebaeude
+// (1 = Tabelle stimmt), falls ein Beschuss weniger Stufen schafft.
+function autoKatKatsJeStufe(stufe) { return stufe <= 3 ? 2 : (stufe <= 8 ? 3 : 4); }
+function autoKatFaktor(stand, geb) {
+    const f = Number(stand && stand.faktor && stand.faktor[geb]);
+    return f >= 1 ? f : 1;
+}
+function autoKatKatsFuer(stand, geb, von, bis) {
+    let n = 0;
+    for (let l = von; l > bis; l--) n += Math.ceil(autoKatKatsJeStufe(l) * autoKatFaktor(stand, geb));
+    return n;
+}
+function autoKatStufenMit(stand, geb, von, bis, k) {
+    let st = 0, rest = k;
+    for (let l = von; l > bis; l--) {
+        const c = Math.ceil(autoKatKatsJeStufe(l) * autoKatFaktor(stand, geb));
+        if (rest < c) break;
+        rest -= c; st++;
+    }
+    return st;
 }
 
 function autoKatJeStufe(stand, geb) {
@@ -33270,7 +33300,7 @@ function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
         const zs = (stand.ziele || {})[z.id] || {};
         if (zs.offen || zs.warte) { zaehle("unterwegs"); return; }
         if (zs.sperreBis && zs.sperreBis > Date.now()) { zaehle("gesperrt"); return; }
-        if (offen >= cfg.maxOffen) { zaehle("grenze"); return; }
+        if (cfg.maxOffen > 0 && offen >= cfg.maxOffen) { zaehle("grenze"); return; }
         if (z.verluste > 0) { zaehle("verluste"); return; }
         const g = z.gebaeude || {};
         const bekannt = typeof g.main === "number";
@@ -33283,10 +33313,17 @@ function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
             return;
         }
         const wall = g.wall || 0, kaserne = g.barracks || 0, hg = g.main || 0;
-        let geb = null, stufen = 0;
-        if (kaserne > 0) { geb = "barracks"; stufen = kaserne; }
-        else if (hg > cfg.hgZiel) { geb = "main"; stufen = hg - cfg.hgZiel; }
+        let geb = null, von = 0, bis = 0;
+        if (kaserne > 0) { geb = "barracks"; von = kaserne; bis = 0; }
+        else if (hg > cfg.hgZiel) { geb = "main"; von = hg; bis = cfg.hgZiel; }
         if (!geb && !wall) { zaehle("fertig"); return; }
+        // v608: immer mindestens 1 Spaeher und Begleitung mit (Fetteruruk).
+        if ((frei.spy || 0) < 1) { zaehle("keineSpaeher"); return; }
+        let begleit = cfg.begleitEinheit;
+        if ((frei[begleit] || 0) < cfg.begleitAnzahl) {
+            begleit = begleit !== "light" && (frei.light || 0) >= cfg.begleitAnzahl ? "light" : null;
+        }
+        if (!begleit) { zaehle("keineBegleitung"); return; }
         const truppen = {};
         if (wall > 0) {
             const brauche = Math.ceil(autoKatJeStufe(stand, "wall") * wall);
@@ -33294,39 +33331,51 @@ function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
             if (r < Math.ceil(autoKatJeStufe(stand, "wall"))) { zaehle("keineRammen"); return; }
             truppen.ram = r;
         }
+        let stufen = 0;
         if (geb) {
-            const je = autoKatJeStufe(stand, geb);
-            const k = Math.min(frei.catapult || 0, Math.ceil(je * stufen));
-            if (k >= Math.ceil(je)) truppen.catapult = k;
+            stufen = autoKatStufenMit(stand, geb, von, bis, frei.catapult || 0);
+            if (stufen > 0) truppen.catapult = autoKatKatsFuer(stand, geb, von, von - stufen);
             else if (!truppen.ram) { zaehle("keineKatapulte"); return; }
         }
-        Object.keys(truppen).forEach(u => { frei[u] -= truppen[u]; });
+        truppen.spy = 1;
+        truppen[begleit] = (truppen[begleit] || 0) + cfg.begleitAnzahl;
+        Object.keys(truppen).forEach(u => { frei[u] = (frei[u] || 0) - truppen[u]; });
         offen++;
-        aktionen.push({ ziel: z, art: "beschuss", truppen, geb: truppen.catapult ? geb : null,
+        const mitKat = !!truppen.catapult;
+        aktionen.push({ ziel: z, art: "beschuss", truppen, geb: mitKat ? geb : null, geplant: mitKat ? stufen : 0,
             vorher: { wall, barracks: kaserne, main: hg },
-            grund: [wall ? `Wall ${wall}` : "", geb ? `${AUTOKAT_GEB_NAME[geb]} ${geb === "main" ? hg + "→" + cfg.hgZiel : kaserne + "→0"}` : ""]
-                .filter(Boolean).join(", ") });
+            grund: [wall ? `Wall ${wall}` : "", mitKat ? `${AUTOKAT_GEB_NAME[geb]} ${von}→${von - stufen}` +
+                (von - stufen > bis ? ` (Ziel ${bis}, mehr Katapulte fehlen)` : "") : ""].filter(Boolean).join(", ") });
     });
     return { aktionen, gruende };
 }
 
-// Lernen aus dem Spaeherbericht nach einem Beschuss.
+// Lernen aus einem Bericht NACH dem Beschuss (Folge-Spaeher oder ein
+// Katapultbericht, in dem schon eine niedrigere Stufe steht).
+// Katapulte: Korrekturfaktor zur Tabelle. Rammen: Rammen je Wallstufe.
 function autoKatLernen(stand, zs, neu) {
     const b = zs && zs.beschuss;
     if (!b || !neu) return [];
     const out = [];
-    const eins = (geb, menge, vorher) => {
-        if (!menge || typeof vorher !== "number" || typeof neu[geb] !== "number") return;
-        const gefallen = vorher - neu[geb];
-        const alt = autoKatJeStufe(stand, geb);
-        let w;
-        if (gefallen > 0) w = Math.max(0.5, Math.round(((alt + menge / gefallen) / 2) * 10) / 10);
-        else w = Math.min(50, Math.round((alt * 1.5 + 1) * 10) / 10);
-        stand.lern[geb] = w;
-        out.push(`${geb}: ${menge} → ${gefallen > 0 ? "-" + gefallen : "keine"} Stufe(n), jetzt ${w} je Stufe`);
-    };
-    if (b.geb) eins(b.geb, b.kats, b.vorher && b.vorher[b.geb]);
-    if (b.rammen) eins("wall", b.rammen, b.vorher && b.vorher.wall);
+    if (b.geb && b.kats && b.vorher && typeof b.vorher[b.geb] === "number" && typeof neu[b.geb] === "number") {
+        const gefallen = b.vorher[b.geb] - neu[b.geb];
+        const geplant = b.geplant || 0;
+        if (!stand.faktor) stand.faktor = {};
+        const f = autoKatFaktor(stand, b.geb);
+        let nf = f;
+        if (gefallen < geplant) nf = Math.min(3, Math.round((f + 0.25) * 100) / 100);
+        else if (f > 1) nf = Math.max(1, Math.round((f - 0.1) * 100) / 100);
+        stand.faktor[b.geb] = nf;
+        out.push(`${b.geb}: ${b.kats} Kat. → ${gefallen} von ${geplant} Stufe(n), Faktor ${nf}`);
+    }
+    if (b.rammen && b.vorher && typeof b.vorher.wall === "number" && typeof neu.wall === "number") {
+        const gefallen = b.vorher.wall - neu.wall;
+        const alt = autoKatJeStufe(stand, "wall");
+        const w = gefallen > 0 ? Math.max(0.5, Math.round(((alt + b.rammen / gefallen) / 2) * 10) / 10)
+            : Math.min(50, Math.round((alt * 1.5 + 1) * 10) / 10);
+        stand.lern.wall = w;
+        out.push(`Wall: ${b.rammen} Rammen → ${gefallen > 0 ? "-" + gefallen : "keine"} Stufe(n), jetzt ${w} je Stufe`);
+    }
     return out;
 }
 
@@ -33405,19 +33454,18 @@ function autoKatTakt(fertig) {
     Object.keys(stand.ziele).forEach(id => {
         const zs = stand.ziele[id];
         if (!zs.warte) return;
-        if (zs.warte.art === "beschuss") {
-            // Katapult-Bericht wird NICHT ausgewertet (Format nicht belegt):
-            // gleich einen Spaeher hinterher.
-            zs.nachBeschuss = true;
-            delete zs.warte;
-            return;
-        }
+        // v608: auch beim Beschuss den Bericht lesen - der mitgeschickte
+        // Spaeher liefert die Gebaeude. Ob sie VOR oder NACH dem Beschuss
+        // gelten, ist nicht belegt: nur eine gesunkene Stufe gilt als
+        // Ergebnis, sonst geht ein Spaeher hinterher (unten).
         const zst = zielStand[id] || {};
         const neuerBericht = zst.bericht && String(zst.bericht) !== String(zs.warte.berichtVorher || "") &&
             (zst.zeit || 0) >= zs.warte.ankunft - 120000;
         if (neuerBericht) { lesen.push({ id, bericht: String(zst.bericht) }); return; }
         if (jetzt - zs.warte.ankunft > 3 * 3600000) {
-            meldung.push(`${zs.x}|${zs.y}: Späherbericht nach 3 Std. nicht im Farm-Assistenten - neuer Versuch`);
+            meldung.push(`${zs.x}|${zs.y}: Bericht nach 3 Std. nicht im Farm-Assistenten - ` +
+                (zs.warte.art === "beschuss" ? "Späher hinterher" : "neuer Versuch"));
+            if (zs.warte.art === "beschuss") zs.nachBeschuss = true;
             delete zs.warte;
         }
     });
@@ -33514,7 +33562,8 @@ function autoKatTakt(fertig) {
                     const p = punkteVon[z.id];
                     if (typeof p === "number" && p) zs.punkte = p;
                 } else {
-                    zs.beschuss = { geb: ak.geb, kats: ak.truppen.catapult || 0, rammen: ak.truppen.ram || 0, vorher: ak.vorher, at: Date.now() };
+                    zs.beschuss = { geb: ak.geb, kats: ak.truppen.catapult || 0, rammen: ak.truppen.ram || 0, geplant: ak.geplant || 0,
+                        vorher: ak.vorher, at: Date.now() };
                 }
                 angelegt++;
                 meldung.push(`${nach} (${z.dist.toFixed(1)} F.): ${ak.art === "spaeher" ? "Späher" : "Beschuss"} - ${ak.grund}, ` +
@@ -33549,7 +33598,22 @@ function autoKatTakt(fertig) {
         autoKatBerichtHolen(vid, l.bericht, (doc) => {
             const zs = stand.ziele[l.id];
             const z = doc ? berichtZielLesen(doc) : null;
-            if (z && String(z.id) === String(l.id) && z.gebaeude) {
+            if (z && String(z.id) === String(l.id) && z.gebaeude && zs.warte && zs.warte.art === "beschuss") {
+                const b = zs.beschuss || {}, v = b.vorher || {};
+                const gesunken = ["main", "barracks", "wall"].some(k =>
+                    typeof v[k] === "number" && typeof z.gebaeude[k] === "number" && z.gebaeude[k] < v[k]);
+                delete zs.warte;
+                if (gesunken) {
+                    zielStandMerken(z, l.bericht);
+                    const gelernt = autoKatLernen(stand, zs, z.gebaeude);
+                    delete zs.beschuss;
+                    meldung.push(`${zs.x}|${zs.y}: Beschuss-Bericht - HG ${z.gebaeude.main || "?"}, Kaserne ${z.gebaeude.barracks || 0}, ` +
+                        `Wall ${z.gebaeude.wall || 0}` + (gelernt.length ? ` (${gelernt.join("; ")})` : ""));
+                } else {
+                    zs.nachBeschuss = true;
+                    meldung.push(`${zs.x}|${zs.y}: Beschuss-Bericht zeigt keine niedrigere Stufe - Späher hinterher`);
+                }
+            } else if (z && String(z.id) === String(l.id) && z.gebaeude) {
                 zielStandMerken(z, l.bericht);
                 const gelernt = autoKatLernen(stand, zs, z.gebaeude);
                 delete zs.warte; delete zs.beschuss;
@@ -33574,6 +33638,7 @@ function autoKatUiHtml() {
     const c = autoKatCfg();
     const feld = (id, wert, breite) => `<input type="number" id="${id}" value="${wert}" class="tw-numfield" ` +
         `style="width:${breite || 40}px;text-align:right;background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;" />`;
+    const namen = { axe: "Axtkämpfer", light: "Leichte Kav.", spear: "Speerträger", sword: "Schwertkämpfer", heavy: "Schwere Kav." };
     return `
                 <div style="margin-top:8px;padding-top:6px;border-top:1px dashed #333;font-size:12px;">
                     <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
@@ -33581,9 +33646,16 @@ function autoKatUiHtml() {
                         <b>Auto-Kat</b><span>HG auf</span>${feld("tw-autokat-hg", c.hgZiel, 36)}<span>halten, Kaserne weg, Rammen nur bei Wall</span>
                     </label>
                     <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px;">
-                        <span>höchstens</span>${feld("tw-autokat-offen", c.maxOffen, 36)}<span>Ziele gleichzeitig · Späher je Ziel</span>${feld("tw-autokat-spy", c.spaeher, 36)}
+                        <span>Begleitung</span>${feld("tw-autokat-begleit-n", c.begleitAnzahl, 40)}
+                        <select id="tw-autokat-begleit" style="background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;">
+                            ${AUTOKAT_BEGLEIT_EINHEITEN.map(u => `<option value="${u}" ${c.begleitEinheit === u ? "selected" : ""}>${namen[u]}</option>`).join("")}
+                        </select><span>+ 1 Späher je Beschuss</span>
                     </div>
-                    <div style="font-size:11px;color:#999;margin-top:3px;">Nächste Ziele zuerst. Steigen die Punkte eines Dorfes (Karte), geht ein Späher hin. Katapulte je Stufe werden aus den Späherberichten gelernt. Einträge erscheinen im Angriffsplaner unter „Auto-Kat“.</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px;">
+                        <span>Späher je Erkundung</span>${feld("tw-autokat-spy", c.spaeher, 36)}
+                        <span>· höchstens</span>${feld("tw-autokat-offen", c.maxOffen, 40)}<span>Ziele gleichzeitig (0 = alle Truppen nutzen)</span>
+                    </div>
+                    <div style="font-size:11px;color:#999;margin-top:3px;">Nächste Ziele zuerst, alle verfügbaren Katapulte. Katapulte je Stufe: bis Stufe 3 zwei, bis 8 drei, bis 11 vier. Steigen die Punkte eines Dorfes (Karte), geht ein Späher hin. Fehlt die Begleitung, wird Leichte Kavallerie genommen. Einträge im Angriffsplaner unter „Auto-Kat“.</div>
                     <div id="tw-autokat-stand" style="font-size:11px;color:#aab;margin-top:4px;"></div>
                 </div>`;
 }
@@ -33593,28 +33665,32 @@ function autoKatUiStand(el) {
     const s = autoKatStand(), c = autoKatCfg();
     const ids = Object.keys(s.ziele);
     const unterwegs = ids.filter(id => s.ziele[id].offen || s.ziele[id].warte).length;
-    const lern = ["main", "barracks", "wall"].map(g => `${g === "wall" ? "Rammen/Wall" : AUTOKAT_GEB_NAME[g]} ${autoKatJeStufe(s, g)}`).join(", ");
+    const fak = ["main", "barracks"].map(g => `${AUTOKAT_GEB_NAME[g]} ×${autoKatFaktor(s, g)}`).join(", ");
     el.innerHTML = !c.an ? "aus" :
-        `${unterwegs} Ziel(e) in Arbeit, ${ids.length} beobachtet · je Stufe: ${lern}` +
+        `${unterwegs} Ziel(e) in Arbeit, ${ids.length} beobachtet · Tabelle ${fak} · Rammen ${autoKatJeStufe(s, "wall")} je Wallstufe` +
         (s.next ? ` · nächster Takt ${s.next > Date.now() ? new Date(s.next).toLocaleTimeString("de-DE") : "fällig"}` : "");
 }
 
 function autoKatUiBinden(content) {
     const q = (id) => content.querySelector("#" + id);
     if (!q("tw-autokat-an")) return;
+    const ids = ["tw-autokat-an", "tw-autokat-hg", "tw-autokat-offen", "tw-autokat-spy", "tw-autokat-begleit", "tw-autokat-begleit-n"];
     const speichern = () => {
         const vorher = autoKatCfg().an;
         const c = autoKatCfgSetzen({
             an: !!q("tw-autokat-an").checked,
             hgZiel: q("tw-autokat-hg").value,
             maxOffen: q("tw-autokat-offen").value,
-            spaeher: q("tw-autokat-spy").value
+            spaeher: q("tw-autokat-spy").value,
+            begleitEinheit: q("tw-autokat-begleit").value,
+            begleitAnzahl: q("tw-autokat-begleit-n").value
         });
         if (c.an && !vorher) { const s = autoKatStand(); s.next = 0; autoKatStandSpeichern(s); }
-        console.log(`[TW] Auto-Kat ${c.an ? "an" : "aus"}: HG auf ${c.hgZiel}, höchstens ${c.maxOffen} Ziele gleichzeitig, ${c.spaeher} Späher je Ziel.`);
+        console.log(`[TW] Auto-Kat ${c.an ? "an" : "aus"}: HG auf ${c.hgZiel}, Begleitung ${c.begleitAnzahl} ${c.begleitEinheit} + 1 Späher, ` +
+            `${c.maxOffen ? "höchstens " + c.maxOffen + " Ziele gleichzeitig" : "alle verfügbaren Truppen"}.`);
         autoKatUiStand(q("tw-autokat-stand"));
     };
-    ["tw-autokat-an", "tw-autokat-hg", "tw-autokat-offen", "tw-autokat-spy"].forEach(id => q(id).addEventListener("change", speichern));
+    ids.forEach(id => q(id).addEventListener("change", speichern));
     autoKatUiStand(q("tw-autokat-stand"));
 }
 
