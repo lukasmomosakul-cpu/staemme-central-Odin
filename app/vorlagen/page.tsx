@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import OdinShell from '../../components/OdinShell';
+import { stammesBauCodeLesen } from '../../lib/stammesBauCode';
 
 // Vorlagensammlung (04.10.2026).
 //
@@ -74,6 +75,7 @@ export default function VorlagenSeite() {
   const [form, setForm] = useState<typeof leer | null>(null);
   const [versand, setVersand] = useState<Versand[]>([]);
   const [meldung, setMeldung] = useState<{ text: string; gut: boolean } | null>(null);
+  const [codeText, setCodeText] = useState('');
   const versandRef = useRef<Versand[]>([]);
   versandRef.current = versand;
 
@@ -169,6 +171,24 @@ export default function VorlagenSeite() {
     setOffen(null); laden();
   };
 
+  // 2.0.59: Bauvorlagen-Code aus Die Stämme ([construction_template]…) in
+  // die Kette umrechnen. Name nur vorschlagen, wenn noch keiner steht.
+  const codeUebernehmen = (text: string) => {
+    if (!form) return;
+    try {
+      const v = stammesBauCodeLesen(text);
+      setForm({ ...form, queue: v.queue, name: form.name.trim() ? form.name : v.name });
+      setCodeText('');
+      setMeldung({
+        text: `Code gelesen${v.name ? ` („${v.name}“)` : ''}: ${v.auftraege} Aufträge, ${v.stufen} Stufen` +
+          (v.warnungen.length ? ` – ${v.warnungen.join(' ')}` : ''),
+        gut: !v.warnungen.length,
+      });
+    } catch (e) {
+      setMeldung({ text: `Code nicht lesbar: ${(e as Error).message}`, gut: false });
+    }
+  };
+
   const formPruef = form ? pruefen(form.queue) : null;
   const feldStil = { width: '100%', padding: '8px 10px', borderRadius: 10, border: '1px solid var(--odin-border)', boxSizing: 'border-box' } as const;
 
@@ -186,12 +206,13 @@ export default function VorlagenSeite() {
           <h2>Bauvorlagen</h2>
           {!form && (
             <button className="button" type="button" style={{ padding: '8px 12px', borderRadius: 10, border: 0 }}
-              onClick={() => setForm({ ...leer })}>+ Neue Vorlage</button>
+              onClick={() => { setCodeText(''); setForm({ ...leer }); }}>+ Neue Vorlage</button>
           )}
         </div>
         <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
           Gemeinsame Sammlung für alle Konten. „Senden“ legt die Vorlage im Konto an (gleicher Name wird ersetzt)
-          und weist sie den Dörfern zu. Format: <code>gebaeude:stufen;…</code>, Stufen relativ ab 0.
+          und weist sie den Dörfern zu. Format: <code>gebaeude:stufen;…</code>, Stufen relativ ab 0 – oder den
+          Bauvorlagen-Code aus dem Spiel einfügen.
         </div>
 
         {form && (
@@ -204,8 +225,23 @@ export default function VorlagenSeite() {
                 onChange={e => setForm({ ...form, welt: e.target.value })} /></label>
               <label>Beschreibung<textarea value={form.beschreibung} rows={3} style={feldStil}
                 onChange={e => setForm({ ...form, beschreibung: e.target.value })} /></label>
+              <label>Code aus Die Stämme (optional)
+                <textarea value={codeText} rows={3} style={{ ...feldStil, fontFamily: 'monospace', fontSize: 11 }}
+                  onChange={e => setCodeText(e.target.value)}
+                  placeholder="[construction_template]…[/construction_template]" />
+              </label>
+              <div>
+                <button type="button" disabled={!codeText.trim()}
+                  style={{ padding: '6px 12px', borderRadius: 10, border: '1px solid var(--odin-border)', background: 'transparent', opacity: codeText.trim() ? 1 : 0.5 }}
+                  onClick={() => codeUebernehmen(codeText)}>Code übernehmen</button>
+                <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>füllt die Kette unten (und den Namen, falls leer)</span>
+              </div>
               <label>Bauauftrag-Kette<textarea value={form.queue} rows={5} style={{ ...feldStil, fontFamily: 'monospace', fontSize: 12 }}
-                onChange={e => setForm({ ...form, queue: e.target.value })} placeholder="main:1;farm:1;storage:1;wood:1;…" /></label>
+                onChange={e => {
+                  // Code versehentlich direkt in die Kette eingefuegt -> gleich umrechnen.
+                  if (/\[construction_template\]/i.test(e.target.value)) { codeUebernehmen(e.target.value); return; }
+                  setForm({ ...form, queue: e.target.value });
+                }} placeholder="main:1;farm:1;storage:1;wood:1;…" /></label>
               {form.queue && formPruef && (
                 <div style={{ fontSize: 12, color: formPruef.fehler ? '#a63f3f' : '#287a4b', fontWeight: 700 }}>
                   {formPruef.fehler ?? `${formPruef.schritte} Stufen · ${endText(formPruef.end)}`}
