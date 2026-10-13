@@ -1,12 +1,12 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
 const captcha=fs.readFileSync(SQ+'03_de252_Botschutz-Captcha_desktop.html','utf8');
 const combi=fs.readFileSync(SQ+'35_de260_overview_combined_desktop.html','utf8');
 const farm6=fs.readFileSync(SQ+'38_de260_am_farm_seite1von6_mobil.html','utf8');
-const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
-function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null}){
+const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
+function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null,mapJson=null}){
  const dom=new JSDOM('<html><body>'+(botImDok?'<div id="bot_check">Bot-Schutz</div>':'')+'</body></html>',{url:'https://de260.die-staemme.de/game.php?village=6863&screen=overview',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;const st={abrufe:[],posts:[],fehler:[]};
  w.addEventListener('error',e=>st.fehler.push(String(e.error&&e.error.stack||e.message).slice(0,200)));
@@ -15,7 +15,9 @@ function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwo
  w.localStorage.setItem('tw_godfarm_cfg',JSON.stringify({modus:'godbot',abstandMin:15,tempo:'zuegig'}));
  w.localStorage.setItem('godfarm_befehle_at',String(Date.now()));
  w.TribalWars={post:(u,_,d,ok,err)=>{st.posts.push(d);setTimeout(()=>{ if(postAntwort&&st.posts.length===postAntwort.nach) (postAntwort.fehler?err:ok)(postAntwort.r); else ok({success:'x',target_village:Number(d.target),current_units:{}}); },10);}};
- w.fetch=(u)=>{u=String(u);st.abrufe.push(u);const fp=u.match(/Farm_page=(\d+)/);
+ w.fetch=(u)=>{u=String(u);st.abrufe.push(u);
+   if(/map\.php/.test(u))return Promise.resolve({ok:true,status:200,url:'https://de260.die-staemme.de'+u,text:()=>Promise.resolve(JSON.stringify(mapJson||[]))});
+   const fp=u.match(/Farm_page=(\d+)/);
    if(fp&&seiten){const h=seiten(Number(fp[1]));if(h==='netz')return Promise.reject(new Error('Failed to fetch'));return Promise.resolve({ok:true,status:200,url:'https://de260.die-staemme.de'+u,text:()=>Promise.resolve(h)});}
    const istFarm=/screen=am_farm$/.test(u),istCombi=/mode=combined/.test(u);
    const html=istFarm?farmHtml:(istCombi?combiHtml:'<html><body>ok</body></html>');
@@ -85,6 +87,41 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
  // L (v606): App-Leiste/Dashboard - GodBot-Farm-Lauf (Sperre "godfarm") meldet "farm" = gelb "laeuft".
  x=welt({});const st0=x.T.odinSteuerstand().laeuft;x.T.acquireProcessLock('godfarm');const st1=x.T.odinSteuerstand();x.T.releaseProcessLock('godfarm');
  t('L GodBot-Farm aktiv: Stand meldet laeuft="farm" (Sperre "godfarm"), danach wieder frei',st0===null&&st1.laeuft==='farm'&&st1.sperre==='godfarm'&&x.T.odinSteuerstand().laeuft===null,JSON.stringify([st0,st1.laeuft,st1.sperre]));
+ // M (v607): Auto-Kat.
+ x=welt({});const E=x.T.autoKatEntscheiden;const cfgK={hgZiel:1,maxOffen:5,spaeher:1};
+ const zl=[{id:'1',x:1,y:0,dist:2,gebaeude:null,verluste:0},{id:'2',x:1,y:1,dist:3,gebaeude:{main:3,wall:0},verluste:0},
+   {id:'3',x:2,y:1,dist:4,gebaeude:{main:5,barracks:2,wall:0},verluste:0},{id:'4',x:3,y:1,dist:5,gebaeude:{main:1,wall:1},verluste:0},
+   {id:'5',x:0,y:1,dist:1,gebaeude:{main:1,wall:0},verluste:0},{id:'6',x:0,y:0,dist:0.5,gebaeude:{main:4},verluste:1}];
+ let e=E(zl,{ziele:{},lern:{}},cfgK,{spy:2,catapult:10,ram:2});
+ const kurz=(e)=>e.aktionen.map(a=>a.ziel.id+':'+a.art+':'+JSON.stringify(a.truppen)+':'+(a.geb||'-')).join(' ');
+ t('M1 Entscheidung: naechste zuerst - unbekannt=Spaeher, HG 3->1 (4 Kats), Kaserne vor HG, Wall nur Rammen, fertig/Verluste aus',
+   kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":4}:main 3:beschuss:{"catapult":4}:barracks 4:beschuss:{"ram":2}:-'&&e.gruende.fertig===1&&e.gruende.verluste===1,kurz(e)+' '+JSON.stringify(e.gruende));
+ e=E(zl,{ziele:{},lern:{}},Object.assign({},cfgK,{maxOffen:2}),{spy:2,catapult:10,ram:2});
+ t('M2 hoechstens 2 gleichzeitig: nur die beiden naechsten',kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":4}:main'&&e.gruende.grenze===2,kurz(e));
+ e=E(zl,{ziele:{},lern:{}},cfgK,{spy:0,catapult:3,ram:0});
+ t('M3 knappe Truppen: 3 Kats aufs naechste HG, Rest wartet, kein Spaeher',kurz(e)==='2:beschuss:{"catapult":3}:main'&&e.gruende.keineSpaeher===1&&e.gruende.keineKatapulte===1&&e.gruende.keineRammen===1,kurz(e)+' '+JSON.stringify(e.gruende));
+ let sl={ziele:{},lern:{}};let lg=x.T.autoKatLernen(sl,{beschuss:{geb:'main',kats:4,rammen:2,vorher:{main:3,wall:2}}},{main:1,wall:2});
+ const l1=JSON.stringify(sl.lern);sl={ziele:{},lern:{main:2}};x.T.autoKatLernen(sl,{beschuss:{geb:'main',kats:4,vorher:{main:3}}},{main:3});
+ t('M4 Lernen: 4 Kats -> 2 Stufen = 2 je Stufe; Rammen ohne Wirkung -> 4; ohne Wirkung bei Kats -> 4',l1==='{"main":2,"wall":4}'&&sl.lern.main===4,l1+' '+JSON.stringify(sl.lern));
+ const T0=Date.now()+3600000;x.w.localStorage.setItem('tw_autokat_stand',JSON.stringify({ziele:{'9':{offen:{art:'spaeher',ankunft:T0}}},lern:{}}));
+ t('M5 Farm-Sperre: nach unserer Ankunft (15 Min.) gesperrt, davor frei',x.T.autoKatFarmSperrt('9',T0+5*60000)===true&&x.T.autoKatFarmSperrt('9',T0-10*60000)===false&&x.T.autoKatFarmSperrt('9',T0+20*60000)===false&&x.T.autoKatFarmSperrt('8',T0)===false);
+ // M6: ganzer Takt nach einem Farm-Lauf (Seitenquelle 38: 6 Spaeher, 0 Kats).
+ const mj=[{x:560,y:540,data:{x:560,y:540,villages:{'1':{'12':[7001,0,0,52,0]},'0':{}},players:{}}},{x:540,y:540,data:{x:540,y:540,villages:{'17':{'13':[7002,0,0,40,0]}},players:{}}}];
+ x=welt({farmHtml:farm6,seiten:()=>farm,mapJson:mj});
+ x.w.localStorage.setItem('tw_world_info',JSON.stringify({world:'de260.die-staemme.de',at:Date.now(),speed:1.6,unitSpeed:0.625,fakeLimit:0,unitSpeeds:{spy:9,light:10,ram:30,catapult:30}}));
+ x.w.localStorage.setItem('tw_ziel_stand',JSON.stringify({'7001':{x:561,y:552,spieler:'0',zeit:Date.now()-3600000,verluste:0},'7002':{x:557,y:553,spieler:'0',zeit:Date.now()-3600000,verluste:0,gebaeude:{main:1,wall:0}}}));
+ x.w.localStorage.setItem('tw_autokat_cfg',JSON.stringify({an:true,hgZiel:1,maxOffen:3,spaeher:1}));
+ s=await lauf(x.T);const vorTakt=x.st.abrufe.length;
+ const takt=await new Promise(res=>{const r=x.T.autoKatTakt(res);if(!r)res(null);});
+ const pl=JSON.parse(x.w.localStorage.getItem('tw_attack_plans')||'{}')['tw-autokat'];const at=pl&&pl.attacks||[];
+ const st6=x.T.autoKatStand();
+ const dd=at.map(a=>Math.hypot(+a.toCoord.split('|')[0]-559,+a.toCoord.split('|')[1]-552));
+ t('M6 Takt: Karte geholt (1 Abruf), die 3 naechsten unbekannten Ziele bekommen je 1 Spaeher im Plan "Auto-Kat" (Grenze 3), 7002 (HG 1) nicht, Punkte gemerkt, Sperre frei',
+   takt&&at.length===3&&at.every(a=>JSON.stringify(a.troops)==='{"spy":1}'&&a.targetBuilding===null&&a.unitLabel==='spy')&&dd.slice().sort((a,b)=>a-b).join()===dd.slice().sort((a,b)=>a-b).join()&&Math.max(...dd)<=2.0&&at.some(a=>a.toCoord==='561|552')&&!at.some(a=>a.toCoord==='557|553')&&/grenze/.test(takt)&&
+   x.st.abrufe.slice(vorTakt).filter(u=>/map\.php/.test(u)).length===1&&st6.ziele['7001'].punkte===52&&st6.ziele['7001'].offen&&x.T.currentProcessOwner()===null&&!x.T.isBotProtectionActive(),
+   JSON.stringify([takt,at.map(a=>[a.toCoord,a.troops,a.unitLabel]),x.st.abrufe.slice(vorTakt)]));
+ const takt2=x.T.autoKatTakt(()=>{});
+ t('M7 zweiter Takt sofort danach laeuft nicht (eigener Takt 20-40 Min.)',takt2===false);
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

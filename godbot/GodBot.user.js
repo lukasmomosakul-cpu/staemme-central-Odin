@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      606
+// @version      607
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -3998,7 +3998,9 @@ function botMarkerSichtbar() {
         let signatur = "";
         try {
             const plans = loadAttackPlans();
-            signatur = Object.keys(plans).sort()
+            // v607: Auto-Kat-Plan bleibt lokal - er aendert sich bei jedem
+            // Takt; im Notizblock waere jede Aenderung ein Schreibabruf.
+            signatur = Object.keys(plans).filter(id => id !== "tw-autokat").sort()
                 .map(id => id + ":" + (plans[id].changedAt || 0)).join("|");
             signatur += "#e:" + (loadSettings()._changedAt || 0);
             signatur += "#m:" + managerStempel();
@@ -4393,7 +4395,7 @@ function botMarkerSichtbar() {
             //   - KEIN Loeschvermerk. Der wuerde den Plan auch auf dem
             //     anderen Geraet loeschen; hier soll nur die Altlast weg.
             if (erstAbgleich && Object.keys(ausNotiz).length) {
-                const altlasten = Object.keys(lokal).filter(id => !ausNotiz[id]);
+                const altlasten = Object.keys(lokal).filter(id => !ausNotiz[id] && id !== "tw-autokat");
                 altlasten.forEach(id => {
                     console.warn(
                         `[TW] Notizblock: Erstabgleich dieses Geräts - Plan ` +
@@ -4438,6 +4440,7 @@ function botMarkerSichtbar() {
             // Zurueckschreiben: alles, was hier neuer ist oder dort fehlt.
             const schreiben = [];
             Object.keys(lokal).forEach(id => {
+                if (id === "tw-autokat") return;   // v607: bleibt lokal
                 const fern = ausNotiz[id];
                 if (fern && planStandSek(fern) >= planStandSek(lokal[id])) return;
                 schreiben.push(id);
@@ -32701,6 +32704,8 @@ function godFarmAuswahl(seite, cfg, log, jetzt, doerfer, reserve) {
             : Math.round(p.d * (msFeld[vid] || 0) / 1000) * 1000;
         const ankunft = jetzt + lz;
         if (log[p.z.id] && ankunft - log[p.z.id] < abstand) { offen[p.z.id] = "abstand"; return; }
+        // v607: Auto-Kat-Bericht muss der letzte im Farm-Assistenten bleiben.
+        if (typeof autoKatFarmSperrt === "function" && autoKatFarmSperrt(p.z.id, ankunft)) { offen[p.z.id] = "abstand"; return; }
         const v = wahl === "A" ? va : vb;
         Object.keys(v.einheiten).forEach(u => { p.q.einheiten[u] -= v.einheiten[u]; });
         geplant.add(p.z.id);
@@ -32850,6 +32855,11 @@ function godFarmLauf(fertig) {
             try { showToast("GodBot-Farm: 3 Fehler – zurück auf FarmGod", "error"); } catch (e) { }
         }
         try { fertig && fertig(s); } catch (e) { }
+        // v607: Auto-Kat nach dem Farm-Lauf (eigener Takt 20-40 Min.).
+        if (autoKatCfg().an && !godFarmAbbruchGrund) {
+            setTimeout(() => { try { autoKatTakt(); } catch (e) { console.warn("[TW] Auto-Kat: Takt fehlgeschlagen.", e); } },
+                humanDelay(4000, 9000));
+        }
     };
     if (godFarmLaeuft) return false;
     if (isBotProtectionActive() || automationOnHold()) return false;
@@ -32941,6 +32951,8 @@ function godFarmLauf(fertig) {
             }
             const seite = godFarmSeiteLesen(doc, html, eigen);
             if (!seite.ok) { ende({ fehler: true, gesendet: 0, anfragen, text: seite.fehler }); return; }
+            // v607: Truppen im Dorf (inkl. Spaeher/Rammen/Katapulte) fuer Auto-Kat.
+            autoKatEinheiten = { vid, at: Date.now(), u: Object.assign({}, seite.einheiten) };
             seite.eigen = eigen;
             // v605: Ziele der Folgeseiten dazu (doppelte IDs nur einmal).
             seite.gelesen = 1;
@@ -33159,6 +33171,453 @@ function godFarmLauf(fertig) {
     return true;
 }
 
+// === AUTO-KAT (v607, 13.10.2026) ======================================
+// Fetteruruk 13.10.: "beim Farmen und auto katten: in allen Doerfern
+// langfristig Hauptgebaeude auf 1 halten -> keine Kaserne, kein Wall.
+// Rammen nur mitschicken, wenn ein Wall gebaut ist. Mit den naechsten
+// Doerfern anfangen, dann immer weiter weg. Hat ein Dorf ausgebaut
+// (Punkte laut Karte), einen Spaeher schicken."
+//
+// BELEGT (nichts davon geraten):
+//  - Punkte je Dorf: map.php-Sektoren wie die Odin-Karte (v584,
+//    karteSektorUebernehmen; Mitschnitt 11.10. 09:42).
+//  - Gebaeude: Spaeherbericht, #attack_spy_building_data (berichtZielLesen,
+//    Seitenquelle 28). Berichts-ID und -Zeit je Ziel aus dem
+//    Farm-Assistenten (v602, Seitenquellen 36/37).
+//  - Versand: Angriffsplaner; Katapultziel ueber select[name=building]
+//    (Seitenquelle 01). Zielgebaeude-Namen wie CATAPULT_BUILDING_VALUES.
+//  - Kaserne braucht HG 3, Wall braucht Kaserne: 19 gespaehte Barbaren
+//    de260 13.10. - Kaserne nur bei HG 5, Wall nirgends.
+// NICHT BELEGT: wie viele Katapulte/Rammen eine Stufe kosten, und das
+// Format eines Katapult-Berichts. Darum:
+//  - Katapulte/Rammen je Stufe werden GELERNT (Start 2 je Stufe).
+//  - Nach jedem Beschuss geht ein reiner Spaeher hinterher; erst dessen
+//    Bericht (belegtes Format) zeigt, was gefallen ist.
+// Ablauf je Takt (nach einem GodBot-Farm-Lauf, alle 20-40 Min.):
+//  1. eigene Eintraege im Plan "Auto-Kat" nachhalten (gesendet/fehlgeschl.)
+//  2. faellige Spaeherberichte lesen (1 Abruf je Bericht, hoechstens 2)
+//  3. Punkte der Farmziele (map.php, nur Sektoren aelter als 30 Min.,
+//     hoechstens 3 Abrufe): gestiegen -> Spaeher
+//  4. naechste Ziele zuerst: Spaeher, Rammen (nur bei Wall) und Katapulte
+//     (Kaserne zuerst, dann HG bis auf das Ziel) als Planer-Eintrag.
+const AUTOKAT_CFG_KEY = "tw_autokat_cfg";
+const AUTOKAT_STAND_KEY = "tw_autokat_stand";
+const AUTOKAT_PLAN_ID = "tw-autokat";
+const AUTOKAT_TAKT_MS = [20 * 60000, 40 * 60000];
+const AUTOKAT_KARTE_MAX_ABRUFE = 3;
+const AUTOKAT_BERICHTE_MAX = 2;
+const AUTOKAT_START_JE_STUFE = 2;
+const AUTOKAT_GEB_NAME = { main: "Hauptgebäude", barracks: "Kaserne" };
+let autoKatEinheiten = null;   // { vid, at, u } - aus dem letzten Farm-Lauf
+let autoKatLaeuft = false;
+
+function autoKatCfg() {
+    let c = {};
+    try { c = JSON.parse(localStorage.getItem(AUTOKAT_CFG_KEY) || "{}") || {}; } catch (e) { c = {}; }
+    const zahl = (v, d, min, max) => { const n = parseInt(v, 10); return isNaN(n) ? d : Math.max(min, Math.min(max, n)); };
+    return {
+        an: c.an === true,
+        hgZiel: zahl(c.hgZiel, 1, 1, 30),
+        maxOffen: zahl(c.maxOffen, 3, 1, 20),
+        spaeher: zahl(c.spaeher, 1, 1, 50)
+    };
+}
+
+function autoKatCfgSetzen(teil) {
+    const c = Object.assign(autoKatCfg(), teil || {});
+    try { localStorage.setItem(AUTOKAT_CFG_KEY, JSON.stringify(c)); } catch (e) { }
+    return c;
+}
+
+function autoKatStand() {
+    let s = {};
+    try { s = JSON.parse(localStorage.getItem(AUTOKAT_STAND_KEY) || "{}") || {}; } catch (e) { s = {}; }
+    if (!s.ziele || typeof s.ziele !== "object") s.ziele = {};
+    if (!s.lern || typeof s.lern !== "object") s.lern = {};
+    return s;
+}
+
+function autoKatStandSpeichern(s) {
+    try { localStorage.setItem(AUTOKAT_STAND_KEY, JSON.stringify(s)); } catch (e) { }
+}
+
+function autoKatJeStufe(stand, geb) {
+    const v = Number(stand && stand.lern && stand.lern[geb]);
+    return v > 0 ? v : AUTOKAT_START_JE_STUFE;
+}
+
+// GodBot-Farm soll in [Ankunft, Ankunft + Abstand] nichts auf dieses Ziel
+// schicken: dann bleibt UNSER Bericht der letzte im Farm-Assistenten und
+// laesst sich dort finden. Frueher eintreffende Farmangriffe bleiben frei.
+function autoKatFarmSperrt(zielId, ankunft) {
+    try {
+        const z = autoKatStand().ziele[String(zielId)];
+        const a = z && (z.offen ? z.offen.ankunft : (z.warte ? z.warte.ankunft : 0));
+        if (!a) return false;
+        const fenster = (godFarmCfg().abstandMin || 15) * 60000;
+        return ankunft >= a - 60000 && ankunft <= a + fenster;
+    } catch (e) { return false; }
+}
+
+// Rein rechnerisch (getestet): was soll fuer welches Ziel passieren?
+// ziele: [{ id, x, y, dist, gebaeude, verluste, spaehenGrund }]
+function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
+    const frei = Object.assign({}, einheiten || {});
+    const aktionen = [], gruende = {};
+    const zaehle = (k) => { gruende[k] = (gruende[k] || 0) + 1; };
+    let offen = Object.keys(stand.ziele || {}).filter(id => stand.ziele[id].offen || stand.ziele[id].warte).length;
+    ziele.slice().sort((a, b) => a.dist - b.dist).forEach(z => {
+        const zs = (stand.ziele || {})[z.id] || {};
+        if (zs.offen || zs.warte) { zaehle("unterwegs"); return; }
+        if (zs.sperreBis && zs.sperreBis > Date.now()) { zaehle("gesperrt"); return; }
+        if (offen >= cfg.maxOffen) { zaehle("grenze"); return; }
+        if (z.verluste > 0) { zaehle("verluste"); return; }
+        const g = z.gebaeude || {};
+        const bekannt = typeof g.main === "number";
+        if (!bekannt || z.spaehenGrund || zs.nachBeschuss) {
+            if ((frei.spy || 0) < cfg.spaeher) { zaehle("keineSpaeher"); return; }
+            frei.spy -= cfg.spaeher;
+            offen++;
+            aktionen.push({ ziel: z, art: "spaeher", truppen: { spy: cfg.spaeher },
+                grund: !bekannt ? "Gebäude unbekannt" : (zs.nachBeschuss ? "nach Beschuss" : z.spaehenGrund) });
+            return;
+        }
+        const wall = g.wall || 0, kaserne = g.barracks || 0, hg = g.main || 0;
+        let geb = null, stufen = 0;
+        if (kaserne > 0) { geb = "barracks"; stufen = kaserne; }
+        else if (hg > cfg.hgZiel) { geb = "main"; stufen = hg - cfg.hgZiel; }
+        if (!geb && !wall) { zaehle("fertig"); return; }
+        const truppen = {};
+        if (wall > 0) {
+            const brauche = Math.ceil(autoKatJeStufe(stand, "wall") * wall);
+            const r = Math.min(frei.ram || 0, brauche);
+            if (r < Math.ceil(autoKatJeStufe(stand, "wall"))) { zaehle("keineRammen"); return; }
+            truppen.ram = r;
+        }
+        if (geb) {
+            const je = autoKatJeStufe(stand, geb);
+            const k = Math.min(frei.catapult || 0, Math.ceil(je * stufen));
+            if (k >= Math.ceil(je)) truppen.catapult = k;
+            else if (!truppen.ram) { zaehle("keineKatapulte"); return; }
+        }
+        Object.keys(truppen).forEach(u => { frei[u] -= truppen[u]; });
+        offen++;
+        aktionen.push({ ziel: z, art: "beschuss", truppen, geb: truppen.catapult ? geb : null,
+            vorher: { wall, barracks: kaserne, main: hg },
+            grund: [wall ? `Wall ${wall}` : "", geb ? `${AUTOKAT_GEB_NAME[geb]} ${geb === "main" ? hg + "→" + cfg.hgZiel : kaserne + "→0"}` : ""]
+                .filter(Boolean).join(", ") });
+    });
+    return { aktionen, gruende };
+}
+
+// Lernen aus dem Spaeherbericht nach einem Beschuss.
+function autoKatLernen(stand, zs, neu) {
+    const b = zs && zs.beschuss;
+    if (!b || !neu) return [];
+    const out = [];
+    const eins = (geb, menge, vorher) => {
+        if (!menge || typeof vorher !== "number" || typeof neu[geb] !== "number") return;
+        const gefallen = vorher - neu[geb];
+        const alt = autoKatJeStufe(stand, geb);
+        let w;
+        if (gefallen > 0) w = Math.max(0.5, Math.round(((alt + menge / gefallen) / 2) * 10) / 10);
+        else w = Math.min(50, Math.round((alt * 1.5 + 1) * 10) / 10);
+        stand.lern[geb] = w;
+        out.push(`${geb}: ${menge} → ${gefallen > 0 ? "-" + gefallen : "keine"} Stufe(n), jetzt ${w} je Stufe`);
+    };
+    if (b.geb) eins(b.geb, b.kats, b.vorher && b.vorher[b.geb]);
+    if (b.rammen) eins("wall", b.rammen, b.vorher && b.vorher.wall);
+    return out;
+}
+
+function autoKatBerichtHolen(vid, berichtId, cb) {
+    const url = "/game.php?village=" + encodeURIComponent(vid) + "&screen=report&mode=all&view=" + encodeURIComponent(berichtId);
+    if (isBotProtectionActive()) { cb(null); return; }
+    twCountRequest(url, "auto", "autokat-bericht");
+    fetch(url, { credentials: "same-origin" }).then(r => {
+        const echt = String((r && r.url) || url);
+        return r.text().then(html => {
+            let doc = null;
+            try { doc = new DOMParser().parseFromString(html, "text/html"); } catch (e) { }
+            let gesperrt = false;
+            try { gesperrt = htmlDocBlocked(html, echt) || (!!doc && frameDocBlocked(doc, echt)); } catch (e) { }
+            cb(gesperrt ? null : doc);
+        });
+    }).catch(() => cb(null));
+}
+
+function autoKatTakt(fertig) {
+    const ende = (text) => {
+        autoKatLaeuft = false;
+        try { releaseProcessLock("godfarm"); } catch (e) { }
+        if (text) console.log("[TW] Auto-Kat: " + text);
+        try { fertig && fertig(text); } catch (e) { }
+    };
+    const cfg = autoKatCfg();
+    if (!cfg.an || autoKatLaeuft) return false;
+    if (isBotProtectionActive() || automationOnHold()) return false;
+    const stand = autoKatStand();
+    if (stand.next && stand.next > Date.now()) return false;
+    const gd = (typeof game_data !== "undefined") ? game_data : null;
+    if (!gd || !gd.village || !gd.village.id) return false;
+    const vid = String(gd.village.id);
+    const eigen = { x: Number(gd.village.x), y: Number(gd.village.y) };
+    const einh = autoKatEinheiten && autoKatEinheiten.vid === vid && Date.now() - autoKatEinheiten.at < 10 * 60000
+        ? autoKatEinheiten.u : null;
+    if (!einh) return false;   // ohne frische Truppenzahlen nichts planen
+    if (!acquireProcessLock("godfarm")) return false;
+    autoKatLaeuft = true;
+    stand.next = Date.now() + humanDelay(AUTOKAT_TAKT_MS[0], AUTOKAT_TAKT_MS[1]);
+    autoKatStandSpeichern(stand);
+    const wachhund = setTimeout(() => { if (autoKatLaeuft) ende("Takt nach 90 s abgebrochen (Wachhund)."); }, 90000);
+    const fertigMit = (t) => { clearTimeout(wachhund); ende(t); };
+    const meldung = [];
+
+    // 1. eigene Planer-Eintraege nachhalten
+    const plans = loadAttackPlans();
+    const plan = plans[AUTOKAT_PLAN_ID] || { name: "Auto-Kat", createdAt: Date.now(), attacks: [] };
+    if (!Array.isArray(plan.attacks)) plan.attacks = [];
+    const nachId = {};
+    plan.attacks.forEach(a => { nachId[a.id] = a; });
+    const jetzt = serverNowMs();
+    Object.keys(stand.ziele).forEach(id => {
+        const zs = stand.ziele[id];
+        if (!zs.offen) return;
+        const a = nachId[zs.offen.eintrag];
+        if (!a || a.failed) {
+            meldung.push(`${zs.x}|${zs.y}: Eintrag ${a ? "fehlgeschlagen (" + (a.failReason || "?") + ")" : "verschwunden"} - 2 Std. Pause`);
+            zs.sperreBis = Date.now() + 2 * 3600000;
+            delete zs.offen;
+            return;
+        }
+        if (a.sent && zs.offen.ankunft + 60000 < jetzt) {
+            zs.warte = { art: zs.offen.art, ankunft: zs.offen.ankunft, berichtVorher: zs.offen.berichtVorher || null, versuche: 0 };
+            delete zs.offen;
+        }
+    });
+    // gesendete Eintraege nach 12 Std. aus dem Plan nehmen
+    plan.attacks = plan.attacks.filter(a => !(a.sent && a.arrivesAtMs && a.arrivesAtMs < jetzt - 12 * 3600000));
+
+    // 2. faellige Berichte lesen
+    let zielStand = {};
+    try { zielStand = JSON.parse(localStorage.getItem(ZIEL_STAND_KEY) || "{}") || {}; } catch (e) { }
+    const lesen = [];
+    Object.keys(stand.ziele).forEach(id => {
+        const zs = stand.ziele[id];
+        if (!zs.warte) return;
+        if (zs.warte.art === "beschuss") {
+            // Katapult-Bericht wird NICHT ausgewertet (Format nicht belegt):
+            // gleich einen Spaeher hinterher.
+            zs.nachBeschuss = true;
+            delete zs.warte;
+            return;
+        }
+        const zst = zielStand[id] || {};
+        const neuerBericht = zst.bericht && String(zst.bericht) !== String(zs.warte.berichtVorher || "") &&
+            (zst.zeit || 0) >= zs.warte.ankunft - 120000;
+        if (neuerBericht) { lesen.push({ id, bericht: String(zst.bericht) }); return; }
+        if (jetzt - zs.warte.ankunft > 3 * 3600000) {
+            meldung.push(`${zs.x}|${zs.y}: Späherbericht nach 3 Std. nicht im Farm-Assistenten - neuer Versuch`);
+            delete zs.warte;
+        }
+    });
+
+    const nachBerichten = () => {
+        // 3. Punkte der Farmziele (Karte)
+        const ziele = [];
+        Object.keys(zielStand).forEach(id => {
+            const z = zielStand[id];
+            if (!z || String(z.spieler || "0") !== "0" || typeof z.x !== "number") return;
+            const dist = Math.hypot(z.x - eigen.x, z.y - eigen.y);
+            if (dist > (godFarmCfg().maxFelder || 20)) return;
+            ziele.push({ id, x: z.x, y: z.y, dist, gebaeude: z.gebaeude || null, verluste: z.verluste || 0 });
+        });
+        const sektor = (z) => (Math.floor(z.x / KARTE_SEKTOR) * KARTE_SEKTOR) + "_" + (Math.floor(z.y / KARTE_SEKTOR) * KARTE_SEKTOR);
+        try { karteCacheLaden(gd.world); } catch (e) { }
+        const alt = [...new Set(ziele.map(sektor))].filter(k => !karteSektoren[k] || Date.now() - karteSektoren[k].at > KARTE_FRISCH_MS);
+        const pakete = [];
+        for (let i = 0; i < alt.length && pakete.length < AUTOKAT_KARTE_MAX_ABRUFE; i += 4) pakete.push(alt.slice(i, i + 4));
+        let pi = 0;
+        const naechstesPaket = () => {
+            if (pi >= pakete.length || isBotProtectionActive()) { planen(); return; }
+            const p = pakete[pi++];
+            karteSektorAbruf(p, () => setTimeout(naechstesPaket, humanDelay(800, 2000)), "auto");
+        };
+        const planen = () => {
+            if (isBotProtectionActive()) { fertigMit("Botschutz - Takt beendet."); return; }
+            const punkteVon = {};
+            Object.keys(karteSektoren).forEach(k => (karteSektoren[k].doerfer || []).forEach(d => { punkteVon[d.id] = d.punkte; }));
+            ziele.forEach(z => {
+                const zs = stand.ziele[z.id] = stand.ziele[z.id] || {};
+                zs.x = z.x; zs.y = z.y;
+                const p = punkteVon[z.id];
+                if (typeof p !== "number" || !p) return;
+                if (typeof zs.punkte !== "number") { zs.punkte = p; return; }
+                if (p > zs.punkte) z.spaehenGrund = `Punkte ${zs.punkte}→${p}`;
+                else if (p < zs.punkte) zs.punkte = p;
+            });
+
+            // 4. entscheiden und als Planer-Eintraege anlegen
+            const frei = Object.assign({}, einh);
+            plan.attacks.forEach(a => {
+                if (a.sent || a.failed) return;
+                Object.keys(a.troops || {}).forEach(u => { frei[u] = (frei[u] || 0) - (parseInt(a.troops[u], 10) || 0); });
+            });
+            const ent = autoKatEntscheiden(ziele, stand, cfg, frei);
+            const von = eigen.x + "|" + eigen.y;
+            const flog = godFarmLog();
+            let angelegt = 0;
+            ent.aktionen.forEach(ak => {
+                const z = ak.ziel, nach = z.x + "|" + z.y;
+                // Laufzeit wie der Angriffsplaner (Weltdaten + an echten
+                // Bestaetigungsseiten nachkalibrierter Faktor).
+                const basis = slowestUnitBaseSpeed(ak.truppen);
+                const lauf = basis ? estimateTravelSec(basis, z.dist) : null;
+                let langsam = null;
+                try {
+                    const info = loadWorldInfo();
+                    Object.keys(ak.truppen).forEach(u => { if (info && info.unitSpeeds[u] === basis) langsam = u; });
+                } catch (e) { }
+                if (!lauf) { meldung.push(`${nach}: Laufzeit unbekannt (Weltdaten fehlen) - übersprungen`); return; }
+                let start = serverNowMs() + SUPPORT_PLAN_MIN_LEAD_MS + humanDelay(30000, 150000);
+                let ankunft = start + lauf * 1000;
+                // Nach dem letzten eigenen Farmangriff ankommen - sonst waere
+                // dessen Bericht der letzte im Farm-Assistenten.
+                if (flog[z.id] && ankunft < flog[z.id] + 90000) {
+                    ankunft = flog[z.id] + 90000 + humanDelay(0, 60000);
+                    start = ankunft - lauf * 1000;
+                }
+                const eintrag = {
+                    id: "akat-" + Date.now() + "-" + Math.floor(Math.random() * 100000),
+                    type: "attack",
+                    attacker: getVillageDisplayNameWithCoord(vid) || von,
+                    fromCoord: von,
+                    unitLabel: langsam,
+                    targetPlayer: "Barbarendorf",
+                    toCoord: nach,
+                    startsAtMs: start,
+                    arrivesAtMs: ankunft,
+                    startsAtLabel: supportPlanTimeLabel(start),
+                    arrivesAtLabel: supportPlanTimeLabel(ankunft),
+                    villageId: vid,
+                    targetId: String(z.id),
+                    targetBuilding: ak.geb ? AUTOKAT_GEB_NAME[ak.geb] : null,
+                    troops: Object.assign({}, ak.truppen),
+                    topUp: false, topUpUnits: [],
+                    sent: false, sentAt: null, failed: false, failReason: null
+                };
+                plan.attacks.push(eintrag);
+                const zs = stand.ziele[z.id] = stand.ziele[z.id] || {};
+                zs.offen = { art: ak.art, eintrag: eintrag.id, ankunft, berichtVorher: (zielStand[z.id] || {}).bericht || null };
+                if (ak.art === "spaeher") {
+                    delete zs.nachBeschuss;
+                    const p = punkteVon[z.id];
+                    if (typeof p === "number" && p) zs.punkte = p;
+                } else {
+                    zs.beschuss = { geb: ak.geb, kats: ak.truppen.catapult || 0, rammen: ak.truppen.ram || 0, vorher: ak.vorher, at: Date.now() };
+                }
+                angelegt++;
+                meldung.push(`${nach} (${z.dist.toFixed(1)} F.): ${ak.art === "spaeher" ? "Späher" : "Beschuss"} - ${ak.grund}, ` +
+                    Object.keys(ak.truppen).map(u => ak.truppen[u] + " " + u).join(" + ") +
+                    (eintrag.targetBuilding ? `, Ziel ${eintrag.targetBuilding}` : "") +
+                    `, Abflug ${supportPlanTimeLabel(start)}`);
+            });
+            plans[AUTOKAT_PLAN_ID] = plan;
+            saveAttackPlans(plans);
+            autoKatStandSpeichern(stand);
+            const g = ent.gruende;
+            const rest = Object.keys(g).map(k => `${g[k]} ${k}`).join(", ");
+            fertigMit(`${angelegt} Eintrag/Einträge angelegt` + (rest ? ` (${rest})` : "") +
+                (meldung.length ? " - " + meldung.join("; ") : "") + ".");
+        };
+        // Weltdaten einmalig (2 Abrufe, danach gespeichert) - ohne sie keine
+        // verlaessliche Laufzeit.
+        if (loadWorldInfo()) naechstesPaket();
+        else ensureWorldInfo(() => naechstesPaket());
+    };
+
+    let li = 0;
+    const naechsterBericht = () => {
+        if (li >= lesen.length || li >= AUTOKAT_BERICHTE_MAX || isBotProtectionActive()) {
+            autoKatStandSpeichern(stand);
+            try { zielStand = JSON.parse(localStorage.getItem(ZIEL_STAND_KEY) || "{}") || {}; } catch (e) { }
+            nachBerichten();
+            return;
+        }
+        const l = lesen[li++];
+        try { touchProcessLock("godfarm"); } catch (e) { }
+        autoKatBerichtHolen(vid, l.bericht, (doc) => {
+            const zs = stand.ziele[l.id];
+            const z = doc ? berichtZielLesen(doc) : null;
+            if (z && String(z.id) === String(l.id) && z.gebaeude) {
+                zielStandMerken(z, l.bericht);
+                const gelernt = autoKatLernen(stand, zs, z.gebaeude);
+                delete zs.warte; delete zs.beschuss;
+                meldung.push(`${zs.x}|${zs.y}: Bericht gelesen - HG ${z.gebaeude.main || "?"}, Kaserne ${z.gebaeude.barracks || 0}, ` +
+                    `Wall ${z.gebaeude.wall || 0}` + (gelernt.length ? ` (gelernt: ${gelernt.join("; ")})` : ""));
+            } else if (zs && zs.warte) {
+                zs.warte.versuche = (zs.warte.versuche || 0) + 1;
+                if (zs.warte.versuche >= 2) {
+                    meldung.push(`${zs.x}|${zs.y}: Bericht ${l.bericht} ohne Gebäude (Späher tot?) - neuer Späher`);
+                    delete zs.warte;
+                }
+            }
+            setTimeout(naechsterBericht, humanDelay(700, 1800));
+        });
+    };
+    naechsterBericht();
+    return true;
+}
+
+// --- Einstellungen (im Farmen-Bereich, unter GodBot-Farm) --------------
+function autoKatUiHtml() {
+    const c = autoKatCfg();
+    const feld = (id, wert, breite) => `<input type="number" id="${id}" value="${wert}" class="tw-numfield" ` +
+        `style="width:${breite || 40}px;text-align:right;background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;" />`;
+    return `
+                <div style="margin-top:8px;padding-top:6px;border-top:1px dashed #333;font-size:12px;">
+                    <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                        <input type="checkbox" id="tw-autokat-an" ${c.an ? "checked" : ""}/>
+                        <b>Auto-Kat</b><span>HG auf</span>${feld("tw-autokat-hg", c.hgZiel, 36)}<span>halten, Kaserne weg, Rammen nur bei Wall</span>
+                    </label>
+                    <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px;">
+                        <span>höchstens</span>${feld("tw-autokat-offen", c.maxOffen, 36)}<span>Ziele gleichzeitig · Späher je Ziel</span>${feld("tw-autokat-spy", c.spaeher, 36)}
+                    </div>
+                    <div style="font-size:11px;color:#999;margin-top:3px;">Nächste Ziele zuerst. Steigen die Punkte eines Dorfes (Karte), geht ein Späher hin. Katapulte je Stufe werden aus den Späherberichten gelernt. Einträge erscheinen im Angriffsplaner unter „Auto-Kat“.</div>
+                    <div id="tw-autokat-stand" style="font-size:11px;color:#aab;margin-top:4px;"></div>
+                </div>`;
+}
+
+function autoKatUiStand(el) {
+    if (!el) return;
+    const s = autoKatStand(), c = autoKatCfg();
+    const ids = Object.keys(s.ziele);
+    const unterwegs = ids.filter(id => s.ziele[id].offen || s.ziele[id].warte).length;
+    const lern = ["main", "barracks", "wall"].map(g => `${g === "wall" ? "Rammen/Wall" : AUTOKAT_GEB_NAME[g]} ${autoKatJeStufe(s, g)}`).join(", ");
+    el.innerHTML = !c.an ? "aus" :
+        `${unterwegs} Ziel(e) in Arbeit, ${ids.length} beobachtet · je Stufe: ${lern}` +
+        (s.next ? ` · nächster Takt ${s.next > Date.now() ? new Date(s.next).toLocaleTimeString("de-DE") : "fällig"}` : "");
+}
+
+function autoKatUiBinden(content) {
+    const q = (id) => content.querySelector("#" + id);
+    if (!q("tw-autokat-an")) return;
+    const speichern = () => {
+        const vorher = autoKatCfg().an;
+        const c = autoKatCfgSetzen({
+            an: !!q("tw-autokat-an").checked,
+            hgZiel: q("tw-autokat-hg").value,
+            maxOffen: q("tw-autokat-offen").value,
+            spaeher: q("tw-autokat-spy").value
+        });
+        if (c.an && !vorher) { const s = autoKatStand(); s.next = 0; autoKatStandSpeichern(s); }
+        console.log(`[TW] Auto-Kat ${c.an ? "an" : "aus"}: HG auf ${c.hgZiel}, höchstens ${c.maxOffen} Ziele gleichzeitig, ${c.spaeher} Späher je Ziel.`);
+        autoKatUiStand(q("tw-autokat-stand"));
+    };
+    ["tw-autokat-an", "tw-autokat-hg", "tw-autokat-offen", "tw-autokat-spy"].forEach(id => q(id).addEventListener("change", speichern));
+    autoKatUiStand(q("tw-autokat-stand"));
+}
+
 // --- Einstellungen im Farmen-Bereich -----------------------------------
 function godFarmUiHtml() {
     const c = godFarmCfg();
@@ -33192,6 +33651,7 @@ function godFarmUiHtml() {
                     <span>· max.</span>${feld("tw-godfarm-stunde", c.maxProStunde, 56)}<span>je Std. (0 = ohne)</span>
                 </div>
                 <div id="tw-godfarm-stand" style="font-size:11px;color:#aab;margin-top:6px;"></div>
+                ${autoKatUiHtml()}
                 </div>
             </div>`;
 }
@@ -33247,6 +33707,7 @@ function godFarmUiBinden(content) {
         .forEach(id => q(id).addEventListener("change", speichern));
     werteZeigen();
     godFarmUiStand(q("tw-godfarm-stand"));
+    try { autoKatUiBinden(content); } catch (e) { console.warn("[TW] Auto-Kat: Einstellungen nicht bindbar.", e); }
 
 }
 
@@ -53217,12 +53678,12 @@ function karteFarmIndex() {
     return { konten, proDorf };
 }
 
-function karteSektorAbruf(schluessel, cb) {
+function karteSektorAbruf(schluessel, cb, art) {
     const loc = (typeof game_data !== "undefined" && game_data.locale) || "de_DE";
     const url = "/map.php?v=2&locale=" + encodeURIComponent(loc) + "&e=" + Date.now() + "&" +
         schluessel.map(k => k + "=1").join("&");
     if (isBotProtectionActive()) { cb(false); return; }
-    twCountRequest(url, "manuell", "karte");
+    twCountRequest(url, art === "auto" ? "auto" : "manuell", art === "auto" ? "autokat-karte" : "karte");
     fetch(url, { credentials: "same-origin", headers: { "Accept": "application/json, text/javascript, */*; q=0.01", "X-Requested-With": "XMLHttpRequest" } })
         .then(r => r.text())
         .then(txt => {
