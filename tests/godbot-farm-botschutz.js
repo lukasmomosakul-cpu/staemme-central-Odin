@@ -1,11 +1,11 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
 const captcha=fs.readFileSync(SQ+'03_de252_Botschutz-Captcha_desktop.html','utf8');
 const combi=fs.readFileSync(SQ+'35_de260_overview_combined_desktop.html','utf8');
 const farm6=fs.readFileSync(SQ+'38_de260_am_farm_seite1von6_mobil.html','utf8');
-const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
+const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, autoKatFaellig, acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
 function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null,mapJson=null}){
  const dom=new JSDOM('<html><body>'+(botImDok?'<div id="bot_check">Bot-Schutz</div>':'')+'</body></html>',{url:'https://de260.die-staemme.de/game.php?village=6863&screen=overview',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;const st={abrufe:[],posts:[],fehler:[]};
@@ -129,6 +129,14 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
    JSON.stringify([takt,at.map(a=>[a.toCoord,a.troops,a.unitLabel]),x.st.abrufe.slice(vorTakt)]));
  const takt2=x.T.autoKatTakt(()=>{});
  t('M7 zweiter Takt sofort danach laeuft nicht (eigener Takt 20-40 Min.)',takt2===false);
+ // N (v609): "jetzt" ohne Rueckmeldung / Auto-Kat nach Neuladen.
+ x=welt({});x.w.localStorage.setItem('tw_autokat_cfg',JSON.stringify({an:true,v:2}));
+ s=await lauf(x.T);const ids33=[...farm.matchAll(/id="village_(\d+)"/g)].map(m=>m[1]);const lg33={};ids33.forEach(i=>lg33[i]=Date.now()+5*3600000);
+ x.w.localStorage.setItem('tw_godfarm_ankunft',JSON.stringify(lg33));x.w.localStorage.setItem('godfarm_jetzt_at',String(Date.now()));const s2=await lauf(x.T);
+ t('N1 alles im Abstand: Text nennt fruehesten Zeitpunkt, Rueckmeldung nach "jetzt" (Merker verbraucht)',
+   s2&&s2.gesendet===0&&/nichts zu senden/.test(s2.text)&&/frühestens wieder ab \d\d:\d\d/.test(s2.text)&&x.w.localStorage.getItem('godfarm_jetzt_at')===null,JSON.stringify(s2&&s2.text));
+ const ge=JSON.parse(x.w.localStorage.getItem('godbot_autokat_einheiten')||'null');
+ t('N2 Truppenzahlen fuer Auto-Kat dauerhaft gemerkt, Takt ueber den Fahrplan faellig',ge&&ge.vid==='6863'&&ge.u&&typeof ge.u.spy==='number'&&x.T.autoKatFaellig()===true,JSON.stringify(ge));
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

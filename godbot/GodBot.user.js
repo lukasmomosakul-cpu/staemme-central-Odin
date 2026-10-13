@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      608
+// @version      609
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19594,6 +19594,13 @@ function botMarkerSichtbar() {
             if (godFarmLauf(null)) return;
         }
 
+        // v609: Auto-Kat ueber den Fahrplan (Truppenzahlen aus dem letzten
+        // GodBot-Farm-Lauf, eigener Takt 20-40 Min.).
+        if (!owner && !farmDue && !scavengeDue && !bauLaufAktiv &&
+            !automationOnHold() && autoKatFaellig()) {
+            if (autoKatTakt()) return;
+        }
+
         if (!farmDue && !scavengeDue) return;
 
         // Siehe holdAutomationAfterAttack: gilt nur fuer Raubzug/Farmen.
@@ -32686,6 +32693,7 @@ function godFarmAuswahl(seite, cfg, log, jetzt, doerfer, reserve) {
     const abstand = cfg.abstandMin * 60000;
     const beute = (v) => (v && typeof v.beute === "number") ? v.beute : 0;
     const geplant = new Set();
+    let fruehestens = 0;       // v609: fruehester Abflug eines Abstand-Ziels
     const offen = {};          // Ziel-ID -> letzter Grund, falls nie geplant
     const plan = [];
     paare.forEach(p => {
@@ -32703,7 +32711,13 @@ function godFarmAuswahl(seite, cfg, log, jetzt, doerfer, reserve) {
             ? p.z.vorlagen[wahl].laufzeitMs
             : Math.round(p.d * (msFeld[vid] || 0) / 1000) * 1000;
         const ankunft = jetzt + lz;
-        if (log[p.z.id] && ankunft - log[p.z.id] < abstand) { offen[p.z.id] = "abstand"; return; }
+        if (log[p.z.id] && ankunft - log[p.z.id] < abstand) {
+            offen[p.z.id] = "abstand";
+            // v609: ab wann waere dieses Ziel wieder dran (Abflug)?
+            const ab = log[p.z.id] + abstand - lz;
+            if (!fruehestens || ab < fruehestens) fruehestens = ab;
+            return;
+        }
         // v607: Auto-Kat-Bericht muss der letzte im Farm-Assistenten bleiben.
         if (typeof autoKatFarmSperrt === "function" && autoKatFarmSperrt(p.z.id, ankunft)) { offen[p.z.id] = "abstand"; return; }
         const v = wahl === "A" ? va : vb;
@@ -32713,7 +32727,7 @@ function godFarmAuswahl(seite, cfg, log, jetzt, doerfer, reserve) {
         plan.push({ ziel: p.z, quelle: p.q.id, art: wahl, vorlageId: vid, ankunft, laufzeitMs: lz, dist: p.d });
     });
     Object.keys(offen).forEach(id => { gruende[offen[id]]++; });
-    return { plan, gruende, kandidaten: ziele.length, doerfer: quellen.length };
+    return { plan, gruende, kandidaten: ziele.length, doerfer: quellen.length, fruehestens };
 }
 
 // v598: Eigene Doerfer mit Truppen im Dorf aus der Kombinierten Uebersicht
@@ -32844,6 +32858,18 @@ function godFarmLauf(fertig) {
         s.at = Date.now();
         godFarmStandMerken(s);
         console.log(`[TW] GodBot-Farm: ${s.text}`);
+        // v609 (Fetteruruk 14.10.: "Farmen jetzt schicken funktioniert nicht
+        // mehr"): Der Lauf startete, schickte aber wegen des Abstands nichts -
+        // und sagte das nur im Protokoll. Nach "jetzt" kommt das Ergebnis
+        // jetzt als Meldung.
+        try {
+            const j = parseInt(localStorage.getItem("godfarm_jetzt_at") || "0", 10) || 0;
+            if (j && Date.now() - j < 3 * 60000) {
+                localStorage.removeItem("godfarm_jetzt_at");
+                showToast("GodBot-Farm: " + String(s.text || "").replace(/ \(ausgelassen:[^)]*\)/, "")
+                    .replace(/; ausgelassen:.*$/, "."), s.gesendet ? "ok" : "info");
+            }
+        } catch (e) { }
         if (s.fehlLaeufe >= 3) {
             godFarmCfgSetzen({ modus: "farmgod" });
             try {
@@ -32953,6 +32979,9 @@ function godFarmLauf(fertig) {
             if (!seite.ok) { ende({ fehler: true, gesendet: 0, anfragen, text: seite.fehler }); return; }
             // v607: Truppen im Dorf (inkl. Spaeher/Rammen/Katapulte) fuer Auto-Kat.
             autoKatEinheiten = { vid, at: Date.now(), u: Object.assign({}, seite.einheiten) };
+            // v609: auch im Speicher - die App laedt die Seite oft neu
+            // (14.10. 00:04:21, 2,5 s nach dem Lauf), dann war beides weg.
+            try { localStorage.setItem("godbot_autokat_einheiten", JSON.stringify(autoKatEinheiten)); } catch (e) { }
             seite.eigen = eigen;
             // v605: Ziele der Folgeseiten dazu (doppelte IDs nur einmal).
             seite.gelesen = 1;
@@ -33006,7 +33035,8 @@ function godFarmLauf(fertig) {
                 (hinweise.length ? " - Hinweis: " + hinweise.join("; ") : "");
             const dorfText = aw.doerfer > 1 ? ` aus ${aw.doerfer} Doerfern` : "";
             if (!aw.plan.length) {
-                ende({ fehler: false, gesendet: 0, anfragen, text: `${seite.ziele.length} Ziele${dorfText}, nichts zu senden (${ausgelassen}).` });
+                ende({ fehler: false, gesendet: 0, anfragen, text: `${seite.ziele.length} Ziele${dorfText}, nichts zu senden (${ausgelassen})` +
+                    (aw.fruehestens ? ` - frühestens wieder ab ${new Date(aw.fruehestens).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}` : "") + "." });
                 return;
             }
             let TW = null;
@@ -33229,6 +33259,27 @@ function autoKatCfg() {
     };
 }
 
+// v609: Truppenzahlen aus dem letzten GodBot-Farm-Lauf (Farm-Seite,
+// current_units) - hoechstens 15 Min. alt, nur fuer dieses Dorf.
+function autoKatEinheitenFrisch(vid) {
+    let e = autoKatEinheiten;
+    if (!e) { try { e = JSON.parse(localStorage.getItem("godbot_autokat_einheiten") || "null"); } catch (x) { e = null; } }
+    if (!e || String(e.vid) !== String(vid) || !(Date.now() - e.at < 15 * 60000)) return null;
+    return e.u || null;
+}
+
+// v609: Fahrplan-Pruefung (Job-Takt). Bisher startete der Takt nur ueber
+// einen Zeitgeber nach dem Farm-Lauf - ein Neuladen der Seite (in der App
+// haeufig) liess ihn ausfallen.
+function autoKatFaellig() {
+    const c = autoKatCfg();
+    if (!c.an || autoKatLaeuft) return false;
+    const st = autoKatStand();
+    if (st.next && st.next > Date.now()) return false;
+    const gd = (typeof game_data !== "undefined") ? game_data : null;
+    return !!(gd && gd.village && autoKatEinheitenFrisch(String(gd.village.id)));
+}
+
 function autoKatCfgSetzen(teil) {
     const c = Object.assign(autoKatCfg(), teil || {}, { v: 2 });
     try { localStorage.setItem(AUTOKAT_CFG_KEY, JSON.stringify(c)); } catch (e) { }
@@ -33411,8 +33462,7 @@ function autoKatTakt(fertig) {
     if (!gd || !gd.village || !gd.village.id) return false;
     const vid = String(gd.village.id);
     const eigen = { x: Number(gd.village.x), y: Number(gd.village.y) };
-    const einh = autoKatEinheiten && autoKatEinheiten.vid === vid && Date.now() - autoKatEinheiten.at < 10 * 60000
-        ? autoKatEinheiten.u : null;
+    const einh = autoKatEinheitenFrisch(vid);
     if (!einh) return false;   // ohne frische Truppenzahlen nichts planen
     if (!acquireProcessLock("godfarm")) return false;
     autoKatLaeuft = true;
@@ -33666,9 +33716,12 @@ function autoKatUiStand(el) {
     const ids = Object.keys(s.ziele);
     const unterwegs = ids.filter(id => s.ziele[id].offen || s.ziele[id].warte).length;
     const fak = ["main", "barracks"].map(g => `${AUTOKAT_GEB_NAME[g]} ×${autoKatFaktor(s, g)}`).join(", ");
+    let vid = "";
+    try { vid = String(game_data.village.id); } catch (e) { }
+    const warte = !autoKatEinheitenFrisch(vid) ? " (wartet auf Truppenzahlen aus dem nächsten GodBot-Farm-Lauf)" : "";
     el.innerHTML = !c.an ? "aus" :
         `${unterwegs} Ziel(e) in Arbeit, ${ids.length} beobachtet · Tabelle ${fak} · Rammen ${autoKatJeStufe(s, "wall")} je Wallstufe` +
-        (s.next ? ` · nächster Takt ${s.next > Date.now() ? new Date(s.next).toLocaleTimeString("de-DE") : "fällig"}` : "");
+        ` · nächster Takt ${s.next && s.next > Date.now() ? new Date(s.next).toLocaleTimeString("de-DE") : "fällig"}${warte}`;
 }
 
 function autoKatUiBinden(content) {
@@ -65857,6 +65910,7 @@ if (location.href.includes("mode=scavenge_mass")) {
             // v581: Ohne Folgetermin-Merker greift das Vorziehen beim Farmen
             // nicht (farmJobDue/checkDueFarmRestart verlangen ihn).
             if (k.zeit === "tw_next_farm_burst_at") localStorage.setItem("tw_farm_restart_scheduled", "1");
+            if (modul === "farm") localStorage.setItem("godfarm_jetzt_at", String(Date.now()));
             console.log(`[TW] ${k.name} vorgezogen - naechster Lauf ist ab sofort faellig.`);
             try { showToast(`${k.name} startet gleich.`, "ok"); } catch (e) { }
             return { ok: true, text: `${k.name} ist vorgezogen - startet gleich.` };
