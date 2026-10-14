@@ -5954,7 +5954,8 @@ public class GameWebViewActivity extends Activity {
    if(!syncReady()||supaTeam==null||supaTeam.isEmpty())return;
    new Thread(()->{
     try{
-     String q="godbot_settings?select=account_id,value,updated_at,game_accounts(name,world)&skey=eq.tw_farm_gebiet&team_id=eq."
+     // 2.0.71: auch Berichte/Gebaeude, Farm-Ankuenfte, Auto-Kat-Stand (GodBot v615).
+     String q="godbot_settings?select=account_id,skey,value,updated_at,game_accounts(name,world)&skey=in.(tw_farm_gebiet,tw_ziel_stand,tw_godfarm_ankunft,tw_autokat_stand)&team_id=eq."
        +java.net.URLEncoder.encode(supaTeam,"UTF-8");
      String json=supaRequest("GET",q,null);
      if(json==null)return; json=json.trim();

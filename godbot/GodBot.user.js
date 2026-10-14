@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      614
+// @version      615
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32753,6 +32753,16 @@ function godFarmAuswahl(seite, cfg, log, jetzt, doerfer, reserve) {
             if (!fruehestens || ab < fruehestens) fruehestens = ab;
             return;
         }
+        // v615: Abstand auch zu den Ankuenften der Teamkonten auf derselben Welt.
+        if (typeof godFarmTeamAnkuenfte === "function") {
+            const ta = godFarmTeamAnkuenfte(p.z.id).filter(t => Math.abs(ankunft - t) < abstand);
+            if (ta.length) {
+                offen[p.z.id] = "abstand";
+                const ab = Math.max.apply(null, ta) + abstand - lz;
+                if (!fruehestens || ab < fruehestens) fruehestens = ab;
+                return;
+            }
+        }
         // v607: Auto-Kat-Bericht muss der letzte im Farm-Assistenten bleiben.
         if (typeof autoKatFarmSperrt === "function" && autoKatFarmSperrt(p.z.id, ankunft)) { offen[p.z.id] = "abstand"; return; }
         const v = wahl === "A" ? va : vb;
@@ -32933,6 +32943,7 @@ function godFarmLauf(fertig) {
     if (!acquireProcessLock("godfarm")) return false;
     godFarmLaeuft = true;
     godFarmAbbruchGrund = "";
+    try { teamDatenAnfordern(); } catch (e) { }   // v615: fuer den naechsten Lauf
     const laufNr = ++godFarmLaufNr;
     // v613: vor dem Versand einfach beenden; in der Sendeschleife wird
     // abbruchJetzt auf deren Abschluss umgestellt (Ankuenfte sichern).
@@ -33446,6 +33457,7 @@ function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
     ziele.slice().sort((a, b) => a.dist - b.dist).forEach(z => {
         const zs = (stand.ziele || {})[z.id] || {};
         if (zs.offen || zs.warte) { zaehle("unterwegs"); return; }
+        if (z.teamBelegt) { zaehle("team"); return; }   // v615
         if (zs.sperreBis && zs.sperreBis > Date.now()) { zaehle("gesperrt"); return; }
         if (cfg.maxOffen > 0 && offen >= cfg.maxOffen) { zaehle("grenze"); return; }
         if (z.verluste > 0) { zaehle("verluste"); return; }
@@ -33575,6 +33587,7 @@ function autoKatTakt(fertig) {
     if (!planenDran && !autoKatBerichteBereit(stand, autoKatZielStand()).length) return false;
     if (!acquireProcessLock("godfarm")) return false;
     autoKatLaeuft = true;
+    try { teamDatenAnfordern(); } catch (e) { }   // v615
     if (planenDran) {
         stand.next = Date.now() + humanDelay(AUTOKAT_TAKT_MS[0], AUTOKAT_TAKT_MS[1]);
         autoKatStandSpeichern(stand);
@@ -33641,12 +33654,16 @@ function autoKatTakt(fertig) {
     const nachBerichten = () => {
         // 3. Punkte der Farmziele (Karte)
         const ziele = [];
+        // v615: Gebaeude vom neuesten Spaeherbericht aller Teamkonten der Welt;
+        // Ziele, die ein Teamkonto gerade beschiesst/erkundet, ruhen hier.
+        const gemischt = teamZielStandMischen(zielStand);
         Object.keys(zielStand).forEach(id => {
-            const z = zielStand[id];
+            const z = gemischt[id] || zielStand[id];
             if (!z || String(z.spieler || "0") !== "0" || typeof z.x !== "number") return;
             const dist = Math.hypot(z.x - eigen.x, z.y - eigen.y);
             if (dist > (godFarmCfg().maxFelder || 20)) return;
-            ziele.push({ id, x: z.x, y: z.y, dist, gebaeude: z.gebaeude || null, verluste: z.verluste || 0 });
+            ziele.push({ id, x: z.x, y: z.y, dist, gebaeude: z.gebaeude || null, verluste: z.verluste || 0,
+                teamBelegt: autoKatTeamBelegt(id) });
         });
         const sektor = (z) => (Math.floor(z.x / KARTE_SEKTOR) * KARTE_SEKTOR) + "_" + (Math.floor(z.y / KARTE_SEKTOR) * KARTE_SEKTOR);
         try { karteCacheLaden(gd.world); } catch (e) { }
@@ -53896,22 +53913,98 @@ let karteTeamGebiete = null;   // [{ name, konto, z: { id: [x,y,sek] } }]
 let karteTeamAt = 0;
 let karteNeuZeichnen = null;
 
+// v615 (Fetteruruk 14.10.: "Berichte und Farmangriffe zwischen den
+// Accounts auf der Welt teilen"): Dieselbe Abfrage liefert ab App 2.0.71 /
+// Odin PC 615.1 zusaetzlich tw_ziel_stand (Berichte, Gebaeude),
+// tw_godfarm_ankunft (Farm-Ankuenfte) und tw_autokat_stand je Teamkonto
+// DERSELBEN Welt. Aeltere Apps liefern nur tw_farm_gebiet (ohne skey) -
+// dann gibt es eben nur die Farmgebiete. Nur Supabase, kein Spielserver.
+let teamDaten = { at: 0, konten: [] };   // [{ name, konto, zielStand, ankunft, autokat }]
+
 function farmGebieteEmpfangen(zeilen) {
     try {
-        const welt = (typeof game_data !== "undefined" && game_data.world) || "";
+        const gd = (typeof game_data !== "undefined") ? game_data : {};
+        const welt = gd.world || "";
+        const ich = String(gd.player && gd.player.name || "").toLowerCase();
         const out = [];
+        const proKonto = {};
         (Array.isArray(zeilen) ? zeilen : []).forEach(r => {
             const ga = r && r.game_accounts;
             if (!ga || String(ga.world || "") !== welt) return;
             let g = null;
             try { g = JSON.parse(r.value); } catch (e) { }
-            if (!g || !g.z) return;
-            out.push({ name: String(ga.name || "?"), konto: String(r.account_id || ""), z: g.z });
+            if (!g) return;
+            const skey = String(r.skey || "tw_farm_gebiet");
+            const name = String(ga.name || "?");
+            if (skey === "tw_farm_gebiet") {
+                if (g.z) out.push({ name, konto: String(r.account_id || ""), z: g.z });
+                return;
+            }
+            if (name.toLowerCase() === ich) return;   // eigene Daten liegen lokal
+            const k = proKonto[r.account_id] = proKonto[r.account_id] || { name, konto: String(r.account_id || "") };
+            if (skey === "tw_ziel_stand") k.zielStand = g;
+            else if (skey === "tw_godfarm_ankunft") k.ankunft = g;
+            else if (skey === "tw_autokat_stand") k.autokat = g;
         });
         karteTeamGebiete = out;
         karteTeamAt = Date.now();
+        teamDaten = { at: Date.now(), konten: Object.keys(proKonto).map(i => proKonto[i]) };
         if (karteNeuZeichnen) karteNeuZeichnen();
     } catch (e) { console.warn("[TW] Karte: Farmgebiete nicht lesbar.", e); }
+}
+
+// Hoechstens alle 5 Min. bei der App/Odin PC anfragen (Supabase).
+function teamDatenAnfordern() {
+    if (Date.now() - karteTeamAt < 5 * 60 * 1000) return;
+    try { if (odin && typeof odin.farmGebiete === "function") odin.farmGebiete(); } catch (e) { }
+}
+
+// Ziel-Stand mit den Teamkonten gemischt (nur Anzeige/Entscheidung, nie
+// gespeichert): Gebaeude vom neuesten Spaeherbericht, letzter Bericht vom
+// neuesten Bericht - jeweils mit dem Namen des Kontos.
+function teamZielStandMischen(eigen) {
+    const out = {};
+    const ichName = String((typeof game_data !== "undefined" && game_data.player && game_data.player.name) || "ich");
+    Object.keys(eigen || {}).forEach(id => { out[id] = Object.assign({ berichtVon: ichName, gebaeudeVon: ichName }, eigen[id]); });
+    (teamDaten.konten || []).forEach(k => {
+        const zs = k.zielStand || {};
+        Object.keys(zs).forEach(id => {
+            const t = zs[id];
+            if (!t || typeof t !== "object") return;
+            const o = out[id];
+            if (!o) { out[id] = Object.assign({}, t, { berichtVon: k.name, gebaeudeVon: k.name, nurTeam: true }); return; }
+            if (t.gebaeude && typeof t.gebaeude.main === "number" && (t.gebaeudeZeit || 0) > (o.gebaeudeZeit || 0)) {
+                o.gebaeude = Object.assign({}, t.gebaeude); o.gebaeudeZeit = t.gebaeudeZeit; o.gebaeudeVon = k.name;
+            }
+            if ((t.zeit || 0) > (o.zeit || 0)) {
+                o.zeit = t.zeit; o.verluste = t.verluste; o.verlusteArt = t.verlusteArt;
+                o.farmErgebnis = t.farmErgebnis; o.quelle = t.quelle; o.berichtVon = k.name;
+            }
+        });
+    });
+    return out;
+}
+
+// Farm-Ankuenfte der Teamkonten auf dieses Ziel (ms).
+function godFarmTeamAnkuenfte(zielId) {
+    const out = [];
+    (teamDaten.konten || []).forEach(k => {
+        const a = k.ankunft && k.ankunft[String(zielId)];
+        if (typeof a === "number" && a > 0) out.push(a);
+    });
+    return out;
+}
+
+// Hat ein Teamkonto dieses Ziel gerade in Auto-Kat-Arbeit (unterwegs oder
+// wartet auf den Bericht, hoechstens 3 Std.)?
+function autoKatTeamBelegt(zielId) {
+    const jetzt = Date.now();
+    return (teamDaten.konten || []).some(k => {
+        const z = k.autokat && k.autokat.ziele && k.autokat.ziele[String(zielId)];
+        if (!z) return false;
+        const a = z.offen ? z.offen.ankunft : (z.warte ? z.warte.ankunft : 0);
+        return !!a && jetzt - a < 3 * 3600000;
+    });
 }
 try { TW_H.farmGebiete = farmGebieteEmpfangen; } catch (e) { }
 
@@ -54062,8 +54155,14 @@ function openOdinKarte() {
     const statusEl = root.querySelector("#tw-karte-status");
     const legendeEl = root.querySelector("#tw-karte-legende");
     let infoDorf = null;
-    let zielStand = {};
-    try { zielStand = JSON.parse(localStorage.getItem("tw_ziel_stand") || "{}") || {}; } catch (e) { }
+    // v615: Ziel-Stand mit den Teamkonten der Welt gemischt.
+    const zielStandLaden = () => {
+        let eigen = {};
+        try { eigen = JSON.parse(localStorage.getItem("tw_ziel_stand") || "{}") || {}; } catch (e) { }
+        return teamZielStandMischen(eigen);
+    };
+    let zielStand = zielStandLaden();
+    karteTeamGebieteAnfordern();
 
     function merken() {
         try { localStorage.setItem("tw_karte_ansicht", JSON.stringify({ welt: gd.world, cx, cy, m: massstab, farm: farmZeigen })); } catch (e) { }
@@ -54198,57 +54297,61 @@ function openOdinKarte() {
             `<span style="color:${k.farbe};">●</span> ${String(k.name).replace(/</g, "&lt;")} (${Object.keys(k.z).length})`).join(" &nbsp; ");
     }
 
+    // v615 (Fetteruruk 14.10.): Infofeld in vier festen Zeilen -
+    //   1. Dorf, Koordinate, Punkte, Besitzer, Entfernung
+    //   2. Gebaeudestufen (neuester Spaeherbericht im Team, mit Alter)
+    //   3. zuletzt angegriffen vor ... (von wem), Verluste-Markierung
+    //   4. Dorfinfo, Versammlungsplatz
+    // Kurze Texte und kleinere Schrift, damit jede Zeile ganz hineinpasst.
     function infoZeigen() {
         const d = dorfUnterKreuz();
         infoDorf = d;
         const fx = Math.floor(cx), fy = Math.floor(cy);
         if (!d) { infoEl.innerHTML = `<div style="color:#9aa58c;">${fx}|${fy} - kein Dorf</div>`; return; }
+        const esc = (t) => String(t).replace(/</g, "&lt;");
         const p = kartePlayer[d.besitzer];
         const wer = d.besitzer === "0" ? "Barbar" : (p ? String(p[0]) : "Spieler " + d.besitzer);
-        const dist = Math.hypot(d.x - ich.x, d.y - ich.y).toFixed(1);
+        const dist = Math.hypot(d.x - ich.x, d.y - ich.y).toFixed(1).replace(".", ",");
         const z = zielStand[d.id];
-        let zeile2 = "";
-        if (z) {
-            const g = z.gebaeude || {};
-            const alter = z.zeit ? Math.round((Date.now() - z.zeit) / 3600000) : null;
-            const markiert = !(z.quittiert && z.quittiert >= (z.zeit || 0)) &&
-                (z.verluste > 0 || (g.wall || 0) > 0 || (g.barracks || 0) > 0);
-            zeile2 = `<div style="margin-top:3px;color:#d6c9a3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Letzter Bericht${alter !== null ? ` vor ${alter} Std.` : ""}: ` +
-                (z.quelle === "farm"
-                    ? `${String(z.farmErgebnis || (z.verluste > 0 ? "Verluste" : "keine Verluste")).replace(/</g, "&lt;")} · Farm-Assistent`
-                    : `Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}`) +
-                (markiert ? ` <button data-k="quitt" style="margin-left:6px;padding:1px 7px;border-radius:5px;border:1px solid #6a5a32;background:#3a3020;color:#f0dca8;">Markierung entfernen</button>` : "") +
-                `</div>`;
-            // v614 (Fetteruruk 14.10.: "Karte zeigt keine Stufen mehr"): Die
-            // Stufen hingen hinten an der Berichtszeile und fielen dem
-            // Abschneiden zum Opfer, seit dort der Farm-Assistent-Text steht.
-            // Eigene Zeile, mit Hauptgebaeude (aus Spaeherberichten, auch von
-            // Auto-Kat) und Alter der Spaehung.
-            if (typeof g.main === "number") {
-                const gAlter = z.gebaeudeZeit ? Math.round((Date.now() - z.gebaeudeZeit) / 3600000) : null;
-                const warn = (g.barracks || 0) > 0 || (g.wall || 0) > 0;
-                zeile2 += `<div style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${warn ? "#ffb35c" : "#cfe3c0"};">` +
-                    `Gebäude: HG ${g.main} · Kaserne ${g.barracks || 0} · Wall ${g.wall || 0}` +
-                    (typeof g.wood === "number" || typeof g.stone === "number" || typeof g.iron === "number"
-                        ? ` · Minen ${g.wood || 0}/${g.stone || 0}/${g.iron || 0}` : "") +
-                    (gAlter !== null ? ` <span style="color:#9aa58c;">(Späher vor ${gAlter} Std.)</span>` : "") + `</div>`;
-            } else if (typeof g.wall === "number") {
-                zeile2 += `<div style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#9aa58c;">` +
-                    `Wall ${g.wall} (Farm-Assistent) · übrige Gebäude noch nicht gespäht</div>`;
-            }
+        const g = (z && z.gebaeude) || {};
+        const alterText = (ms) => {
+            const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+            return m < 60 ? `${m} Min.` : (m < 48 * 60 ? `${Math.round(m / 60)} Std.` : `${Math.round(m / 1440)} Tg.`);
+        };
+        const zeile = (inhalt, farbe) => `<div style="margin-top:3px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${farbe};">${inhalt}</div>`;
+
+        // Zeile 2: Gebaeude
+        let z2;
+        if (typeof g.main === "number") {
+            const warn = (g.barracks || 0) > 0 || (g.wall || 0) > 0;
+            const minen = (typeof g.wood === "number" || typeof g.stone === "number" || typeof g.iron === "number")
+                ? ` · Minen ${g.wood || 0}/${g.stone || 0}/${g.iron || 0}` : "";
+            z2 = zeile(`HG ${g.main} · Kas. ${g.barracks || 0} · Wall ${g.wall || 0}${minen}` +
+                (z.gebaeudeZeit ? ` <span style="color:#9aa58c;">(vor ${alterText(z.gebaeudeZeit)})</span>` : ""), warn ? "#ffb35c" : "#cfe3c0");
+        } else if (typeof g.wall === "number") {
+            z2 = zeile(`Wall ${g.wall} · sonst nicht gespäht`, "#9aa58c");
+        } else {
+            z2 = zeile("Gebäude nicht gespäht", "#9aa58c");
         }
-        const farmer = farmIdx.proDorf[d.id];
-        if (farmer && farmer.length) {
-            const jetztS = Math.floor(Date.now() / 1000);
-            // v592: eine Zeile, Ueberlaenge abgeschnitten - das Infofeld hat
-            // eine feste Hoehe, damit die Karte nicht springt.
-            zeile2 += `<div style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Farmt: ` + farmer.map(f =>
-                `<span style="color:${f.farbe};">●</span> ${String(f.name).replace(/</g, "&lt;")}` +
-                ` (vor ${Math.max(0, Math.round((jetztS - f.zuletzt) / 3600))} Std.)`).join(", ") + `</div>`;
-        }
+
+        // Zeile 3: zuletzt angegriffen (Farmgebiete aller Konten + Berichte)
+        let letzt = null;
+        (farmIdx.proDorf[d.id] || []).forEach(f => {
+            const ms = (f.zuletzt || 0) * 1000;
+            if (ms && (!letzt || ms > letzt.ms)) letzt = { ms, name: f.name };
+        });
+        if (z && z.zeit && (!letzt || z.zeit > letzt.ms)) letzt = { ms: z.zeit, name: z.berichtVon || "" };
+        const markiert = z && !(z.quittiert && z.quittiert >= (z.zeit || 0)) &&
+            (z.verluste > 0 || (g.wall || 0) > 0 || (g.barracks || 0) > 0);
+        const z3 = zeile((letzt ? `Zuletzt angegriffen vor ${alterText(letzt.ms)}${letzt.name ? ` (${esc(letzt.name)})` : ""}`
+            : "Noch nicht angegriffen") +
+            (z && z.verluste > 0 ? ` · <span style="color:#ff6b5e;">Verluste</span>` : "") +
+            (markiert ? ` <button data-k="quitt" style="margin-left:4px;padding:0 6px;font-size:11px;border-radius:5px;border:1px solid #6a5a32;background:#3a3020;color:#f0dca8;">✓</button>` : ""),
+            "#d6c9a3");
+
         const vid = gd.village && gd.village.id;
-        infoEl.innerHTML = `<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><b>${(d.name || "Barbarendorf").replace(/</g, "&lt;")}</b> (${d.x}|${d.y}) · ${d.punkte} P. · ${String(wer).replace(/</g, "&lt;")} · ${dist} Felder</div>${zeile2}
-          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+        infoEl.innerHTML = `<div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><b>${esc(d.name || "Barbarendorf")}</b> (${d.x}|${d.y}) · ${d.punkte} P. · ${esc(wer)} · ${dist} F.</div>${z2}${z3}
+          <div style="margin-top:5px;display:flex;gap:12px;font-size:13px;">
             <a href="/game.php?village=${vid}&screen=info_village&id=${encodeURIComponent(d.id)}" style="color:#9fd18b;">Dorfinfo</a>
             <a href="/game.php?village=${vid}&screen=place&target=${encodeURIComponent(d.id)}" style="color:#9fd18b;">Versammlungsplatz</a>
           </div>`;
@@ -54321,7 +54424,7 @@ function openOdinKarte() {
                 if (e) {
                     e.quittiert = e.zeit || Date.now();
                     localStorage.setItem(ZIEL_STAND_KEY, JSON.stringify(alle));
-                    zielStand = alle;
+                    zielStand = zielStandLaden();
                 }
             } catch (e) { }
         }
@@ -54340,7 +54443,7 @@ function openOdinKarte() {
     const beiGroesse = () => { if (!document.body.contains(root)) return; rect = groesse(); zeichnen(); nachladen(); };
     window.addEventListener("resize", beiGroesse);
     // v589: Teamgebiete kommen asynchron - dann neu zeichnen.
-    karteNeuZeichnen = () => { if (!document.body.contains(root)) { karteNeuZeichnen = null; return; } farmIdx = karteFarmIndex(); zeichnen(); };
+    karteNeuZeichnen = () => { if (!document.body.contains(root)) { karteNeuZeichnen = null; return; } farmIdx = karteFarmIndex(); zielStand = zielStandLaden(); zeichnen(); };
     zeichnen();
     nachladen();
 }

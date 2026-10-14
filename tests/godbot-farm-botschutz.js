@@ -1,11 +1,11 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609; Pakete seit v610; O seit v611; P seit v612; Q seit v613): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609; Pakete seit v610; O seit v611; P seit v612; Q seit v613; R seit v615): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
 const captcha=fs.readFileSync(SQ+'03_de252_Botschutz-Captcha_desktop.html','utf8');
 const combi=fs.readFileSync(SQ+'35_de260_overview_combined_desktop.html','utf8');
 const farm6=fs.readFileSync(SQ+'38_de260_am_farm_seite1von6_mobil.html','utf8');
-const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, autoKatFaellig, godFarmLauf, buildOpenAttackGroups, findAllDueAttackBatches, serverNowMs, autoKatFarmSperrtX:(i,a)=>autoKatFarmSperrt(i,a), acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
+const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, autoKatFaellig, godFarmLauf, farmGebieteEmpfangen, teamZielStandMischen, autoKatTeamBelegt, godFarmTeamAnkuenfte, buildOpenAttackGroups, findAllDueAttackBatches, serverNowMs, autoKatFarmSperrtX:(i,a)=>autoKatFarmSperrt(i,a), acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
 function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null,mapJson=null}){
  const dom=new JSDOM('<html><body>'+(botImDok?'<div id="bot_check">Bot-Schutz</div>':'')+'</body></html>',{url:'https://de260.die-staemme.de/game.php?village=6863&screen=overview',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;const st={abrufe:[],posts:[],fehler:[]};
@@ -192,6 +192,24 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
  t('Q1 Hintergrund mitten im Lauf: Lauf endet sofort, Sperre frei, kein weiterer Angriff, Ankuenfte gesichert',
    vorQ>=2&&endeSofort&&sperreFrei&&x.st.posts.length<=vorQ+1&&Object.keys(logQ).length>=vorQ&&/App im Hintergrund/.test(qStand.text)&&qStand.fehler===false,
    JSON.stringify([vorQ,x.st.posts.length,endeSofort,sperreFrei,qStand&&qStand.text,Object.keys(logQ).length]));
+ // R (v615): Team-Daten derselben Welt.
+ x=welt({});const welt260=x.w.game_data.world;const jetztR=Date.now();
+ const idsR=[...farm.matchAll(/id="village_(\d+)"/g)].map(m=>m[1]);
+ const ankR={};idsR.forEach(i=>ankR[i]=jetztR+3600000);
+ const zsTeam={'7001':{x:561,y:552,spieler:'0',zeit:jetztR,gebaeude:{main:3,barracks:1,wall:0},gebaeudeZeit:jetztR}};
+ x.w.localStorage.setItem('tw_ziel_stand',JSON.stringify({'7001':{x:561,y:552,spieler:'0',zeit:jetztR-7200000,gebaeude:{main:1,wall:0},gebaeudeZeit:jetztR-7200000}}));
+ x.T.farmGebieteEmpfangen([
+  {account_id:'a2',skey:'tw_godfarm_ankunft',value:JSON.stringify(ankR),game_accounts:{name:'Ares20',world:welt260}},
+  {account_id:'a2',skey:'tw_ziel_stand',value:JSON.stringify(zsTeam),game_accounts:{name:'Ares20',world:welt260}},
+  {account_id:'a2',skey:'tw_autokat_stand',value:JSON.stringify({ziele:{'7001':{offen:{ankunft:jetztR+600000}}}}),game_accounts:{name:'Ares20',world:welt260}},
+  {account_id:'a3',skey:'tw_godfarm_ankunft',value:JSON.stringify({'1':jetztR}),game_accounts:{name:'Fremd',world:'de999'}}]);
+ const gm=x.T.teamZielStandMischen(JSON.parse(x.w.localStorage.getItem('tw_ziel_stand')));
+ t('R1 Berichte geteilt: neuerer Spaeherbericht eines Teamkontos gewinnt (mit Name), andere Welt zaehlt nicht',
+   gm['7001'].gebaeude.main===3&&gm['7001'].gebaeude.barracks===1&&gm['7001'].gebaeudeVon==='Ares20'&&x.T.godFarmTeamAnkuenfte('1').length===0);
+ t('R2 Auto-Kat: Ziel, das ein Teamkonto gerade bearbeitet, gilt als belegt',x.T.autoKatTeamBelegt('7001')===true&&x.T.autoKatTeamBelegt('7002')===false);
+ x.T.godFarmCfgSetzen({abstandMin:300});s=await lauf(x.T);
+ t('R3 Farmen geteilt: kommt ein Teamkonto in derselben Abstandsspanne an, schickt dieses Konto nichts dorthin',
+   s&&s.gesendet===0&&/Abstand/.test(s.text)&&x.st.posts.length===0,JSON.stringify(s&&s.text));
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

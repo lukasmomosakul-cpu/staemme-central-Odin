@@ -738,7 +738,7 @@ var OdinNative = {
     // 589.1 / App 2.0.43: Farmgebiete der Teamkonten fuer die GodBot-Karte.
     farmGebieteAbrufen: function () {
         if (!OdinNative.syncReady()) return;
-        rest('GET', 'godbot_settings?select=account_id,value,updated_at,game_accounts(name,world)&skey=eq.tw_farm_gebiet&team_id=eq.' + encodeURIComponent(Z.team))
+        rest('GET', 'godbot_settings?select=account_id,skey,value,updated_at,game_accounts(name,world)&skey=in.(tw_farm_gebiet,tw_ziel_stand,tw_godfarm_ankunft,tw_autokat_stand)&team_id=eq.' + encodeURIComponent(Z.team))
             .then(function (a) { try { var S = window[Symbol.for('tw:k')]; if (a && S && S.farmGebiete) S.farmGebiete(a); } catch (e) { } })
             .catch(function () { });
     },
