@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      613
+// @version      614
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -54050,7 +54050,7 @@ function openOdinKarte() {
         <div id="tw-karte-legende" style="position:absolute;left:8px;bottom:8px;font-size:11px;background:rgba(0,0,0,.5);padding:3px 6px;border-radius:4px;pointer-events:none;"></div>
         <div id="tw-karte-status" style="position:absolute;right:8px;top:8px;font-size:11px;color:#b8c2a8;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:4px;"></div>
       </div>
-      <div id="tw-karte-info" style="flex:none;box-sizing:border-box;height:calc(108px + env(safe-area-inset-bottom, 0px));overflow:hidden;padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:#1f2a1c;border-top:1px solid #3a4a33;"></div>`;
+      <div id="tw-karte-info" style="flex:none;box-sizing:border-box;height:calc(128px + env(safe-area-inset-bottom, 0px));overflow:hidden;padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:#1f2a1c;border-top:1px solid #3a4a33;"></div>`;
     root.querySelectorAll("button").forEach(b => {
         b.style.borderRadius = "6px"; b.style.border = "1px solid #4a5a42"; b.style.background = "#2a3826"; b.style.color = "#e8e2d0";
     });
@@ -54175,6 +54175,15 @@ function openOdinKarte() {
                 if (massstab >= 26 && d.punkte) {
                     ctx.fillStyle = "rgba(0,0,0,.75)"; ctx.font = `${Math.round(massstab * 0.28)}px system-ui,sans-serif`;
                     ctx.textAlign = "center"; ctx.fillText(String(d.punkte), px, py + massstab * 0.1);
+                    // v614: gespaehte Stufen unter den Punkten - H = Hauptgebaeude,
+                    // K = Kaserne, W = Wall (K/W nur, wenn vorhanden).
+                    const gs = z && z.gebaeude;
+                    if (gs && typeof gs.main === "number") {
+                        const t = `H${gs.main}` + ((gs.barracks || 0) > 0 ? ` K${gs.barracks}` : "") + ((gs.wall || 0) > 0 ? ` W${gs.wall}` : "");
+                        ctx.font = `${Math.round(massstab * 0.22)}px system-ui,sans-serif`;
+                        ctx.fillStyle = ((gs.barracks || 0) > 0 || (gs.wall || 0) > 0) ? "rgba(140,40,0,.9)" : "rgba(0,0,0,.6)";
+                        ctx.fillText(t, px, py + massstab * 0.34);
+                    }
                 }
             });
         });
@@ -54208,9 +54217,25 @@ function openOdinKarte() {
                 (z.quelle === "farm"
                     ? `${String(z.farmErgebnis || (z.verluste > 0 ? "Verluste" : "keine Verluste")).replace(/</g, "&lt;")} · Farm-Assistent`
                     : `Verluste ${typeof z.verluste === "number" ? z.verluste : "?"}`) +
-                (z.gebaeude ? ` · Wall ${g.wall || 0} · Kaserne ${g.barracks || 0}` : "") +
                 (markiert ? ` <button data-k="quitt" style="margin-left:6px;padding:1px 7px;border-radius:5px;border:1px solid #6a5a32;background:#3a3020;color:#f0dca8;">Markierung entfernen</button>` : "") +
                 `</div>`;
+            // v614 (Fetteruruk 14.10.: "Karte zeigt keine Stufen mehr"): Die
+            // Stufen hingen hinten an der Berichtszeile und fielen dem
+            // Abschneiden zum Opfer, seit dort der Farm-Assistent-Text steht.
+            // Eigene Zeile, mit Hauptgebaeude (aus Spaeherberichten, auch von
+            // Auto-Kat) und Alter der Spaehung.
+            if (typeof g.main === "number") {
+                const gAlter = z.gebaeudeZeit ? Math.round((Date.now() - z.gebaeudeZeit) / 3600000) : null;
+                const warn = (g.barracks || 0) > 0 || (g.wall || 0) > 0;
+                zeile2 += `<div style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:${warn ? "#ffb35c" : "#cfe3c0"};">` +
+                    `Gebäude: HG ${g.main} · Kaserne ${g.barracks || 0} · Wall ${g.wall || 0}` +
+                    (typeof g.wood === "number" || typeof g.stone === "number" || typeof g.iron === "number"
+                        ? ` · Minen ${g.wood || 0}/${g.stone || 0}/${g.iron || 0}` : "") +
+                    (gAlter !== null ? ` <span style="color:#9aa58c;">(Späher vor ${gAlter} Std.)</span>` : "") + `</div>`;
+            } else if (typeof g.wall === "number") {
+                zeile2 += `<div style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#9aa58c;">` +
+                    `Wall ${g.wall} (Farm-Assistent) · übrige Gebäude noch nicht gespäht</div>`;
+            }
         }
         const farmer = farmIdx.proDorf[d.id];
         if (farmer && farmer.length) {
