@@ -1,11 +1,11 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609; Pakete seit v610; O seit v611; P seit v612): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609; Pakete seit v610; O seit v611; P seit v612; Q seit v613): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
 const captcha=fs.readFileSync(SQ+'03_de252_Botschutz-Captcha_desktop.html','utf8');
 const combi=fs.readFileSync(SQ+'35_de260_overview_combined_desktop.html','utf8');
 const farm6=fs.readFileSync(SQ+'38_de260_am_farm_seite1von6_mobil.html','utf8');
-const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, autoKatFaellig, buildOpenAttackGroups, findAllDueAttackBatches, serverNowMs, autoKatFarmSperrtX:(i,a)=>autoKatFarmSperrt(i,a), acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
+const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, autoKatFaellig, godFarmLauf, buildOpenAttackGroups, findAllDueAttackBatches, serverNowMs, autoKatFarmSperrtX:(i,a)=>autoKatFarmSperrt(i,a), acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
 function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null,mapJson=null}){
  const dom=new JSDOM('<html><body>'+(botImDok?'<div id="bot_check">Bot-Schutz</div>':'')+'</body></html>',{url:'https://de260.die-staemme.de/game.php?village=6863&screen=overview',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;const st={abrufe:[],posts:[],fehler:[]};
@@ -180,6 +180,18 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
  const due=x.T.findAllDueAttackBatches().map(g=>g[0].attack.id);
  t('P1 ohne Sollsekunde: Vorladen 0, nicht gestaffelt; normale Angriffe unveraendert 60 s; faellig erst zur Startzeit',
    pre.k1===0&&pre.k2===0&&pre.k3===0&&pre.a1===60000&&pre.a2===60000&&pre.a3===60000&&due.includes('k3')&&!due.includes('k1')&&!due.includes('k2'),JSON.stringify([pre,due]));
+ // Q (v613): App geht mitten im Lauf in den Hintergrund.
+ x=welt({});let qStand=null;const qLauf=new Promise(res=>{x.T.godFarmLauf(st=>{qStand=st;res(st);});});
+ for(let k=0;k<200&&x.st.posts.length<2;k++)await new Promise(r=>setTimeout(r,50));
+ const vorQ=x.st.posts.length;
+ Object.defineProperty(x.w.document,'visibilityState',{configurable:true,get:()=>'hidden'});
+ x.w.document.dispatchEvent(new x.w.Event('visibilitychange'));
+ const endeSofort=!!qStand;const sperreFrei=x.T.currentProcessOwner()===null;
+ await new Promise(r=>setTimeout(r,4000));
+ const logQ=JSON.parse(x.w.localStorage.getItem('tw_godfarm_ankunft')||'{}');
+ t('Q1 Hintergrund mitten im Lauf: Lauf endet sofort, Sperre frei, kein weiterer Angriff, Ankuenfte gesichert',
+   vorQ>=2&&endeSofort&&sperreFrei&&x.st.posts.length<=vorQ+1&&Object.keys(logQ).length>=vorQ&&/App im Hintergrund/.test(qStand.text)&&qStand.fehler===false,
+   JSON.stringify([vorQ,x.st.posts.length,endeSofort,sperreFrei,qStand&&qStand.text,Object.keys(logQ).length]));
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

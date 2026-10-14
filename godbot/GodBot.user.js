@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      612
+// @version      613
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32328,6 +32328,22 @@ const GODFARM_LAUF_MAX_MS = 90 * 1000;      // v598: Sperre hoechstens ~90 s am 
 const GODFARM_MAX_SEITEN = 30;
 const GODFARM_SEITEN_PAUSE = [600, 1500];
 let godFarmLaeuft = false;
+// v613 (Fetteruruk 14.10.: "Farmen-Knopf haengt immer wieder"): Geht die
+// App in den Hintergrund, friert Android das Spiel-Skript ein - am 14.10.
+// 16:02 mitten im Lauf, die Sperre "godfarm" hing 13 Min. (bis 16:15:47).
+// Jetzt endet der Lauf beim Wechsel in den Hintergrund sofort. Die
+// Laufnummer verhindert, dass ein eingefrorener Lauf nach dem Aufwachen
+// weitersendet (auch wenn inzwischen ein neuer laeuft).
+let godFarmLaufNr = 0;
+let godFarmAbbrechen = null;
+try {
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "hidden" || !godFarmAbbrechen) return;
+        try { godFarmAbbrechen("App im Hintergrund"); } catch (e) { }
+        // Stand gleich an die App - der naechste 5-s-Bericht kaeme erst nach dem Aufwachen.
+        try { odinSteuerstandMelden(true); } catch (e) { }
+    });
+} catch (e) { }
 let godFarmAbbruchGrund = "";   // v599: gesetzt von preemptRaubzugFarmen
 
 // v596 (Fetteruruk 12.10.): "entweder FarmGod oder GodBot - Aktivierung
@@ -32869,7 +32885,11 @@ function godFarmStand() {
 }
 
 function godFarmLauf(fertig) {
+    let beendet = false;
     const ende = (s) => {
+        if (beendet) return;   // v613: genau einmal
+        beendet = true;
+        godFarmAbbrechen = null;
         godFarmLaeuft = false;
         releaseProcessLock("godfarm");
         const alt = godFarmStand() || {};
@@ -32913,6 +32933,15 @@ function godFarmLauf(fertig) {
     if (!acquireProcessLock("godfarm")) return false;
     godFarmLaeuft = true;
     godFarmAbbruchGrund = "";
+    const laufNr = ++godFarmLaufNr;
+    // v613: vor dem Versand einfach beenden; in der Sendeschleife wird
+    // abbruchJetzt auf deren Abschluss umgestellt (Ankuenfte sichern).
+    let abbruchJetzt = (grund) => ende({ fehler: false, gesendet: 0, anfragen: 0, text: `Lauf beendet - ${grund}, noch nichts gesendet.` });
+    godFarmAbbrechen = (grund) => {
+        godFarmAbbruchGrund = grund;
+        godFarmLaufNr++;
+        try { abbruchJetzt(grund); } catch (e) { try { ende({ fehler: false, gesendet: 0, anfragen: 0, text: `Lauf beendet - ${grund}.` }); } catch (x) { } }
+    };
     // v597: FarmGod-Reste duerfen bei Methode GodBot-Farm nicht liegen
     // bleiben (sie loesten die Ueberfaellig-Abschaltung beim Laden aus).
     try {
@@ -33081,7 +33110,10 @@ function godFarmLauf(fertig) {
             };
             try { window.addEventListener("pagehide", sichern); } catch (e) { }
             const proArt = { A: 0, B: 0 };
+            // v613: Abbruch fuehrt ab jetzt ueber den Abschluss der Schleife.
+            abbruchJetzt = () => naechster();
             const naechster = () => {
+                if (!stop && laufNr !== godFarmLaufNr) stop = godFarmAbbruchGrund || "abgelöst";
                 if (!stop && godFarmAbbruchGrund) stop = `Vorrang ${godFarmAbbruchGrund}`;
                 if (!stop && i < aw.plan.length) {
                     if (cfg.maxProStunde > 0 && stunde.length >= cfg.maxProStunde) stop = "Obergrenze je Stunde erreicht";
@@ -33117,7 +33149,7 @@ function godFarmLauf(fertig) {
                 const warte = letzterStart ? Math.max(0, pause() - (Date.now() - letzterStart))
                     : (cfg.tempo === "zuegig" ? humanDelay(300, 800) : humanDelay(800, 2500));
                 setTimeout(() => {
-                    if (isBotProtectionActive() || godFarmAbbruchGrund) { i--; naechster(); return; }
+                    if (isBotProtectionActive() || godFarmAbbruchGrund || laufNr !== godFarmLaufNr) { i--; naechster(); return; }
                     letzterStart = Date.now();
                     try { touchProcessLock("godfarm"); } catch (e) { }
                     const sendUrl = seite.sendLink.replace(/village=(\d+)/, "village=" + p.quelle);
