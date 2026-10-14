@@ -912,8 +912,17 @@ public class OdinService extends Service {
   if(device.isEmpty())device=Build.MODEL+"-"+android.provider.Settings.Secure.getString(
     getContentResolver(),android.provider.Settings.Secure.ANDROID_ID);
  }
+ // 2.0.70: "Wecker aus" direkt in der Botschutz-Meldung. Bisher endete der
+ // Wecker nur ueber die Spielansicht (eigener Botschutz) oder das Dashboard -
+ // beim Team-Alarm (14.10. 07:40, Ares20 de256) gab es auf der Meldung
+ // keinen Knopf, und er lief bis zum naechsten Dienst-Durchlauf weiter.
+ static final String ACTION_WECKER_AUS="odin.WECKER_AUS";
  @Override public int onStartCommand(Intent i,int flags,int startId){
-  laden(); return START_STICKY;   // nach dem Abraeumen wieder anlaufen
+  laden();
+  if(i!=null&&ACTION_WECKER_AUS.equals(i.getAction())){
+   try{ botschutzBeenden("Wecker aus (Meldung)"); }catch(Exception e){ android.util.Log.w("ODIN_SVC","wecker aus",e); }
+  }
+  return START_STICKY;   // nach dem Abraeumen wieder anlaufen
  }
  @Override public void onCreate(){
   super.onCreate(); laden(); channels();
@@ -1033,7 +1042,12 @@ public class OdinService extends Service {
  // Von aussen quittierbar, ohne Verweis auf den laufenden Dienst: das
  // Dashboard ruft es im onResume, der Dienst prueft es im Takt.
  static volatile long botschutzGesehenAm=0L;
- public static void botschutzGesehen(){ botschutzGesehenAm=System.currentTimeMillis(); }
+ public static void botschutzGesehen(){
+  botschutzGesehenAm=System.currentTimeMillis();
+  // 2.0.70: sofort beenden, nicht erst im naechsten Dienst-Durchlauf.
+  OdinService s=lauf;
+  if(s!=null){ try{ s.botschutzBeenden("quittiert"); }catch(Exception ignored){} }
+ }
  void botschutzBeenden(String grund){
   if(botschutzSeit==0)return;
   botschutzSeit=0L; botschutzFremd=false; botschutzFremdKonto="";
@@ -1050,6 +1064,11 @@ public class OdinService extends Service {
   // 2.0.20: Team-Alarm (Botschutz auf einem ANDEREN Geraet) endet nicht,
   // nur weil hier eine Spielansicht vorn ist - das ist ein anderes Konto.
   if(!botschutzFremd&&GameWebViewActivity.imVordergrundIrgendwo()){ botschutzBeenden("Spielansicht im Vordergrund"); return; }
+  // 2.0.70: Team-Alarm endet, sobald das betroffene Konto HIER vorn ist.
+  if(botschutzFremd){
+   try{ if(!botschutzFremdKonto.isEmpty()&&GameWebViewActivity.laeuftUngedrosselt(this,botschutzFremdKonto)){
+    botschutzBeenden("Konto "+kontoBez(botschutzFremdKonto)+" im Vordergrund"); return; } }catch(Exception ignored){}
+  }
   if(botschutzGesehenAm>botschutzSeit){ botschutzBeenden("quittiert"); return; }
   if(jetzt-botschutzLetzteVib>=nbBotVibSek*1000L){
    botschutzLetzteVib=jetzt;
@@ -1059,8 +1078,8 @@ public class OdinService extends Service {
      v.vibrate(android.os.VibrationEffect.createWaveform(new long[]{0,400,200,400},-1));
    }catch(Exception ignored){}
    long minuten=(jetzt-botschutzSeit)/60000L;
-   zeigeFest(ID_BOTSCHUTZ,CH_ALERT,"Botschutz aktiv",
-     botschutzText+" · seit "+minuten+" Min",true);
+   zeigeFest(ID_BOTSCHUTZ,CH_ALERT,botschutzKlang!=null?"Botschutz aktiv - Wecker läuft":"Botschutz aktiv",
+     botschutzText+" · seit "+minuten+" Min",true,true);
   }
   // Nach der eingestellten Zeit der Wecker - im Alarmkanal, damit er auch
   // bei stummgestelltem Klingelton laut ist.
@@ -1074,6 +1093,9 @@ public class OdinService extends Service {
        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
      if(Build.VERSION.SDK_INT>=28)botschutzKlang.setLooping(true);
      botschutzKlang.play();
+     // Meldung gleich mit Titel "Wecker läuft" und dem Aus-Knopf zeigen.
+     zeigeFest(ID_BOTSCHUTZ,CH_ALERT,"Botschutz aktiv - Wecker läuft",
+       botschutzText+" · seit "+((jetzt-botschutzSeit)/60000L)+" Min",true,true);
      OdinLog.schreib(this,"-","WICHTIG","Botschutz-Wecker gestartet");
      protokoll(this,"WICHTIG","botschutz","Wecker gestartet nach "+nbBotWeckerMin+" Min");
     }
@@ -1082,6 +1104,9 @@ public class OdinService extends Service {
  }
  // Meldung mit fester Nummer: dieselbe Nummer ersetzt die vorige.
  private void zeigeFest(int id,String kanal,String titel,String text,boolean bleibt){
+  zeigeFest(id,kanal,titel,text,bleibt,false);
+ }
+ private void zeigeFest(int id,String kanal,String titel,String text,boolean bleibt,boolean weckerKnopf){
   try{
    Intent open=new Intent(this,MainActivity.class);
    open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
@@ -1094,6 +1119,14 @@ public class OdinService extends Service {
      .setOnlyAlertOnce(!bleibt)
      .setAutoCancel(!bleibt);
    if(bleibt)b.setOngoing(true);
+   if(weckerKnopf){
+    Intent aus=new Intent(this,OdinService.class).setAction(ACTION_WECKER_AUS);
+    PendingIntent pa=PendingIntent.getService(this,4899,aus,
+      PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+    b.addAction(new Notification.Action.Builder(
+      android.graphics.drawable.Icon.createWithResource(this,android.R.drawable.ic_lock_silent_mode),
+      "Wecker aus",pa).build());
+   }
    getSystemService(NotificationManager.class).notify(id,b.build());
   }catch(Exception e){ android.util.Log.w("ODIN_SVC","zeigeFest",e); }
  }
