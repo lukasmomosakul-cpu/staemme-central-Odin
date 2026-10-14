@@ -1,11 +1,11 @@
-// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609; Pakete seit v610): node tests/godbot-farm-botschutz.js (braucht jsdom)
+// GodBot-Farm Botschutz-Szenarien (v600; H-J seit v604; K seit v605; L seit v606; M seit v607, v608; N seit v609; Pakete seit v610; O seit v611): node tests/godbot-farm-botschutz.js (braucht jsdom)
 const fs=require('fs');const {JSDOM}=require('jsdom');
 const SQ=require('path').join(__dirname,'..','seitenquellen')+'/';
 const farm=fs.readFileSync(SQ+'33_de260_am_farm_desktop.html','utf8');
 const captcha=fs.readFileSync(SQ+'03_de252_Botschutz-Captcha_desktop.html','utf8');
 const combi=fs.readFileSync(SQ+'35_de260_overview_combined_desktop.html','utf8');
 const farm6=fs.readFileSync(SQ+'38_de260_am_farm_seite1von6_mobil.html','utf8');
-const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, autoKatFaellig, acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
+const gb=(()=>{const s=fs.readFileSync(require('path').join(__dirname,'..','godbot','GodBot.user.js'),'utf8');const i=s.lastIndexOf('})();');return s.slice(0,i)+'window.__t={godFarmLauf, godFarmCfgSetzen, godFarmStand, isBotProtectionActive, currentProcessOwner, sendNextFarmAttack, measureNetworkLatencyMs, odinSteuerstand, autoKatEntscheiden, autoKatLernen, autoKatFarmSperrt, autoKatTakt, autoKatStand, autoKatFaellig, autoKatFarmSperrtX:(i,a)=>autoKatFarmSperrt(i,a), acquireProcessLock, releaseProcessLock, setWF:(el)=>{workFrameEl=el;}};\n'+s.slice(i);})();
 function welt({farmHtml=farm,farmUrl=null,combiHtml=combi,villages='1',postAntwort=null,botImDok=false,seiten=null,mapJson=null}){
  const dom=new JSDOM('<html><body>'+(botImDok?'<div id="bot_check">Bot-Schutz</div>':'')+'</body></html>',{url:'https://de260.die-staemme.de/game.php?village=6863&screen=overview',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window;const st={abrufe:[],posts:[],fehler:[]};
@@ -154,6 +154,23 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
    at11.length===2&&at11.every(a=>JSON.stringify(a.troops)==='{"catapult":2,"spy":1,"axe":5}'&&a.targetBuilding==='Hauptgebäude'&&a.unitLabel==='catapult')&&
    at11[1].startsAtMs-at11[0].startsAtMs>=2000&&at11[1].startsAtMs-at11[0].startsAtMs<=5000&&of11&&of11.offen&&of11.offen.eintraege.length===2&&of11.offen.ankunft===at11[1].arrivesAtMs&&of11.beschuss.pakete===2,
    JSON.stringify([tk,at11.map(a=>[a.troops,a.targetBuilding,a.startsAtMs]),of11]));
+ // O (v611): Truppen aus der Versand-Antwort, Berichte sofort lesen, Sperre bis gelesen.
+ x=welt({postAntwort:{nach:1,fehler:false,r:{success:'x',current_units:{spy:'2',axe:'7',catapult:'1',light:'3'}}}});s=await lauf(x.T);
+ const ge2=JSON.parse(x.w.localStorage.getItem('godbot_autokat_einheiten')||'null');
+ t('O1 Truppenzahlen nach dem Farmangriff aus der Antwort (nicht vom Laufbeginn)',ge2&&ge2.u.spy===2&&ge2.u.catapult===1&&ge2.u.axe===7,JSON.stringify(ge2));
+ x=welt({});const jetztO=Date.now();
+ x.w.localStorage.setItem('tw_autokat_cfg',JSON.stringify({an:true,v:2}));
+ x.w.localStorage.setItem('tw_autokat_stand',JSON.stringify({next:jetztO+3600000,ziele:{'7001':{x:561,y:552,warte:{art:'spaeher',ankunft:jetztO-60000,berichtVorher:'100'}},
+   '7002':{x:557,y:553,warte:{art:'spaeher',ankunft:jetztO-4*3600000,berichtVorher:'200'}}},lern:{}}));
+ x.w.localStorage.setItem('tw_ziel_stand',JSON.stringify({'7001':{x:561,y:552,spieler:'0',bericht:'101',zeit:jetztO-30000},'7002':{x:557,y:553,spieler:'0',bericht:'201',zeit:jetztO}}));
+ t('O2 Bericht bereit -> Takt faellig, obwohl der Planungstakt erst in 1 Std. dran ist (keine Truppenzahlen noetig)',x.T.autoKatFaellig()===true);
+ t('O3 Sperre: solange der Bericht nicht gelesen ist, kein Farmangriff nach unserer Ankunft; davor frei',
+   x.T.autoKatFarmSperrtX('7001',jetztO+2*3600000)===true&&x.T.autoKatFarmSperrtX('7001',jetztO-5*60000)===false&&x.T.autoKatFarmSperrtX('7002',jetztO+60000)===false);
+ const tkO=await new Promise(res=>{const r=x.T.autoKatTakt(res);if(!r)res(null);});
+ const stO=x.T.autoKatStand();const abO=x.st.abrufe.filter(u=>/screen=report/.test(u));
+ t('O4 Lese-Takt: 7001 gelesen (ohne Gebaeude -> neuer Spaeher statt zweitem Versuch), 7002 nach 3 Std. aufgegeben, keine Karte, Planungstakt unveraendert',
+   tkO&&/gelesen/.test(tkO)&&abO.length===1&&/view=101/.test(abO[0])&&!stO.ziele['7001'].warte&&!stO.ziele['7002'].warte&&stO.next===jetztO+3600000&&!x.st.abrufe.some(u=>/map\.php/.test(u)),
+   JSON.stringify([tkO,abO,stO.ziele,stO.next-jetztO]));
  const alleFehler=[];
  console.log(R.join('\n'));process.exit(0);
 })();

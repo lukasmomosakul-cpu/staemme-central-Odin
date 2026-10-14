@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      610
+// @version      611
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33112,6 +33112,18 @@ function godFarmLauf(fertig) {
                         // (sonst erst ueber den Waechter, 0,5-1,8 s spaeter).
                         // v604: gemeinsamer Trichter mit dem FarmGod-Direktversand.
                         try { versandAntwortBotschutz(r, "godfarm"); } catch (e) { }
+                        // v611: die Antwort nennt die Truppen im Dorf danach -
+                        // Auto-Kat plant sonst mit dem Stand VOR dem Lauf
+                        // (14.10. 07:52: 2x "Nicht genuegend Einheiten").
+                        try {
+                            const cu = (r && r.current_units) || (r && r.response && r.response.current_units);
+                            if (cu && typeof cu === "object" && Object.keys(cu).length) {
+                                const u = {};
+                                Object.keys(cu).forEach(k => { u[k] = parseInt(cu[k], 10) || 0; });
+                                autoKatEinheiten = { vid: String(p.quelle), at: Date.now(), u };
+                                localStorage.setItem("godbot_autokat_einheiten", JSON.stringify(autoKatEinheiten));
+                            }
+                        } catch (e) { }
                         const echt = ok && r && r.success && String(r.target_village) === String(p.ziel.id);
                         if (echt) {
                             gesendet++; fehlerFolge = 0; proArt[p.art]++;
@@ -33236,7 +33248,7 @@ const AUTOKAT_STAND_KEY = "tw_autokat_stand";
 const AUTOKAT_PLAN_ID = "tw-autokat";
 const AUTOKAT_TAKT_MS = [20 * 60000, 40 * 60000];
 const AUTOKAT_KARTE_MAX_ABRUFE = 3;
-const AUTOKAT_BERICHTE_MAX = 5;
+const AUTOKAT_BERICHTE_MAX = 8;
 const AUTOKAT_START_JE_STUFE = 2;   // nur noch Rammen je Wallstufe (gelernt)
 const AUTOKAT_BEGLEIT_EINHEITEN = ["axe", "light", "spear", "sword", "heavy"];
 const AUTOKAT_GEB_NAME = { main: "Hauptgebäude", barracks: "Kaserne" };
@@ -33269,6 +33281,30 @@ function autoKatEinheitenFrisch(vid) {
     return e.u || null;
 }
 
+// v611: Ziele, deren Bericht im Farm-Assistenten steht und gelesen werden
+// kann (neue Berichts-ID, nicht vor unserer Ankunft, letzter Leseversuch
+// mind. 5 Min. her). Diagnose 14.10. 08:11: 14 Ziele hingen stundenlang,
+// weil erst der naechste Takt (20-40 Min.) las - bis dahin war meist ein
+// Farmbericht der neueste.
+function autoKatBerichteBereit(stand, zielStand) {
+    const out = [];
+    const jetzt = serverNowMs();
+    Object.keys((stand && stand.ziele) || {}).forEach(id => {
+        const zs = stand.ziele[id];
+        if (!zs || !zs.warte) return;
+        if (zs.warte.lesenAt && Date.now() - zs.warte.lesenAt < 5 * 60000) return;
+        if (jetzt - zs.warte.ankunft > 3 * 3600000) return;
+        const zst = (zielStand || {})[id] || {};
+        if (zst.bericht && String(zst.bericht) !== String(zs.warte.berichtVorher || "") &&
+            (zst.zeit || 0) >= zs.warte.ankunft - 120000) out.push({ id, bericht: String(zst.bericht) });
+    });
+    return out;
+}
+
+function autoKatZielStand() {
+    try { return JSON.parse(localStorage.getItem(ZIEL_STAND_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+
 // v609: Fahrplan-Pruefung (Job-Takt). Bisher startete der Takt nur ueber
 // einen Zeitgeber nach dem Farm-Lauf - ein Neuladen der Seite (in der App
 // haeufig) liess ihn ausfallen.
@@ -33276,9 +33312,12 @@ function autoKatFaellig() {
     const c = autoKatCfg();
     if (!c.an || autoKatLaeuft) return false;
     const st = autoKatStand();
-    if (st.next && st.next > Date.now()) return false;
     const gd = (typeof game_data !== "undefined") ? game_data : null;
-    return !!(gd && gd.village && autoKatEinheitenFrisch(String(gd.village.id)));
+    if (!gd || !gd.village) return false;
+    // v611: auch faellig, sobald ein Bericht zum Lesen bereitsteht.
+    if (autoKatBerichteBereit(st, autoKatZielStand()).length) return true;
+    if (st.next && st.next > Date.now()) return false;
+    return !!autoKatEinheitenFrisch(String(gd.village.id));
 }
 
 function autoKatCfgSetzen(teil) {
@@ -33334,7 +33373,12 @@ function autoKatJeStufe(stand, geb) {
 function autoKatFarmSperrt(zielId, ankunft) {
     try {
         const z = autoKatStand().ziele[String(zielId)];
-        const a = z && (z.offen ? z.offen.ankunft : (z.warte ? z.warte.ankunft : 0));
+        if (!z) return false;
+        // v611: solange der Bericht noch nicht gelesen ist (hoechstens 3 Std.
+        // nach Ankunft), kommt kein Farmangriff NACH unserem an - sonst
+        // verdraengt dessen Bericht unseren im Farm-Assistenten.
+        if (z.warte) return ankunft >= z.warte.ankunft - 60000 && serverNowMs() - z.warte.ankunft < 3 * 3600000;
+        const a = z.offen ? z.offen.ankunft : 0;
         if (!a) return false;
         const fenster = (godFarmCfg().abstandMin || 15) * 60000;
         return ankunft >= a - 60000 && ankunft <= a + fenster;
@@ -33469,17 +33513,21 @@ function autoKatTakt(fertig) {
     if (!cfg.an || autoKatLaeuft) return false;
     if (isBotProtectionActive() || automationOnHold()) return false;
     const stand = autoKatStand();
-    if (stand.next && stand.next > Date.now()) return false;
     const gd = (typeof game_data !== "undefined") ? game_data : null;
     if (!gd || !gd.village || !gd.village.id) return false;
     const vid = String(gd.village.id);
     const eigen = { x: Number(gd.village.x), y: Number(gd.village.y) };
     const einh = autoKatEinheitenFrisch(vid);
-    if (!einh) return false;   // ohne frische Truppenzahlen nichts planen
+    // v611: Planen nur im eigenen Takt mit frischen Truppenzahlen; Berichte
+    // lesen, sobald sie da sind (dann ohne Karte und ohne Planen).
+    const planenDran = !(stand.next && stand.next > Date.now()) && !!einh;
+    if (!planenDran && !autoKatBerichteBereit(stand, autoKatZielStand()).length) return false;
     if (!acquireProcessLock("godfarm")) return false;
     autoKatLaeuft = true;
-    stand.next = Date.now() + humanDelay(AUTOKAT_TAKT_MS[0], AUTOKAT_TAKT_MS[1]);
-    autoKatStandSpeichern(stand);
+    if (planenDran) {
+        stand.next = Date.now() + humanDelay(AUTOKAT_TAKT_MS[0], AUTOKAT_TAKT_MS[1]);
+        autoKatStandSpeichern(stand);
+    }
     const wachhund = setTimeout(() => { if (autoKatLaeuft) ende("Takt nach 90 s abgebrochen (Wachhund)."); }, 90000);
     const fertigMit = (t) => { clearTimeout(wachhund); ende(t); };
     const meldung = [];
@@ -33528,17 +33576,16 @@ function autoKatTakt(fertig) {
         // Spaeher liefert die Gebaeude. Ob sie VOR oder NACH dem Beschuss
         // gelten, ist nicht belegt: nur eine gesunkene Stufe gilt als
         // Ergebnis, sonst geht ein Spaeher hinterher (unten).
-        const zst = zielStand[id] || {};
-        const neuerBericht = zst.bericht && String(zst.bericht) !== String(zs.warte.berichtVorher || "") &&
-            (zst.zeit || 0) >= zs.warte.ankunft - 120000;
-        if (neuerBericht) { lesen.push({ id, bericht: String(zst.bericht) }); return; }
+        // v611: Zeitgrenze ZUERST - vorher griff sie nie, solange irgendein
+        // neuerer (fremder) Bericht vorlag.
         if (jetzt - zs.warte.ankunft > 3 * 3600000) {
-            meldung.push(`${zs.x}|${zs.y}: Bericht nach 3 Std. nicht im Farm-Assistenten - ` +
+            meldung.push(`${zs.x}|${zs.y}: Bericht nach 3 Std. nicht gelesen - ` +
                 (zs.warte.art === "beschuss" ? "Späher hinterher" : "neuer Versuch"));
             if (zs.warte.art === "beschuss") zs.nachBeschuss = true;
             delete zs.warte;
         }
     });
+    autoKatBerichteBereit(stand, zielStand).forEach(b => lesen.push(b));
 
     const nachBerichten = () => {
         // 3. Punkte der Farmziele (Karte)
@@ -33669,7 +33716,13 @@ function autoKatTakt(fertig) {
     const naechsterBericht = () => {
         if (li >= lesen.length || li >= AUTOKAT_BERICHTE_MAX || isBotProtectionActive()) {
             autoKatStandSpeichern(stand);
-            try { zielStand = JSON.parse(localStorage.getItem(ZIEL_STAND_KEY) || "{}") || {}; } catch (e) { }
+            zielStand = autoKatZielStand();
+            if (!planenDran) {
+                plans[AUTOKAT_PLAN_ID] = plan;
+                saveAttackPlans(plans);
+                fertigMit(`${li} Bericht(e) gelesen` + (meldung.length ? " - " + meldung.join("; ") : "") + ".");
+                return;
+            }
             nachBerichten();
             return;
         }
@@ -33699,12 +33752,15 @@ function autoKatTakt(fertig) {
                 delete zs.warte; delete zs.beschuss;
                 meldung.push(`${zs.x}|${zs.y}: Bericht gelesen - HG ${z.gebaeude.main || "?"}, Kaserne ${z.gebaeude.barracks || 0}, ` +
                     `Wall ${z.gebaeude.wall || 0}` + (gelernt.length ? ` (gelernt: ${gelernt.join("; ")})` : ""));
+            } else if (zs && zs.warte && !doc) {
+                // Abruf fehlgeschlagen: in 5 Min. wieder.
+                zs.warte.lesenAt = Date.now();
             } else if (zs && zs.warte) {
-                zs.warte.versuche = (zs.warte.versuche || 0) + 1;
-                if (zs.warte.versuche >= 2) {
-                    meldung.push(`${zs.x}|${zs.y}: Bericht ${l.bericht} ohne Gebäude (Späher tot?) - neuer Späher`);
-                    delete zs.warte;
-                }
+                // v611: ohne Gebaeude ist es nicht unser Bericht (oder der
+                // Spaeher fiel) - gleich neu spaehen statt zweimal zu lesen.
+                meldung.push(`${zs.x}|${zs.y}: Bericht ${l.bericht} ohne Gebäude - neuer Späher`);
+                if (zs.warte.art === "beschuss") zs.nachBeschuss = true;
+                delete zs.warte;
             }
             setTimeout(naechsterBericht, humanDelay(700, 1800));
         });
