@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      616
+// @version      617
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33228,6 +33228,18 @@ function godFarmLauf(fertig) {
                             // Ankunft neu gerechnet ab dem tatsaechlichen Versand.
                             log[p.ziel.id] = Date.now() + (p.laufzeitMs || 0);
                             try { incrementFarmCounter(p.art === "B" ? "tw_farm_attacks_sent_b" : "tw_farm_attacks_sent_a"); } catch (e) { }
+                            // v617 (Fetteruruk 14.10.: "Farmen angeblich letzte Aktion vor 69h").
+                            // Belegt in godbot_settings: tw_last_farm_send_at stand bei
+                            // FetterOrk de260 auf dem 10.10. 23:27 UTC, tw_farm_attacks_sent
+                            // bei 8 - beides schrieben nur die FarmGod-Wege. GodBot-Farm
+                            // zaehlte nur A/B. Folgen: HUB "Farmen vor .. h", Farm-
+                            // Statistik "letzter" und der App-Aktivitaetszaehler (farm)
+                            // blieben stehen, der Nachfuell-Rueckfall hielt die letzte
+                            // Sendung fuer Stunden alt.
+                            try {
+                                incrementFarmCounter("tw_farm_attacks_sent");
+                                localStorage.setItem("tw_last_farm_send_at", String(Date.now()));
+                            } catch (e) { }
                         } else {
                             fehlerFolge++;
                             let roh = ""; try { roh = JSON.stringify(r).slice(0, 200); } catch (e) { }

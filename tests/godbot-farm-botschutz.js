@@ -31,6 +31,8 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
 (async()=>{
  let x=welt({});let s=await lauf(x.T);
  t('A normaler Lauf: 1 Abruf + Angriffe, kein Botschutz',s&&s.gesendet>0&&!x.T.isBotProtectionActive()&&x.st.abrufe.filter(u=>/am_farm/.test(u)).length===1,JSON.stringify(s));
+ { const ls=x.w.localStorage, la=parseInt(ls.getItem('tw_last_farm_send_at')||'0',10), n=parseInt(ls.getItem('tw_farm_attacks_sent')||'0',10);
+  t('S1 GodBot-Farm setzt tw_last_farm_send_at und tw_farm_attacks_sent (HUB "Farmen vor ..", App-Aktivitaet)',la>0&&Date.now()-la<60000&&n===s.gesendet,JSON.stringify([la,n,s&&s.gesendet])); }
  x=welt({farmHtml:captcha});s=await lauf(x.T);
  t('B Farm-Seite ist Botschutz-Seite: KEIN Angriff, alles angehalten, kein Rueckfall-Zaehler',s&&x.st.posts.length===0&&x.T.isBotProtectionActive()&&x.w.localStorage.getItem('tw_farm_loop_active')===null&&s.fehler===false&&s.fehlLaeufe===0,JSON.stringify([s,x.st.posts.length,x.w.localStorage.getItem('tw_farm_loop_active')]));
  x=welt({villages:'2',combiHtml:captcha});s=await lauf(x.T);
