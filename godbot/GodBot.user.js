@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      611
+// @version      612
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -17258,11 +17258,16 @@ function botMarkerSichtbar() {
             byKey.get(key).push(entry);
         });
 
+        // v612: Eintraege "ohneSekunde" (Auto-Kat) brauchen keine Sollsekunde:
+        // Bestaetigungsseite erst zur Startzeit laden, nach kurzer Lesepause
+        // klicken. Vorher stand jede ~60 s offen (Diagnose 14.10.: 54-59 s),
+        // bis zu 12 gleichzeitig, jede mit laufendem Spiel-Skript.
         const entries = groups.map(group => ({
             group,
             villageKey: String(group[0].attack.villageId),
             startsAtMs: group[0].attack.startsAtMs,
-            preloadMs: ATTACK_PRELOAD_MS
+            preloadMs: group[0].attack.ohneSekunde ? 0 : ATTACK_PRELOAD_MS,
+            ohneSekunde: !!group[0].attack.ohneSekunde
         }));
 
         const byVillage = new Map();
@@ -17277,6 +17282,7 @@ function botMarkerSichtbar() {
         byVillage.forEach(list => {
             let nextLoadStart = Infinity;
             for (let i = list.length - 1; i >= 0; i--) {
+                if (list[i].ohneSekunde) continue;   // v612: nicht staffeln
                 const start = list[i].startsAtMs;
                 const loadStart = Math.min(start, nextLoadStart) - ATTACK_PRELOAD_MS;
                 list[i].preloadMs = Math.min(start - loadStart, maxPreload);
@@ -18965,12 +18971,14 @@ function botMarkerSichtbar() {
                             return;
                         }
                         console.log(`[TW] Angriffsplaner: klicke ${isSupportPlan ? "Unterstützen" : "Angreifen"}-Button für ` + attack.targetPlayer + " um " + new Date().toLocaleTimeString("de-DE"));
-                        logAttackSendDeviation(
-                            `${isSupportPlan ? "Unterstützung" : "Angriff"} auf ${attack.targetPlayer}`,
-                            adjustedTargetMs, confirmReadyAtMs
-                        );
+                        if (!attack.ohneSekunde) {
+                            logAttackSendDeviation(
+                                `${isSupportPlan ? "Unterstützung" : "Angriff"} auf ${attack.targetPlayer}`,
+                                adjustedTargetMs, confirmReadyAtMs
+                            );
+                        }
                         confirmBtn.click();
-                        recordAttackTiming(planId, attack.id, serverOffsetMs, latencyMsForRecord);
+                        if (!attack.ohneSekunde) recordAttackTiming(planId, attack.id, serverOffsetMs, latencyMsForRecord);
                         finish(true, null);
 
                         setTimeout(() => {
@@ -19017,6 +19025,17 @@ function botMarkerSichtbar() {
                 console.log("[TW] Angriffsplaner: Bestätigungsseite bereit für " + attack.targetPlayer + " - warte auf Startzeit " + attack.startsAtLabel + " (lokal angepasst: " + new Date(adjustedTargetMs).toLocaleTimeString("de-DE") + ")");
 
                 markPrepared();
+
+                // v612: ohne Sollsekunde - nach kurzer Lesepause klicken,
+                // keine Latenz, keine Abweichung, keine Zeitmessung.
+                if (attack.ohneSekunde) {
+                    const klickIn = humanDelay(1200, 3500);
+                    console.log(`[TW] Angriffsplaner: ${attack.targetPlayer} ohne Sollsekunde - klicke in ${Math.round(klickIn / 100) / 10} s.`);
+                    schedulePreciseClick(Date.now() + klickIn, fireClick, (e) => {
+                        finish(false, "Fehler beim Klick: " + (e && e.message ? e.message : e));
+                    });
+                    return;
+                }
 
                 measureNetworkLatencyMs(workFrameEl && workFrameEl.contentWindow, (latencyMs) => {
                     latencyMsForRecord = latencyMs;
@@ -33676,6 +33695,7 @@ function autoKatTakt(fertig) {
                         targetBuilding: (ak.geb && p.truppen.catapult) ? AUTOKAT_GEB_NAME[ak.geb] : null,
                         troops: Object.assign({}, p.truppen),
                         topUp: false, topUpUnits: [],
+                        ohneSekunde: true,   // v612: keine Sollsekunde noetig
                         sent: false, sentAt: null, failed: false, failReason: null
                     };
                     plan.attacks.push(eintrag);
