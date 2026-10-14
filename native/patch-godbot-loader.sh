@@ -212,7 +212,12 @@ js = r"""
  // reine Protokolle und werden gross (tw_console_log lag bei 288 KB). Die
  // Volatilitaetsregel greift erst nach fuenf Schreibzugriffen - bis dahin
  // waeren sie laengst hochgeladen.
- var NIE=/^(tw_console_log|tw_debug_log|tw_request_log)$/;
+ // 2.0.72 / GodBot v616: Mitschnitt-Schalter und -Inhalte sind Diagnose
+ // auf DIESEM Geraet. Sie kamen ueber den Abgleich auf jedes Geraet zurueck
+ // (FetterOrk de260 seit 11.10., Ares20 de256 seit 04.10. an), die Ablage
+ // (bis 96 KB) ging bei jeder Aenderung mit hoch. Inhalte gehen weiter
+ // ueber godbot_ablage, nicht ueber godbot_settings.
+ var NIE=/^(tw_console_log|tw_debug_log|tw_request_log|tw_console_log_enabled|tw_page_capture_enabled|tw_page_capture_store|tw_am_mitschnitt|tw_am_mitschnitt_daten|tw_mitschnitt_seit)$/;
  // Geraetegebundene Laufzeitwerte: die Uhrabweichung gilt nur fuer DIESES
  // Geraet, die Zwischenspeicher sind nach Minuten veraltet. Sie wurden bei
  // jedem Seitenaufbau hochgeladen ("gesichert: tw_server_offset_samples,

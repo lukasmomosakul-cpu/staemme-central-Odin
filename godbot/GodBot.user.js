@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      615
+// @version      616
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -1392,8 +1392,41 @@
     function setPageCaptureEnabled(on) {
         try {
             localStorage.setItem(PAGE_CAPTURE_ENABLED_KEY, on ? "1" : "0");
+            // v616: Startzeit merken - der Mitschnitt endet nach 2 Std. selbst.
+            if (on) localStorage.setItem(MITSCHNITT_SEIT_KEY, String(Date.now()));
+            else localStorage.removeItem(MITSCHNITT_SEIT_KEY);
         } catch (e) {
             console.warn("[TW] Quelltext-Mitschnitt: Einstellung nicht speicherbar.", e);
+        }
+    }
+
+    // v616 (Fetteruruk 14.10.: "entferne die dauernden Seitenmitschnitte").
+    // Belegt in godbot_settings: tw_page_capture_enabled und tw_am_mitschnitt
+    // standen bei FetterOrk de260 seit 11.10., bei Ares20 de256 seit 04.10.
+    // auf "1" - eingeschaltet fuer eine Fehlersuche, nie wieder aus, und
+    // ueber den Abgleich auf jedes Geraet des Kontos zurueckgespielt.
+    // Jetzt: Seitenquelltext- und Formular-Mitschnitt enden 2 Std. nach dem
+    // Einschalten von selbst. Ohne Startzeit (alter Stand) gelten sie als
+    // abgelaufen und gehen sofort aus. Das Konsolenprotokoll bleibt wie
+    // bisher (Vorgabe an, Ringpuffer 300 KB, Grundlage des App-Protokolls).
+    const MITSCHNITT_SEIT_KEY = "tw_mitschnitt_seit";
+    const MITSCHNITT_DAUER_MS = 2 * 60 * 60 * 1000;
+
+    function mitschnittAblaufPruefen() {
+        try {
+            const seite = pageCaptureEnabled();
+            const formular = amMitschnittAn();
+            if (!seite && !formular) return false;
+            const seit = parseInt(localStorage.getItem(MITSCHNITT_SEIT_KEY) || "0", 10) || 0;
+            if (seit && Date.now() - seit < MITSCHNITT_DAUER_MS) return false;
+            setPageCaptureEnabled(false);
+            localStorage.setItem(AM_MITSCHNITT_KEY, "0");
+            console.log(`[TW] Mitschnitt beendet (${seit ? "2 Std. abgelaufen" : "ohne Startzeit, alter Stand"}) - ` +
+                `Seitenquelltexte ${seite ? "aus" : "war aus"}, Formular-Mitschnitt ${formular ? "aus" : "war aus"}.`);
+            return true;
+        } catch (e) {
+            console.warn("[TW] Mitschnitt: Ablauf nicht pruefbar.", e);
+            return false;
         }
     }
 
@@ -1461,6 +1494,7 @@
     // quelle darf ein Dokument, ein Element oder fertiges HTML sein.
     function capturePageSource(kind, quelle, notiz, urlHint) {
         if (!pageCaptureEnabled()) return false;
+        if (mitschnittAblaufPruefen()) return false;   // v616
 
         const list = loadPageCaptures();
         if (list.some(c => c.kind === kind)) return false;
@@ -37771,8 +37805,10 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
         // "Laeuft" heiszt: mindestens einer der drei ist an. Bewusst ODER
         // und nicht UND - sonst zeigt der Knopf "starten", waehrend noch
         // ein Mitschnitt aus einer alten Sitzung Speicher vollschreibt.
-        const aufzLaeuft = () =>
-            consoleLogEnabled() || pageCaptureEnabled() || amMitschnittAn();
+        const aufzLaeuft = () => {
+            try { mitschnittAblaufPruefen(); } catch (e) { }   // v616
+            return consoleLogEnabled() || pageCaptureEnabled() || amMitschnittAn();
+        };
 
         const aufzSetzen = (an) => {
             setConsoleLogEnabled(an);
@@ -50438,6 +50474,7 @@ function amMitschnittQuest(url) {
 
 function amMitschnittErfassen(methode, url) {
     if (!amMitschnittAn()) return false;
+    if (mitschnittAblaufPruefen()) return false;   // v616
     if (amMitschnittQuest(url)) return true;
     return String(methode || "").toUpperCase() === "POST" && amMitschnittBetrifft(url);
 }
@@ -50639,6 +50676,7 @@ function amMitschnittEinhaengen() {
 function toggleAmMitschnitt() {
     const an = !amMitschnittAn();
     localStorage.setItem(AM_MITSCHNITT_KEY, an ? "1" : "0");
+    try { if (an) localStorage.setItem(MITSCHNITT_SEIT_KEY, String(Date.now())); } catch (e) { }   // v616
     if (an) amMitschnittEinhaengen();
     console.log(`[TW] Formular-Mitschnitt ${an ? "an" : "aus"}.`);
     return an;
@@ -53065,6 +53103,9 @@ function belohnungListeAusDialog(html) {
 const BELOHNUNG_ROH_MAX = 300000;
 
 function belohnungRohSichern(kind, url, status, txt, notiz) {
+    // v616: nicht mehr "auch wenn der Mitschnitt aus ist" - der Befund
+    // steht ohnehin mit Zahlen im App-Protokoll.
+    if (!pageCaptureEnabled() || mitschnittAblaufPruefen()) return false;
     try {
         const list = loadPageCaptures().filter(c => c && c.kind !== kind);
         let html = String(txt || "");
@@ -53438,8 +53479,9 @@ function belohnungDauerlauf() {
     belohnungListeHolen(villageId, (r) => {
         if (!r.ok) {
             if (r.botschutz) { haltAllAutomation("belohnung:liste"); ende("", 0); return; }
-            ende(`Liste nicht lesbar - ${r.grund}. Nächster Versuch in 6 Std. ` +
-                `Rohantworten liegen im Seitenmitschnitt.`, BELOHNUNG_RUHE_FEHLER_MS, true, true);
+            ende(`Liste nicht lesbar - ${r.grund}. Nächster Versuch in 6 Std.` +
+                (pageCaptureEnabled() ? " Rohantworten liegen im Seitenmitschnitt." : ""),
+                BELOHNUNG_RUHE_FEHLER_MS, true, true);
             return;
         }
         if (r.weg === "Questseite") {
@@ -59822,6 +59864,7 @@ function runFarmAutomation() {
             }
         } catch (e) { }
         console.log(`[TW] GodBot v${godbotVersion} geladen.`);
+        try { mitschnittAblaufPruefen(); } catch (e) { }   // v616
         try { if (amMitschnittAn()) amMitschnittEinhaengen(); } catch (e) {
             console.warn("[TW] Mitschnitt beim Start nicht einhaengbar.", e);
         }
