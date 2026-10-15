@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      617
+// @version      618
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -32389,7 +32389,11 @@ function godFarmModus() {
     let c = {};
     try { c = JSON.parse(localStorage.getItem(GODFARM_CFG_KEY) || "{}") || {}; } catch (e) { c = {}; }
     if (c.modus === "godbot" || c.modus === "farmgod") return c.modus;
-    return c.an === true ? "godbot" : "farmgod";
+    // v618 (Fetteruruk 15.10.: "insgesamt auf den neuen Bot umstellen"):
+    // GodBot-Farm ist die Vorgabe fuer jedes Konto ohne eigene Wahl.
+    // FarmGod bleibt waehlbar und ist der Rueckfall nach 3 Fehllaeufen
+    // (setzt modus "farmgod" ausdruecklich, wird hier also nicht ueberstimmt).
+    return "godbot";
 }
 
 function farmNaechsterKey() {
@@ -33958,8 +33962,8 @@ function godFarmUiHtml() {
                 <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                     <b>Farmmethode</b>
                     <select id="tw-godfarm-modus" style="background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;">
-                        <option value="farmgod" ${c.modus === "farmgod" ? "selected" : ""}>FarmGod</option>
-                        <option value="godbot" ${c.modus === "godbot" ? "selected" : ""}>GodBot-Farm (Test)</option>
+                        <option value="godbot" ${c.modus === "godbot" ? "selected" : ""}>GodBot-Farm</option>
+                        <option value="farmgod" ${c.modus === "farmgod" ? "selected" : ""}>FarmGod (alt, Rückfall)</option>
                     </select>
                 </label>
                 <div style="font-size:11px;color:#999;margin:3px 0 6px;">Ein/aus über den Farmen-Knopf (lange drücken). Es farmt immer nur die gewählte Methode, nur für dieses Konto.</div>
@@ -65051,9 +65055,96 @@ if (location.href.includes("mode=scavenge_mass")) {
         </div>`;
     }
 
+    // v618 (Fetteruruk 15.10., Bildschirmfoto: "Plan 4685 min alt" bei
+    // laufendem GodBot-Farm): Das Fenster zeigte nur den FarmGod-Plan
+    // (tw_farmgod_plan), den GodBot-Farm nie schreibt. Im GodBot-Modus
+    // zeigt es jetzt die eigenen Daten - alles aus localStorage, kein Abruf:
+    //   Unterwegs: tw_godfarm_ankunft (Ziel -> Ankunft), Koordinaten aus
+    //              tw_farm_gebiet (beim Versand gemerkt)
+    //   Statistik: tw_godfarm_stand, tw_next_godfarm_at, Zaehler
+    function godFarmFensterZeilen() {
+        const log = godFarmLog();
+        const gebiet = farmGebietLaden().z || {};
+        const jetzt = Date.now();
+        return Object.keys(log)
+            .filter(id => log[id] > jetzt)
+            .map(id => ({ id, at: log[id], k: gebiet[id] ? gebiet[id][0] + "|" + gebiet[id][1] : "#" + id }))
+            .sort((a, b) => a.at - b.at);
+    }
+
+    function godFarmFensterUnterwegsHtml(zeilen) {
+        if (!zeilen.length) return `<div style="color:#667;padding:8px;font-size:11px;">
+            Gerade kein GodBot-Farm-Angriff unterwegs.</div>`;
+        return `<div style="padding:4px 7px;">` + zeilen.map(z => `
+            <div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;font-size:10px;">
+                <span style="color:#c9d4e3;">${escapeAttackPlanHtml(z.k)}</span>
+                <span style="color:#8a93a3;flex:0 0 auto;">Ankunft ${new Date(z.at).toLocaleTimeString("de-DE")}</span>
+            </div>`).join("") + `</div>`;
+    }
+
+    function godFarmFensterStatsHtml(zeilen) {
+        const zeile = (name, wert) => `
+            <div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:11px;">
+                <span style="color:#8fa8c7;">${name}</span>
+                <span style="font-weight:bold;color:#d9e6f2;text-align:right;">${wert}</span>
+            </div>`;
+        const z = (key) => parseInt(localStorage.getItem(key) || "0", 10) || 0;
+        const c = godFarmCfg();
+        const st = godFarmStand();
+        const next = z(GODFARM_NEXT_KEY);
+        const letzterTs = z("tw_last_farm_send_at");
+        const sentA = z("tw_farm_attacks_sent_a"), sentB = z("tw_farm_attacks_sent_b");
+        return `<div style="padding:6px 8px;">
+            ${zeile("Farmmethode", "GodBot-Farm")}
+            ${zeile("Farmen läuft", localStorage.getItem("tw_farm_loop_active") === "1" ? "ja" : "nein")}
+            ${zeile("Lauf alle", `${c.laufMin}\u2013${c.laufMax} Min.`)}
+            ${zeile("Abstand je Dorf", `${c.abstandMin} Min. · max. ${c.maxFelder} Felder`)}
+            ${zeile("Nächster Lauf", next > Date.now() ? new Date(next).toLocaleTimeString("de-DE") : "fällig")}
+            ${zeile("Letzter Versand", letzterTs ? new Date(letzterTs).toLocaleString("de-DE") : "nie")}
+            ${zeile("Unterwegs", zeilen.length)}
+            <div style="height:1px;background:#243147;margin:6px 0;"></div>
+            <div style="color:#8fa8c7;font-size:10px;margin-bottom:2px;">Letzter Lauf${st && st.at ? " · " + new Date(st.at).toLocaleTimeString("de-DE") : ""}</div>
+            <div style="font-size:10px;color:#c9d4e3;line-height:1.45;">${st && st.text ? escapeAttackPlanHtml(String(st.text)) : "noch kein Lauf"}</div>
+            <div style="height:1px;background:#243147;margin:6px 0;"></div>
+            <div style="color:#8fa8c7;font-size:10px;margin-bottom:2px;">Seit dem letzten Zurücksetzen</div>
+            ${zeile("Angriffe gesendet", z("tw_farm_attacks_sent").toLocaleString("de-DE"))}
+            ${zeile("davon Vorlage A / B", `${sentA} / ${sentB}`)}
+            <div style="display:flex;justify-content:space-between;gap:8px;
+                        align-items:baseline;padding:3px 0;font-size:10px;">
+                <span style="color:#667;">Zurückgesetzt: ${farmStatsSinceLabel()}</span>
+                <a href="#" id="tw-farm-plan-reset" style="color:#8fd4a0;flex:0 0 auto;">Zurücksetzen</a>
+            </div>
+        </div>`;
+    }
+
     function renderFarmPlanWindow() {
         const root = document.getElementById("tw-farm-plan");
         if (!root) return;
+        let godbotModus = false;
+        try { godbotModus = godFarmModus() === "godbot"; } catch (e) { godbotModus = false; }
+        if (godbotModus) {
+            const bodyG = root.querySelector("#tw-farm-plan-body");
+            const leisteG = root.querySelector("#tw-farm-plan-tabs");
+            const zaehlerG = root.querySelector("#tw-farm-plan-count");
+            const statusG = root.querySelector("#tw-farm-plan-status");
+            if (!bodyG) return;
+            if (statusG) twSetHtmlIfChanged(statusG, twModulStatusHtml("farm"));
+            const zeilen = godFarmFensterZeilen();
+            if (farmPlanActiveTab === "plan") farmPlanActiveTab = "unterwegs";
+            if (leisteG) twSetHtmlIfChanged(leisteG, twTabBarHtml([
+                ["unterwegs", "Unterwegs" + twTabCount(zeilen.length)],
+                ["stats", "Statistik"]
+            ], farmPlanActiveTab, "tw-farmplan-tab", TW_MODUL_FARBEN.farm));
+            const st = godFarmStand();
+            const alterG = st && st.at ? Math.round((Date.now() - st.at) / 60000) : null;
+            if (zaehlerG) twSetHtmlIfChanged(zaehlerG, "GodBot-Farm · " + (alterG === null ? "noch kein Lauf"
+                : "letzter Lauf " + (alterG < 1 ? "gerade eben" : "vor " + alterG + " min")));
+            twSetHtmlIfChanged(bodyG, farmPlanActiveTab === "stats"
+                ? godFarmFensterStatsHtml(zeilen) : godFarmFensterUnterwegsHtml(zeilen));
+            twCountdownRefresh(root);
+            return;
+        }
+        if (farmPlanActiveTab === "unterwegs") farmPlanActiveTab = "plan";
 
         const body = root.querySelector("#tw-farm-plan-body");
         const leiste = root.querySelector("#tw-farm-plan-tabs");
