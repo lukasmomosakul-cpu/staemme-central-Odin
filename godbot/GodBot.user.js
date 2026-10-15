@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      618
+// @version      619
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -36090,6 +36090,12 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
 
             farmRestartTriggered = true;
             localStorage.removeItem("tw_farm_restart_scheduled");
+            // v619 (BlinkyBillyBoy de260, 15.10. 06:47): Dieser Weg setzte den
+            // Startmerker nie - nur Planer und Farm-Knopf taten das. Nach dem
+            // Seitenaufbau (06:47:29, Sperre freigegeben) war der Merker darum
+            // alt, und 6 s spaeter startete ein ZWEITER Lauf (06:47:34), der
+            // auf "Plan farms" wartete und die Schleife abschaltete.
+            markFarmRunStarted();
 
             console.log("[TW] Farmen: faelliger Neustart erkannt - starte FarmGod erneut.");
             ensureFarmValue(() => {
@@ -58762,6 +58768,10 @@ function randomFarmGodBurstDuration() {
 // verlaesst sich darauf, dass gesendete Zeilen verschwinden.
 const FARM_SEND_MAX_FEHLER = 3;
 let farmSendFehlerFolge = 0;
+// v619: Server-Tempogrenze ("maximal 5 Angriffe pro Sekunde") ist kein
+// Fehler des Ziels - kurz bremsen statt mitzaehlen und abzubrechen.
+let farmTempoBremseBis = 0;
+const FARM_TEMPO_GRENZE_RE = /maximal\s+\d+\s+Angriffe\s+pro\s+Sekunde/i;
 
 // Seit GodBot selbst absendet, bewegt sich FarmGods Fortschrittsanzeige
 // nicht mehr: sie wird in FarmGods eigenem Erfolgs-Rueckruf gepflegt, den
@@ -58789,7 +58799,9 @@ function resetFarmRunCounters() {
 let farmLastSendStartMs = 0;
 
 function farmSendPause() {
-    const ziel = humanDelay(200, 300);
+    // v619: 300-500 ms statt 200-300 ms. Der Server erlaubt hoechstens 5
+    // Angriffe je Sekunde (14.10. 19:33 abgelehnt, Schleife gestoppt).
+    const ziel = humanDelay(300, 500) + Math.max(0, farmTempoBremseBis - Date.now());
     if (!farmLastSendStartMs) return ziel;
     const seit = Date.now() - farmLastSendStartMs;
     return Math.max(0, ziel - seit);
@@ -58918,6 +58930,15 @@ function sendFarmRowDirect(onDone) {
                 let gesperrt = false;
                 try { gesperrt = versandAntwortBotschutz(r, "farmgod"); } catch (e) { }
                 if (gesperrt) { einmal("botschutz", "Botschutz-Kennung in der Antwort"); return; }
+                let rohText = "";
+                try { rohText = typeof r === "string" ? r : JSON.stringify(r); } catch (e) { rohText = String(r); }
+                if (FARM_TEMPO_GRENZE_RE.test(rohText)) {
+                    farmTempoBremseBis = Date.now() + humanDelay(1500, 2500);
+                    console.warn(`[TW] Farm-Versand: Tempogrenze des Servers (Dorf ${origin} -> Ziel ${target}) - ` +
+                        "bremse kurz, zaehlt nicht als Fehler.");
+                    einmal("leer", "");
+                    return;
+                }
                 farmSendFehlerFolge++;
                 // 01.09.2026: "ohne Angabe" war eine Sackgasse. Am 01.09.
                 // um 13:37:47 haben drei Ablehnungen in Folge - alle aus
@@ -59224,6 +59245,7 @@ function finishFarmGodRun(progress, debugInfo) {
         (abweichend ? ` (FarmGod-Anzeige: ${balken})` : "");
 
     console.log(`[TW] FarmGod-Durchlauf beendet: ${bilanz}.`);
+    try { localStorage.removeItem(FARMGOD_FEHLSTART_KEY); } catch (e) { }   // v619
     showToast(`FarmGod-Durchlauf beendet (${bilanz}).`, "ok");
 
     const totalLoops = incrementFarmCounter("tw_farm_loop_count");
@@ -59625,7 +59647,31 @@ function patchFarmGodForSpeed(win) {
 // Hier laeuft jeder dieser Faelle zusammen: Sperre freigeben, Farm-Kontext
 // schliessen, sichtbar melden - und die Dauerschleife stoppen, weil ein
 // erneuter Anlauf denselben Fehler wiederholen wuerde.
+// v619 (Fetteruruk 15.10.: "warum bricht Farmen immer wieder ab?"): Ein
+// Fehlstart stoppte bisher sofort die ganze Farm-Schleife (15.10. 06:47:57,
+// 14.10. 19:33:24). Jetzt:
+//  - "Plan farms" fehlt, aber binnen 90 s wurde gesendet -> ein paralleler
+//    Lauf hat den Plan schon abgearbeitet. Kein Fehler, nichts anfassen.
+//  - sonst bis zu 2 Fehlstarts in Folge: Lauf beenden, in 5 Min. neu.
+//  - erst der 3. Fehlstart in Folge stoppt die Schleife wie bisher.
+// Ein fertiger Durchlauf (finishFarmGodRun) setzt die Folge zurueck.
+const FARMGOD_FEHLSTART_KEY = "tw_farmgod_fehlstart_folge";
+
 function abortFarmGodStart(grund, hinweis) {
+    if (grund === "FarmGod meldet sich nicht" && lastFarmSendAgoMs() < 90 * 1000) {
+        console.log(`[TW] Farmen: zweiter Start fand keinen "Plan farms" - der parallele Lauf hat ` +
+            `vor ${Math.round(lastFarmSendAgoMs() / 1000)}s gesendet. Kein Fehler, Schleife bleibt an.`);
+        try { clearJobProgress("farm"); } catch (e) { }
+        try {
+            if (localStorage.getItem("tw_farm_loop_active") === "1" &&
+                localStorage.getItem("tw_farm_restart_scheduled") !== "1") {
+                localStorage.setItem("tw_farm_restart_scheduled", "1");
+                const n = parseInt(localStorage.getItem("tw_next_farm_burst_at") || "0", 10) || 0;
+                if (n < Date.now() + 60 * 1000) localStorage.setItem("tw_next_farm_burst_at", String(Date.now() + humanDelay(8, 14) * 60 * 1000));
+            }
+        } catch (e) { }
+        return;
+    }
     // Lief kurz zuvor eine Botschutz-Abschaltung, ist SIE der Grund und
     // nicht das, was die Warteschleife vermutet. 60 Sekunden decken die
     // laengste Wartezeit (20s "Plan farms" plus Anlauf) ab.
@@ -59650,12 +59696,28 @@ function abortFarmGodStart(grund, hinweis) {
         );
     } catch (e) { }
 
+    // Bis zum 3. Fehlstart in Folge: neu ansetzen statt stoppen.
+    let folge = 0;
+    try { folge = (parseInt(localStorage.getItem(FARMGOD_FEHLSTART_KEY) || "0", 10) || 0) + 1; } catch (e) { folge = 1; }
+    try { localStorage.setItem(FARMGOD_FEHLSTART_KEY, String(folge)); } catch (e) { }
+    if (folge < 3 && localStorage.getItem("tw_farm_loop_active") === "1") {
+        try { releaseProcessLock("farm"); } catch (e) { }
+        finishFarmContext(grund);
+        try {
+            localStorage.setItem("tw_farm_restart_scheduled", "1");
+            localStorage.setItem("tw_next_farm_burst_at", String(Date.now() + humanDelay(4, 6) * 60 * 1000));
+        } catch (e) { }
+        console.warn(`[TW] Farmen: Fehlstart ${folge}/3 - neuer Versuch in ca. 5 Min., Schleife bleibt an.`);
+        return;
+    }
+    try { localStorage.removeItem(FARMGOD_FEHLSTART_KEY); } catch (e) { }
+
     // Die Schleife wird gestoppt: liefe sie weiter, wuerde derselbe
     // Fehlschlag im Takt wiederholt - mit Seitenabrufen ohne Gegenwert.
     try {
         if (localStorage.getItem("tw_farm_loop_active") === "1") {
             localStorage.removeItem("tw_farm_loop_active");
-            console.warn("[TW] Farm-Schleife gestoppt - erst nach Behebung neu starten.");
+            console.warn("[TW] Farm-Schleife gestoppt (3 Fehlstarts in Folge) - erst nach Behebung neu starten.");
         }
     } catch (e) { }
 
