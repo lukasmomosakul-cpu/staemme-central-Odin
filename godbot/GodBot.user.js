@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      619
+// @version      620
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -60,8 +60,38 @@
         // 06:00 - "Aufräumen seit 25/38/33 Min überfällig").
     };
     const odinGemeldet = {};
+    // v620 (FetterOrk de260, 15.10.): Angriffsplaner-Eintraege - darunter alle
+    // Auto-Kat-Spaeher und -Beschuesse - hatten KEINEN Wecktermin. Lag die
+    // Ansicht gedrosselt im Hintergrund, liefen sie ab: 08:03-08:07,
+    // 08:29-08:42 und 13:33-13:37 je "verpasst (3-13 min zu spaet)", 7 Auto-Kat-
+    // Ziele bekamen dafuer 2 Std. Pause. Jetzt geht der naechste offene Abflug
+    // als Termin an die App, 90 s Vorlauf (Bestaetigungsseite braucht ~60 s).
+    function odinNaechsterPlanAbflug() {
+        let plans = {};
+        try { plans = JSON.parse(localStorage.getItem("tw_attack_plans") || "{}") || {}; } catch (e) { return 0; }
+        let versatz = 0;
+        try { versatz = serverNowMs() - Date.now(); } catch (e) { versatz = 0; }
+        const jetzt = Date.now();
+        let best = 0;
+        Object.keys(plans).forEach(id => {
+            const p = plans[id];
+            (p && Array.isArray(p.attacks) ? p.attacks : []).forEach(a => {
+                if (!a || a.removed || a.sent || a.failed || !a.startsAtMs) return;
+                const lokal = a.startsAtMs - versatz - 90 * 1000;
+                if (lokal > jetzt && (!best || lokal < best)) best = lokal;
+            });
+        });
+        return Math.round(best);
+    }
     function odinTermineMelden() {
         if (!odin.istApp) return;
+        try {
+            const ms = odinNaechsterPlanAbflug();
+            if (ms !== odinGemeldet.tw_next_attack_plan_at) {
+                odinGemeldet.tw_next_attack_plan_at = ms;
+                odin.termin("tw_next_attack_plan_at", "Angriffsplaner", ms);
+            }
+        } catch (e) { }
         for (const k in ODIN_TERMINE) {
             let ms = 0;
             try {
@@ -33580,13 +33610,21 @@ function autoKatLernen(stand, zs, neu) {
     if (b.pakete && b.geb && b.kats && b.vorher && typeof b.vorher[b.geb] === "number" && typeof neu[b.geb] === "number") {
         const gefallen = b.vorher[b.geb] - neu[b.geb];
         const geplant = b.geplant || 0;
-        if (!stand.faktor) stand.faktor = {};
-        const f = autoKatFaktor(stand, b.geb);
-        let nf = f;
-        if (gefallen < geplant) nf = Math.min(3, Math.round((f + 0.25) * 100) / 100);
-        else if (f > 1) nf = Math.max(1, Math.round((f - 0.1) * 100) / 100);
-        stand.faktor[b.geb] = nf;
-        out.push(`${b.geb}: ${b.kats} Kat. → ${gefallen} von ${geplant} Stufe(n), Faktor ${nf}`);
+        // v620 (15.10. 17:42, 561|558: "barracks: 3 Kat. -> -2 von 1 Stufe(n),
+        // Faktor 1.5"): Das Gebaeude war hoeher als vor dem Beschuss - der
+        // Besitzer hat ausgebaut. Daraus ist nichts ueber die Katapulte zu
+        // lernen; bisher stieg der Faktor fuer ALLE kuenftigen Ziele.
+        if (gefallen < 0) {
+            out.push(`${b.geb}: ${b.vorher[b.geb]}→${neu[b.geb]} - ausgebaut, nicht gelernt`);
+        } else {
+            if (!stand.faktor) stand.faktor = {};
+            const f = autoKatFaktor(stand, b.geb);
+            let nf = f;
+            if (gefallen < geplant) nf = Math.min(3, Math.round((f + 0.25) * 100) / 100);
+            else if (f > 1) nf = Math.max(1, Math.round((f - 0.1) * 100) / 100);
+            stand.faktor[b.geb] = nf;
+            out.push(`${b.geb}: ${b.kats} Kat. → ${gefallen} von ${geplant} Stufe(n), Faktor ${nf}`);
+        }
     }
     if (b.rammen && b.vorher && typeof b.vorher.wall === "number" && typeof neu.wall === "number") {
         const gefallen = b.vorher.wall - neu.wall;
