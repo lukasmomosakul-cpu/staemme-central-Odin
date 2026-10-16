@@ -24,32 +24,6 @@ export function KontoKurz({ bild }: { bild: KontoBild }) {
   return <span className="dashKurz">{zahl(s.points)} P.{s.rank ? ` · Rang ${zahl(s.rank)}` : ''}</span>;
 }
 
-export function TeamKennzahlen({ bilder, kontenGesamt, geraeteAktiv }:
-  { bilder: KontoBild[]; kontenGesamt: number; geraeteAktiv: number }) {
-  const arbeitet = bilder.filter(b => b.zustand === 'arbeitet').length;
-  const botschutz = bilder.filter(b => b.zustand === 'botschutz').length;
-  const punkte = bilder.reduce((s, b) => s + (b.stats?.points ?? 0), 0);
-  const beute = bilder.reduce((s, b) => s + (b.stats?.loot_res ?? 0), 0);
-  const doerfer = bilder.reduce((s, b) => s + b.doerfer.length, 0);
-  const kacheln: { titel: string; wert: string; zusatz: string; ton?: string }[] = [
-    { titel: 'GodBot aktiv', wert: `${arbeitet} / ${kontenGesamt}`, zusatz: `${geraeteAktiv} Gerät(e) verbunden` },
-    { titel: 'Botschutz', wert: botschutz ? String(botschutz) : 'keiner', zusatz: botschutz ? 'Konto/Konten gesperrt' : 'alle Konten frei', ton: botschutz ? 'rot' : 'gruen' },
-    { titel: 'Punkte', wert: zahl(punkte), zusatz: `${doerfer} Dorf/Dörfer` },
-    { titel: 'Erfarmt', wert: zahl(beute), zusatz: 'Rohstoffe laut Rangliste' },
-  ];
-  return (
-    <section className="dashKpis" aria-label="Team-Kennzahlen">
-      {kacheln.map(k => (
-        <div key={k.titel} className={`dashKpi ${k.ton ?? ''}`}>
-          <div className="dashKpiTitel">{k.titel}</div>
-          <div className="dashKpiWert">{k.wert}</div>
-          <div className="dashKpiZusatz">{k.zusatz}</div>
-        </div>
-      ))}
-    </section>
-  );
-}
-
 const ART: Record<string, string> = { botschutz: 'Botschutz', attack: 'Angriff', farm: 'Farmen', bau: 'Bau',
   truppen: 'Truppen', raubzug: 'Raubzug', support: 'Unterstützung', rohstoffe: 'Rohstoffe' };
 const artText = (a: string) => ART[a] ?? (a ? a[0].toUpperCase() + a.slice(1) : '');

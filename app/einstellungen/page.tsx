@@ -10,12 +10,14 @@ type Nb = {
   angriffe_gebuendelt: boolean;
   botschutz_an: boolean; botschutz_vibration_sek: number; botschutz_wecker_min: number;
   botschutz_team_min: number; befehle_warnung_an: boolean; befehle_vorlauf_min: number;
+  nacht_von: number; nacht_bis: number;
 };
 const NB_STANDARD: Nb = {
   vorwarnung_an: true, vorwarnung_min: 3,
   angriffe_gebuendelt: true,
-  botschutz_an: true, botschutz_vibration_sek: 60, botschutz_wecker_min: 10,
+  botschutz_an: true, botschutz_vibration_sek: 600, botschutz_wecker_min: 90,
   botschutz_team_min: 3, befehle_warnung_an: true, befehle_vorlauf_min: 3,
+  nacht_von: 23, nacht_bis: 6,
 };
 
 export default function EinstellungenSeite() {
@@ -64,7 +66,7 @@ export default function EinstellungenSeite() {
       return;
     }
     br.testBotschutz();
-    setTestMeldung('Ausgelöst. Sperr das Gerät: Vibration kommt binnen 30 Sekunden, '
+    setTestMeldung('Ausgelöst. Sperr das Gerät: die erste Meldung kommt binnen 30 Sekunden, '
       + `der Wecker nach ${nb.botschutz_wecker_min} Minuten. Ende, sobald du wieder hier bist.`);
   };
 
@@ -184,16 +186,25 @@ export default function EinstellungenSeite() {
           <span>Botschutz: vibrieren und wecken</span>
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 26 }}>
-          <span>Vibration alle</span>
-          <input type="number" min={10} max={3600} value={nb.botschutz_vibration_sek} style={{ width: 80 }}
-                 onChange={e => nbSetzen({ botschutz_vibration_sek: Number(e.target.value) || 60 })} />
-          <span className="muted">Sekunden</span>
+          <span>Meldung alle</span>
+          <input type="number" min={1} max={60} value={Math.round(nb.botschutz_vibration_sek / 60)} style={{ width: 80 }}
+                 onChange={e => nbSetzen({ botschutz_vibration_sek: Math.max(1, Number(e.target.value) || 10) * 60 })} />
+          <span className="muted">Minuten (mit Vibration)</span>
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 26 }}>
           <span>Wecker nach</span>
-          <input type="number" min={1} max={120} value={nb.botschutz_wecker_min} style={{ width: 80 }}
-                 onChange={e => nbSetzen({ botschutz_wecker_min: Number(e.target.value) || 10 })} />
+          <input type="number" min={1} max={240} value={nb.botschutz_wecker_min} style={{ width: 80 }}
+                 onChange={e => nbSetzen({ botschutz_wecker_min: Number(e.target.value) || 90 })} />
           <span className="muted">Minuten</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 26 }}>
+          <span>Nachtruhe</span>
+          <input type="number" min={0} max={23} value={nb.nacht_von} style={{ width: 60 }}
+                 onChange={e => nbSetzen({ nacht_von: Math.max(0, Math.min(23, Number(e.target.value) || 0)) })} />
+          <span>bis</span>
+          <input type="number" min={0} max={23} value={nb.nacht_bis} style={{ width: 60 }}
+                 onChange={e => nbSetzen({ nacht_bis: Math.max(0, Math.min(23, Number(e.target.value) || 0)) })} />
+          <span className="muted">Uhr: kein Wecker, Meldung nur alle 30 Min</span>
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 26 }}>
           <span>Andere Geräte melden nach</span>

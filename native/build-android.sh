@@ -1070,7 +1070,16 @@ public class OdinService extends Service {
     botschutzBeenden("Konto "+kontoBez(botschutzFremdKonto)+" im Vordergrund"); return; } }catch(Exception ignored){}
   }
   if(botschutzGesehenAm>botschutzSeit){ botschutzBeenden("quittiert"); return; }
-  if(jetzt-botschutzLetzteVib>=nbBotVibSek*1000L){
+  boolean nacht=istNachtruhe(jetzt);
+  // Nachtruhe: ein laufender Wecker verstummt; nach Ende der Nachtruhe
+  // startet er neu, falls der Botschutz dann noch steht.
+  if(nacht&&botschutzKlang!=null){
+   try{ if(botschutzKlang.isPlaying())botschutzKlang.stop(); }catch(Exception ignored){}
+   botschutzKlang=null;
+   protokoll(this,"WICHTIG","botschutz","Wecker in der Nachtruhe angehalten");
+  }
+  long abstand=nacht?NACHT_ABSTAND_MS:nbBotVibSek*1000L;
+  if(jetzt-botschutzLetzteVib>=abstand){
    botschutzLetzteVib=jetzt;
    try{
     android.os.Vibrator v=(android.os.Vibrator)getSystemService(Context.VIBRATOR_SERVICE);
@@ -1078,12 +1087,13 @@ public class OdinService extends Service {
      v.vibrate(android.os.VibrationEffect.createWaveform(new long[]{0,400,200,400},-1));
    }catch(Exception ignored){}
    long minuten=(jetzt-botschutzSeit)/60000L;
-   zeigeFest(ID_BOTSCHUTZ,CH_ALERT,botschutzKlang!=null?"Botschutz aktiv - Wecker läuft":"Botschutz aktiv",
+   zeigeFest(ID_BOTSCHUTZ,CH_ALERT,botschutzKlang!=null?"Botschutz aktiv - Wecker läuft"
+       :nacht?"Botschutz aktiv (Nachtruhe, kein Wecker bis "+nbNachtBis+" Uhr)":"Botschutz aktiv",
      botschutzText+" · seit "+minuten+" Min",true,true);
   }
   // Nach der eingestellten Zeit der Wecker - im Alarmkanal, damit er auch
   // bei stummgestelltem Klingelton laut ist.
-  if(jetzt-botschutzSeit>=nbBotWeckerMin*60_000L&&botschutzKlang==null){
+  if(!nacht&&jetzt-botschutzSeit>=nbBotWeckerMin*60_000L&&botschutzKlang==null){
    try{
     android.net.Uri u=android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM);
     botschutzKlang=android.media.RingtoneManager.getRingtone(this,u);
@@ -1267,7 +1277,17 @@ public class OdinService extends Service {
  // Benachrichtigungseinstellungen des Teams. Werden beim Neusetzen der Wecker
  // mitgeladen; bis dahin gelten diese Vorgaben.
  private volatile boolean nbVorwarnAn=true, nbAngriffeGebuendelt=true, nbBotschutzAn=true;
- private volatile int nbVorwarnMin=3, nbBotVibSek=60, nbBotWeckerMin=10, nbBotTeamMin=3, nbBefehleMin=3;
+ // 2.0.79 (Fetteruruk 16.10.): Botschutz-Meldung alle 10 Min, Wecker erst
+ // nach 90 Min; Nachtruhe 23-6 Uhr: kein Wecker, Meldung nur alle 30 Min.
+ private volatile int nbVorwarnMin=3, nbBotVibSek=600, nbBotWeckerMin=90, nbBotTeamMin=3, nbBefehleMin=3;
+ private volatile int nbNachtVon=23, nbNachtBis=6;
+ private static final long NACHT_ABSTAND_MS=30*60_000L;
+ private boolean istNachtruhe(long ms){
+  if(nbNachtVon==nbNachtBis)return false;
+  java.util.Calendar c=java.util.Calendar.getInstance(); c.setTimeInMillis(ms);
+  int h=c.get(java.util.Calendar.HOUR_OF_DAY);
+  return nbNachtVon>nbNachtBis ? (h>=nbNachtVon||h<nbNachtBis) : (h>=nbNachtVon&&h<nbNachtBis);
+ }
  private volatile boolean nbBefehleAn=true;
  private void einstellungenLaden(){
   try{
@@ -1279,8 +1299,10 @@ public class OdinService extends Service {
    nbVorwarnMin=Math.max(1,Math.min(60,o.optInt("vorwarnung_min",3)));
    nbAngriffeGebuendelt=o.optBoolean("angriffe_gebuendelt",true);
    nbBotschutzAn=o.optBoolean("botschutz_an",true);
-   nbBotVibSek=Math.max(10,Math.min(3600,o.optInt("botschutz_vibration_sek",60)));
-   nbBotWeckerMin=Math.max(1,Math.min(120,o.optInt("botschutz_wecker_min",10)));
+   nbBotVibSek=Math.max(10,Math.min(3600,o.optInt("botschutz_vibration_sek",600)));
+   nbBotWeckerMin=Math.max(1,Math.min(240,o.optInt("botschutz_wecker_min",90)));
+   nbNachtVon=Math.max(0,Math.min(23,o.optInt("nacht_von",23)));
+   nbNachtBis=Math.max(0,Math.min(23,o.optInt("nacht_bis",6)));
    nbBotTeamMin=Math.max(0,Math.min(60,o.optInt("botschutz_team_min",3)));
    nbBefehleAn=o.optBoolean("befehle_warnung_an",true);
    nbBefehleMin=Math.max(1,Math.min(30,o.optInt("befehle_vorlauf_min",3)));

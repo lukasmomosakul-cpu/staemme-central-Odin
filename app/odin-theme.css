@@ -52,15 +52,7 @@ html,body{overflow-x:hidden;max-width:100%}
 .accCards{display:grid;gap:8px}.accCard{border:1px solid var(--odin-border);border-radius:13px;background:#fff;overflow:hidden}.accCard.open{background:#fbfcfd}.accHead{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 4px;min-height:56px}.accToggle{flex:1;min-width:0;display:flex;align-items:center;gap:10px;border:0;background:transparent;padding:8px;text-align:left;color:inherit;border-radius:10px}.accToggle:hover{background:#f5f7fa}.accChevron{width:16px;color:var(--odin-muted);flex:none}.accName{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.accWorld{font-weight:800;color:#8b672f;font-size:13px;flex:none}.accGame{flex:none}.accBody{padding:4px 16px 14px 40px;border-top:1px solid var(--odin-border);display:grid;gap:8px}.accRow{display:grid;grid-template-columns:130px minmax(0,1fr);gap:10px;align-items:start;font-size:14px;padding-top:8px}.accRow>div{min-width:0;overflow-wrap:anywhere}.accLabel{color:var(--odin-muted);font-size:12px;font-weight:700}.accTools{padding-top:6px}
 @media(max-width:600px){.accHead{padding:6px 8px 6px 2px;min-height:52px}.accBody{padding:4px 12px 12px 12px}.accRow{grid-template-columns:1fr;gap:2px}.accGame .gameIconButton{flex:none;min-height:40px}}
 
-/* 16.10.2026 - Dashboard: Team-Kennzahlen und Kontodetails aus godbot_settings. */
-.dashKpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px;order:1}
-.dashKpi{position:relative;overflow:hidden;background:#fff;border:1px solid var(--odin-border);border-radius:14px;padding:14px 16px;box-shadow:0 6px 18px rgba(31,45,61,.06)}
-.dashKpi:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--odin-accent)}
-.dashKpi.gruen:before{background:#16a34a}.dashKpi.rot:before{background:#dc2626}
-.dashKpiTitel{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--odin-muted)}
-.dashKpiWert{font-size:26px;font-weight:800;letter-spacing:-.03em;color:#182230;margin:4px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dashKpi.rot .dashKpiWert{color:#b91c1c}
-.dashKpiZusatz{font-size:12px;color:var(--odin-muted)}
+/* 16.10.2026 - Dashboard: Kontodetails aus godbot_settings. */
 .dashDot{width:10px;height:10px;border-radius:50%;flex:none;background:#cbd5e1;box-shadow:0 0 0 3px rgba(203,213,225,.35)}
 .dashDot.gruen{background:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.18)}
 .dashDot.rot{background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.2);animation:dashPuls 1.6s ease-in-out infinite}
@@ -82,8 +74,7 @@ html,body{overflow-x:hidden;max-width:100%}
 .dashTrupp{font-size:12px;background:var(--odin-accent-soft);border:1px solid rgba(184,137,63,.22);color:#5b4420;border-radius:8px;padding:2px 7px}
 .dashTrupp b{color:#182230}
 .dashGrund{font-size:12px;line-height:1.4;overflow-wrap:anywhere}
-@media(max-width:1100px){.dashKpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){.dashKpis{gap:8px;margin-bottom:12px}.dashKpi{padding:11px 12px;border-radius:12px}.dashKpiWert{font-size:21px}.accBody{padding:4px 12px 12px 14px}.accRow{grid-template-columns:96px minmax(0,1fr)}}
+@media(max-width:600px){.accBody{padding:4px 12px 12px 14px}.accRow{grid-template-columns:96px minmax(0,1fr)}}
 .dashSumme{display:grid;gap:6px;margin-bottom:6px}
 .dashMehr{justify-self:start;border:1px solid var(--odin-border);background:#f8fafc;color:#334155;font-weight:700;font-size:12px;border-radius:9px;padding:6px 10px}
 .dashMehr:hover{background:#f1f4f8}
