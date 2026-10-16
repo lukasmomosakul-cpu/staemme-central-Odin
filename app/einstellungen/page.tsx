@@ -268,7 +268,7 @@ export default function EinstellungenSeite() {
         <div className="muted" style={{ marginBottom: 8 }}>
           Proxy-Vorlage des Teams für den Knopf „🚨 Notfall-IP“ an jedem Konto. <code>{'{sitzung}'}</code> wird
           bei jedem Druck durch eine zufällige Sitzung ersetzt – das ergibt eine neue IP. Beim Öffnen prüft die App
-          die IP gegen alle bekannten IPs eurer Konten und würfelt bis zu fünfmal neu. Sichtbar für alle im Team.
+          die IP gegen alle bekannten IPs eurer Konten und würfelt bis zu fünfmal neu. Automatisch: Öffnest du ein Konto, auf dem gerade Botschutz steht und das zuletzt ein anderes Gerät geführt hat, setzt die App die Notfall-IP von selbst und nimmt sie beim Schließen der Welt wieder weg. Eine Vorlage für alle Konten, sichtbar für alle im Team.
         </div>
         <input type="text" value={nfVorlage} onChange={e => setNfVorlage(e.target.value)} spellCheck={false} autoComplete="off"
                placeholder="host:port:benutzer-…-session-{sitzung}-…:passwort"

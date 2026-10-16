@@ -3673,6 +3673,17 @@ public class GameWebViewActivity extends Activity {
   OdinService.WARTET.remove(k);
   if(!k.isEmpty())new Thread(()->OdinService.leaseFreigeben(app,k)).start();
   OdinProxy.kontoWeg(k);
+  // 2.0.81: automatisch gesetzte Notfall-IP wieder entfernen (nur wenn noch
+  // dieselbe Notfall-Sitzung drinsteht - nichts Fremdes ueberschreiben).
+  if(w.notfallAuto&&!k.isEmpty()){
+   final String war=w.proxyRoh;
+   new Thread(()->{ try{
+    String id=java.net.URLEncoder.encode(k,"UTF-8");
+    String filt=war!=null&&!war.isEmpty()?"&proxy=eq."+java.net.URLEncoder.encode(war,"UTF-8"):"&proxy=like.*-session-nf*";
+    supaRequest("PATCH","game_accounts?id=eq."+id+filt,"{\"proxy\":null}");
+    OdinLog.schreib(app,k,"WICHTIG","Notfall-IP beendet (Welt geschlossen)");
+   }catch(Exception e){ android.util.Log.w("ODIN_PROXY","notfall beenden",e); } }).start();
+  }
   if(aktiv==w){
    aktiv=null;
    Welt naechste=null;
@@ -4966,6 +4977,9 @@ public class GameWebViewActivity extends Activity {
   long authFensterStart=0L; int authVersuche=0;
   // 1.98.0: zuletzt angewendeter Proxy-Text dieses Kontos ("" = keiner).
   volatile String proxyRoh=null;
+  // 2.0.81: Notfall-IP wurde beim Laden automatisch gesetzt (Botschutz-Hilfe)
+  // - beim Schliessen der Welt wieder auf direkt.
+  volatile boolean notfallAuto=false;
   // 2.0.1: zuletzt gesehene Ausgangs-IP des Proxys (Wechsel melden).
   volatile String letzteProxyIp=null;
   // Fail closed: Welt wurde wegen Proxy-Fehler nicht geladen/angehalten.
@@ -5318,6 +5332,12 @@ public class GameWebViewActivity extends Activity {
    // starten (koennte ein Proxy-Konto ueber die Geraete-IP schicken).
    if(roh==null&&!sp.contains(gameAccountId))return "Proxy-Einstellung nicht abrufbar (Supabase) und auf diesem Gerät unbekannt";
    if(roh==null)roh=sp.getString(gameAccountId,"");
+   // 2.0.81: Hilfe beim Botschutz eines ANDEREN Geraets - Notfall-IP aus der
+   // Team-Vorlage automatisch, nur beim Laden und nur ohne eigenen Proxy.
+   if(vollTest&&roh.trim().isEmpty()){
+    String nf=notfallAutomatisch();
+    if(nf!=null){ roh=nf; sp.edit().putString(gameAccountId,roh).apply(); notfallAuto=true; }
+   }
    // Ohne Proxy nichts zu testen; mit Proxy beim Laden immer voller Test.
    if(roh.equals(proxyRoh)&&!vollTest)return null;
    OdinProxy.Zugang z=OdinProxy.lesen(gameAccountId,roh);
@@ -5398,6 +5418,34 @@ public class GameWebViewActivity extends Activity {
   // 2.0.80: Notfall-Sitzungen erkennen und neu wuerfeln.
   // (keine static-Glieder: Welt ist eine innere Klasse)
   final java.util.regex.Pattern NOTFALL_SITZUNG=java.util.regex.Pattern.compile("-session-nf[a-z0-9]+");
+  // Botschutz auf diesem Konto aktiv UND zuletzt von einem anderen Geraet
+  // gefuehrt -> Proxy aus notfall_proxy mit neuer Sitzung setzen. Sonst null.
+  String notfallAutomatisch(){
+   try{
+    String id=java.net.URLEncoder.encode(gameAccountId,"UTF-8");
+    boolean bot=false;
+    org.json.JSONArray g=new org.json.JSONArray(supaRequest("GET","godbot_settings?select=skey,value&account_id=eq."+id
+      +"&skey=in.(tw_bot_alert_state,tw_odin_steuerstand)",null));
+    for(int i=0;i<g.length();i++){
+     try{ org.json.JSONObject v=new org.json.JSONObject(g.getJSONObject(i).optString("value","{}"));
+      if(v.optBoolean("active",false)||v.optBoolean("botschutz",false))bot=true; }catch(Exception ig){}
+    }
+    if(!bot)return null;
+    org.json.JSONArray l=new org.json.JSONArray(supaRequest("GET","account_leases?select=geraet_id,geraet_name&account_id=eq."+id,null));
+    if(l.length()==0)return null;
+    String halter=l.getJSONObject(0).optString("geraet_id","");
+    if(halter.isEmpty()||halter.equals(OdinService.geraetId(GameWebViewActivity.this)))return null;
+    org.json.JSONArray v=new org.json.JSONArray(supaRequest("GET","notfall_proxy?select=vorlage",null));
+    if(v.length()==0)return null;
+    String vorlage=v.getJSONObject(0).optString("vorlage","");
+    if(!vorlage.contains("{sitzung}"))return null;
+    String roh=notfallNeueSitzung(vorlage.replace("{sitzung}","nf0"));
+    supaRequest("PATCH","game_accounts?id=eq."+id,"{\"proxy\":"+org.json.JSONObject.quote(roh)+"}");
+    melde("WICHTIG","Botschutz-Hilfe: Konto lief zuletzt auf "+l.getJSONObject(0).optString("geraet_name","anderem Gerät")
+      +" - Notfall-IP automatisch gesetzt");
+    return roh;
+   }catch(Exception e){ android.util.Log.w("ODIN_PROXY","notfallAutomatisch",e); return null; }
+  }
   String notfallNeueSitzung(String roh){
    String abc="abcdefghijklmnopqrstuvwxyz0123456789"; StringBuilder b=new StringBuilder("nf");
    java.security.SecureRandom r=new java.security.SecureRandom();
