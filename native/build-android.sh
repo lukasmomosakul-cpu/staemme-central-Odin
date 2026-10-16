@@ -5396,8 +5396,9 @@ public class GameWebViewActivity extends Activity {
   // (Sperren aller Geraete) bzw. aus odin_ip (hier gemerkt, mit Welt; aeltere
   // Eintraege ohne Welt nehmen die Welt des Kontos). Welt unbekannt = Sperre.
   // 2.0.80: Notfall-Sitzungen erkennen und neu wuerfeln.
-  static final java.util.regex.Pattern NOTFALL_SITZUNG=java.util.regex.Pattern.compile("-session-nf[a-z0-9]+");
-  static String notfallNeueSitzung(String roh){
+  // (keine static-Glieder: Welt ist eine innere Klasse)
+  final java.util.regex.Pattern NOTFALL_SITZUNG=java.util.regex.Pattern.compile("-session-nf[a-z0-9]+");
+  String notfallNeueSitzung(String roh){
    String abc="abcdefghijklmnopqrstuvwxyz0123456789"; StringBuilder b=new StringBuilder("nf");
    java.security.SecureRandom r=new java.security.SecureRandom();
    for(int i=0;i<10;i++)b.append(abc.charAt(r.nextInt(abc.length())));
