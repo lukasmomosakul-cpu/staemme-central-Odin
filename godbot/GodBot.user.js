@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      620
+// @version      621
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -37,6 +37,23 @@
         if (!h) { h = {}; try { Object.defineProperty(window, TW_HK, { value: h, enumerable: false, configurable: false, writable: false }); } catch (e) { window[TW_HK] = h; } }
         return h;
     })();
+    // v621 (Fetteruruk 16.10.: "warum kamen keine Benachrichtigungen bzw.
+    // Wecker?"): Die App erfuhr von Meldungen NUR, indem der Loader die
+    // Anfrage an den Discord-Webhook abfing. Ohne Webhook-URL schickte
+    // GodBot gar nichts los - also auch keine App-Meldung, kein
+    // Botschutz-Wecker (16.10. 02:57: "keine Webhook-URL hinterlegt").
+    // Jetzt geht die Meldung ohne Webhook direkt an die App (TW_H.notify).
+    // Mit Webhook bleibt alles wie bisher: der Loader spiegelt die Anfrage.
+    function appMeldung(titel, text) {
+        try {
+            if (typeof TW_H.notify !== "function") return false;
+            const t = String(titel || "GodBot"), b = String(text || "");
+            let stufe = "info";
+            if (/entwarnung|gelöst|geloest|eingestellt/i.test(t)) stufe = "info";
+            else if (/botschutz|captcha|gesperrt|sperre|ag-alarm|rückruf|rueckruf|entscheidung nötig|abgebrochen|übernommen|fehler|abbruch/i.test(t + " " + b)) stufe = "warn";
+            return TW_H.notify(t, b, stufe) !== false;
+        } catch (e) { return false; }
+    }
     const odin = (TW_H.odin && TW_H.odin.istApp) ? TW_H.odin
         : (window.Odin && window.Odin.istApp) ? window.Odin : {
         istApp: false, version: "",
@@ -2230,7 +2247,14 @@ function botMarkerSichtbar() {
             const settings = raw ? JSON.parse(raw) : {};
             const webhookUrl = (settings.webhookUrl || "").trim();
 
-            if (!webhookUrl || !/^https?:\/\//i.test(webhookUrl)) return;
+            if (!webhookUrl || !/^https?:\/\//i.test(webhookUrl)) {
+                // v621: ohne Webhook nur Wichtiges an die App - Routine
+                // (Stundenstatistik, Farmstand) bliebe sonst als Meldung
+                // auf allen Teamgeraeten haengen.
+                if (/botschutz|captcha|gesperrt|sperre|ag-alarm|rückruf|rueckruf|entscheidung nötig|abgebrochen|übernommen|fehler|abbruch|entwarnung/i
+                    .test(String(title || "") + " " + String(description || ""))) appMeldung(title, description);
+                return;
+            }
 
             const world = (typeof game_data !== "undefined" && game_data && game_data.world)
                 ? game_data.world
@@ -20744,7 +20768,15 @@ function botMarkerSichtbar() {
             const settings = raw ? JSON.parse(raw) : {};
             const webhookUrl = (settings.webhookUrl || "").trim();
             if (!webhookUrl || !/^https?:\/\//i.test(webhookUrl)) {
-                console.warn("[TW] Botschutz-Alarm: keine Webhook-URL hinterlegt - keine Meldung möglich.");
+                // v621: ohne Webhook direkt an die App (Benachrichtigung,
+                // Vibration, nach der eingestellten Zeit der Wecker).
+                let text = String(opts.description || "");
+                (opts.fields || []).forEach(f => { text += (text ? " · " : "") + f.name + ": " + f.value; });
+                if (appMeldung(opts.title, text)) {
+                    console.warn("[TW] Botschutz-Alarm: kein Webhook - Meldung direkt an die App.");
+                    return true;
+                }
+                console.warn("[TW] Botschutz-Alarm: keine Webhook-URL hinterlegt und keine App - keine Meldung möglich.");
                 return false;
             }
 
@@ -21489,25 +21521,13 @@ function botMarkerSichtbar() {
     // Wie captchaOeffnenPlanen(), aber ohne Protokollzeile: dieser Weg
     // wiederholt sich, solange die Pruefung nur vorgemerkt ist, und soll
     // dabei nicht alle halbe Minute dasselbe schreiben.
+    // v621: kein Termin zum Oeffnen mehr - beide raeumen nur einen alten auf.
     function captchaOeffnenNachplanen() {
-        try {
-            const wartenMs = BOT_CAPTCHA_OPEN_MIN_MS +
-                Math.floor(Math.random() * (BOT_CAPTCHA_OPEN_MAX_MS - BOT_CAPTCHA_OPEN_MIN_MS));
-            localStorage.setItem(BOT_CAPTCHA_OPEN_KEY, String(Date.now() + wartenMs));
-        } catch (e) { }
+        try { localStorage.removeItem(BOT_CAPTCHA_OPEN_KEY); } catch (e) { }
     }
 
     function captchaOeffnenPlanen() {
-        try {
-            if (localStorage.getItem(BOT_CAPTCHA_OPEN_KEY)) return;
-            const wartenMs = BOT_CAPTCHA_OPEN_MIN_MS +
-                Math.floor(Math.random() * (BOT_CAPTCHA_OPEN_MAX_MS - BOT_CAPTCHA_OPEN_MIN_MS));
-            localStorage.setItem(BOT_CAPTCHA_OPEN_KEY, String(Date.now() + wartenMs));
-            console.log(`[TW] Botschutz: Sicherheitsabfrage wird in ${Math.round(wartenMs / 1000)}s ` +
-                `von selbst geöffnet - bis dahin kannst du sie auch selbst aufrufen.`);
-        } catch (e) {
-            console.warn("[TW] Botschutz: Termin zum Öffnen nicht speicherbar.", e);
-        }
+        try { localStorage.removeItem(BOT_CAPTCHA_OPEN_KEY); } catch (e) { }
     }
 
     function captchaOeffnenAbbrechen() {
@@ -21524,6 +21544,7 @@ function botMarkerSichtbar() {
     // paar tausend Knoten - dafuer gibt es keinen Grund. Alle fuenf
     // Sekunden reicht vollkommen.
     let botAbfrageCheckAt = 0;
+    let botAbfrageBereitGemeldet = false;   // v621
 
     function captchaOeffnenFaellig() {
         try {
@@ -21555,29 +21576,15 @@ try {
     console.warn("[TW] Anwesenheit: Zuhörer nicht setzbar.", e);
 }
 
-// "immer" | "aktiv" | "nie" - siehe DEFAULT_SETTINGS.captchaAutoOpen.
-function captchaAutoOpenModus() {
-    try {
-        const w = (loadSettings() || {}).captchaAutoOpen;
-        if (w === "immer" || w === "nie" || w === "aktiv") return w;
-    } catch (e) { }
-    return "aktiv";
-}
-
-// Darf GodBot die Abfrage jetzt von selbst aufmachen?
-function captchaAutoOpenErlaubt() {
-    const m = captchaAutoOpenModus();
-    if (m === "nie") return false;
-    if (m === "immer") return true;
-    return (Date.now() - twLetzteEingabeAt) <= CAPTCHA_ANWESEND_MS;
-}
-
-function captchaAutoOpenGrund() {
-    const m = captchaAutoOpenModus();
-    if (m === "nie") return "Einstellung: nie von selbst öffnen";
-    const min = Math.round((Date.now() - twLetzteEingabeAt) / 60000);
-    return `keine Eingabe seit ${min} Min. - GodBot öffnet nur, wenn du am Gerät bist`;
-}
+// v621 (Fetteruruk 16.10.: "entferne alles zum automatischen Oeffnen des
+// Botschutzes - wenn Botschutz kommt, soll einfach nichts mehr passieren,
+// bis er manuell geloest wurde"). Die Einstellung "Abfrage" (immer / nur
+// wenn du am Geraet bist / nie) ist entfallen: GodBot oeffnet die Abfrage
+// NIE und laedt die Seite NIE neu. Erkennen, Anhalten, Balken und Meldung
+// bleiben. Das Oeffnen ist nur noch der Knopf im Balken - also von Hand.
+function captchaAutoOpenModus() { return "nie"; }
+function captchaAutoOpenErlaubt() { return false; }
+function captchaAutoOpenGrund() { return "GodBot öffnet den Botschutz nie selbst"; }
 
 
     function captchaFensterOeffnen() {
@@ -22709,10 +22716,14 @@ function captchaAutoOpenGrund() {
             try {
                 abfrageDa = !botCaptchaKastenOffen() && !!findeBotCaptchaAusloeser();
             } catch (e) { }
-            if (abfrageDa) {
-                console.warn("[TW] Botschutz: die Abfrage steht jetzt in der Seite - " +
-                    "Öffnen wird eingeplant.");
-                captchaOeffnenNachplanen();
+            // v621: nur noch melden, einmal je Vorfall - geoeffnet wird nichts.
+            // Vorher stand hier alle 25 s "Oeffnen wird eingeplant" (16.10.
+            // 02:57-05:17, ueber 300 Zeilen).
+            if (abfrageDa && !botAbfrageBereitGemeldet) {
+                botAbfrageBereitGemeldet = true;
+                console.warn("[TW] Botschutz: die Abfrage steht in der Seite - GodBot öffnet sie nicht, " +
+                    "bitte von Hand lösen.");
+                try { starteCaptchaHinweis("bereit"); } catch (e) { }
             }
         }
 
@@ -22886,6 +22897,7 @@ function captchaAutoOpenGrund() {
             botSperreVergessen();
 
             botProtectionHandled = false;
+            botAbfrageBereitGemeldet = false;   // v621
             botClearBrauchtBeleg = false;
             botClearBelegFrei = false;
             botClearBelegGesperrtZahl = 0;
@@ -36562,16 +36574,7 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
             </div>
 
 
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-                <span style="font-size:11px;color:#999;width:66px;flex-shrink:0;">Abfrage:</span>
-                <select id="tw-captcha-autoopen"
-                    style="flex:1;background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:3px 6px;font-size:11px;">
-                    <option value="immer"${(settings.captchaAutoOpen || "aktiv") === "immer" ? " selected" : ""}>immer von selbst öffnen</option>
-                    <option value="aktiv"${(settings.captchaAutoOpen || "aktiv") === "aktiv" ? " selected" : ""}>nur wenn du am Gerät bist</option>
-                    <option value="nie"${(settings.captchaAutoOpen || "aktiv") === "nie" ? " selected" : ""}>nie von selbst öffnen</option>
-                </select>
-                ${infoIcon("Regelt NUR, ob GodBot die Sicherheitsabfrage selbst aufmacht - also den Klick auf 'Beginne Bot-Schutz-Prüfung'. Erkennen, Anhalten, roter Balken, Ton und Discord laufen in jedem Fall.\n\n'nur wenn du am Gerät bist' (Vorgabe): geöffnet wird nur, wenn in den letzten 15 Minuten eine Eingabe kam. Damit liegt nachts keine angefangene, unbeantwortete Prüfung stundenlang offen. Gelöst wird die Abfrage immer von dir - GodBot löst seit v480 nichts mehr selbst.\n\nSeit v485 hängt auch das einmalige Neuladen der Spielseite an dieser Einstellung: neu geladen wird nur, wenn GodBot auch öffnen dürfte - sonst lägen nachts Sperrseiten offen, die niemand löst.\n\n'nie': GodBot fasst gar nichts an, auch das einmalige Neuladen entfällt. Der Balken zeigt dann einen Knopf 'Abfrage jetzt öffnen'.")}
-            </div>
+            <div style="font-size:10px;color:#8a93a3;margin-bottom:6px;">Botschutz: GodBot hält alles an und meldet ihn - die Abfrage öffnest und löst du immer selbst.</div>
 
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
                 <span style="font-size:11px;color:#999;width:66px;flex-shrink:0;">Webhook:</span>
@@ -37577,10 +37580,6 @@ const mode = JSON.parse(localStorage.getItem("tw_scavenge_mode") || `"effektiv"`
         };
         newSettings.username = content.querySelector("#tw-username").value.trim();
         newSettings.webhookUrl = content.querySelector("#tw-webhook").value.trim();
-        try {
-            const aoEl = content.querySelector("#tw-captcha-autoopen");
-            if (aoEl) newSettings.captchaAutoOpen = aoEl.value;
-        } catch (e) { }
 
         const mentionEl = content.querySelector("#tw-bot-mention");
         const repeatEl = content.querySelector("#tw-bot-repeat");
