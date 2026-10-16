@@ -5326,13 +5326,34 @@ public class GameWebViewActivity extends Activity {
    // Proxy nicht oder kommt dieselbe IP wie das Geraet heraus, wird NICHT
    // geladen (fail closed).
    if(z!=null){
-    String ip=OdinProxy.ausgangsIp(z);
-    if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}"))return "Proxy antwortet nicht ("+ip+")";
-    String geraet=OdinService.letzteIp;
-    if(geraet==null||geraet.isEmpty())geraet=OdinService.oeffentlicheIp();
-    if(geraet!=null&&geraet.equals(ip))return "Proxy liefert die Geräte-IP "+ip+" - kein Schutz";
-    String konflikt=ipKonflikt(ip);
-    if(konflikt!=null)return konflikt;
+    // 2.0.80 NOTFALL-IP: Proxy mit Sitzung "session-nf..." (vom Notfall-Knopf
+    // im Dashboard). Passt die IP nicht (keine Antwort, Geraete-IP, aktiver
+    // Konflikt oder schon von einem ANDEREN Konto bekannt), wuerfelt Odin
+    // eine neue Sitzung = neue IP, speichert sie und prueft erneut (max. 5).
+    boolean notfall=NOTFALL_SITZUNG.matcher(roh).find();
+    String ip=null, grund=null, geraet=null;
+    for(int versuch=0;versuch<(notfall?5:1);versuch++){
+     if(versuch>0){
+      String neu=notfallNeueSitzung(roh);
+      OdinProxy.Zugang zn=OdinProxy.lesen(gameAccountId,neu);
+      if(zn==null)break;
+      roh=neu; z=zn;
+      try{ supaRequest("PATCH","game_accounts?id=eq."+java.net.URLEncoder.encode(gameAccountId,"UTF-8"),
+        "{\"proxy\":"+org.json.JSONObject.quote(roh)+"}"); sp.edit().putString(gameAccountId,roh).apply(); }
+      catch(Exception e){ android.util.Log.w("ODIN_PROXY","notfall speichern",e); }
+      setStatus("Notfall: "+grund+" - neue IP, Versuch "+(versuch+1)+"/5");
+     }
+     ip=OdinProxy.ausgangsIp(z);
+     if(ip==null||!ip.matches("[0-9a-fA-F:.]{3,45}")){ grund="Proxy antwortet nicht ("+ip+")"; continue; }
+     geraet=OdinService.letzteIp;
+     if(geraet==null||geraet.isEmpty())geraet=OdinService.oeffentlicheIp();
+     if(geraet!=null&&geraet.equals(ip)){ grund="Proxy liefert die Geräte-IP "+ip+" - kein Schutz"; continue; }
+     grund=ipKonflikt(ip);
+     if(grund==null&&notfall)grund=notfallIpBekannt(ip);
+     if(grund==null)break;
+    }
+    if(grund!=null)return notfall?"Notfall-IP: nach 5 Versuchen keine freie IP - "+grund:grund;
+    if(notfall)melde("WICHTIG","Notfall-IP aktiv: "+ip+" (geprüft, von keinem anderen Konto bekannt)");
     setStatus("Proxy-Test ok: Ausgang "+ip+(geraet==null?"":" ≠ Gerät "+geraet));
     if(letzteProxyIp!=null&&!letzteProxyIp.equals(ip))melde("WICHTIG","Proxy-IP gewechselt: "+letzteProxyIp+" → "+ip);
     letzteProxyIp=ip;
@@ -5374,6 +5395,42 @@ public class GameWebViewActivity extends Activity {
   // keine zusaetzlichen Proxy-IPs nutzen. Die Welt kommt aus game_accounts
   // (Sperren aller Geraete) bzw. aus odin_ip (hier gemerkt, mit Welt; aeltere
   // Eintraege ohne Welt nehmen die Welt des Kontos). Welt unbekannt = Sperre.
+  // 2.0.80: Notfall-Sitzungen erkennen und neu wuerfeln.
+  static final java.util.regex.Pattern NOTFALL_SITZUNG=java.util.regex.Pattern.compile("-session-nf[a-z0-9]+");
+  static String notfallNeueSitzung(String roh){
+   String abc="abcdefghijklmnopqrstuvwxyz0123456789"; StringBuilder b=new StringBuilder("nf");
+   java.security.SecureRandom r=new java.security.SecureRandom();
+   for(int i=0;i<10;i++)b.append(abc.charAt(r.nextInt(abc.length())));
+   return NOTFALL_SITZUNG.matcher(roh).replaceFirst("-session-"+b);
+  }
+  // Strenger als ipKonflikt(): jede je bekannte Nutzung durch ein Konto mit
+  // ANDEREM Namen zaehlt - letzte IP jeder Geraete-Sperre (jedes Alter) und
+  // IP-Meldungen der letzten 14 Tage. Welt egal: eine Notfall-IP soll frisch sein.
+  String notfallIpBekannt(String ip){
+   try{
+    String ich=kopfName.toLowerCase(java.util.Locale.ROOT);
+    java.util.Map<String,String> namen=new java.util.HashMap<>();
+    org.json.JSONArray k=new org.json.JSONArray(supaRequest("GET","game_accounts?select=id,name",null));
+    for(int i=0;i<k.length();i++){ org.json.JSONObject o=k.getJSONObject(i);
+     namen.put(o.optString("id"),o.optString("name","").toLowerCase(java.util.Locale.ROOT)); }
+    if(namen.containsKey(gameAccountId))ich=namen.get(gameAccountId);
+    String q=java.net.URLEncoder.encode(ip,"UTF-8");
+    org.json.JSONArray l=new org.json.JSONArray(supaRequest("GET","account_leases?select=account_id&ip=eq."+q,null));
+    for(int i=0;i<l.length();i++){ String kid=l.getJSONObject(i).optString("account_id");
+     String n=namen.containsKey(kid)?namen.get(kid):"";
+     if(!kid.equals(gameAccountId)&&!n.equals(ich))return "IP "+ip+" war schon bei Konto „"+n+"“"; }
+    java.text.SimpleDateFormat iso=new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'",java.util.Locale.ROOT);
+    iso.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+    String seit=iso.format(new java.util.Date(System.currentTimeMillis()-14L*86400_000L));
+    org.json.JSONArray e=new org.json.JSONArray(supaRequest("GET","app_events?select=account_id&bereich=like.ip*&created_at=gte."+seit
+      +"&message=like."+java.net.URLEncoder.encode("*"+ip+"*","UTF-8")+"&limit=50",null));
+    for(int i=0;i<e.length();i++){ String kid=e.getJSONObject(i).optString("account_id","");
+     if(kid.isEmpty()||"null".equals(kid)||kid.equals(gameAccountId))continue;
+     String n=namen.containsKey(kid)?namen.get(kid):"";
+     if(!n.equals(ich))return "IP "+ip+" taucht in den letzten 14 Tagen bei Konto „"+n+"“ auf"; }
+   }catch(Exception ex){ android.util.Log.w("ODIN_PROXY","notfallIpBekannt",ex); }
+   return null;
+  }
   String ipKonflikt(String ip){
    if(ip==null||ip.isEmpty())return null;
    String ich=kopfName.toLowerCase(java.util.Locale.ROOT);

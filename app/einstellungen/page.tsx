@@ -26,6 +26,27 @@ export default function EinstellungenSeite() {
   const [teamId, setTeamId] = useState('');
   const [nb, setNb] = useState<Nb>(NB_STANDARD);
   const [nbMeldung, setNbMeldung] = useState('');
+  // 16.10.2026: Notfall-IP-Vorlage des Teams (Tabelle notfall_proxy).
+  const [nfVorlage, setNfVorlage] = useState('');
+  const [nfMeldung, setNfMeldung] = useState('');
+  useEffect(() => {
+    (async () => {
+      if (!supabase || !teamId) return;
+      const { data } = await supabase.from('notfall_proxy').select('vorlage').eq('team_id', teamId).maybeSingle();
+      setNfVorlage((data as { vorlage?: string } | null)?.vorlage ?? '');
+    })();
+  }, [teamId]);
+  const nfSpeichern = async () => {
+    if (!supabase || !teamId) return;
+    const v = nfVorlage.trim();
+    if (v && (!v.includes('{sitzung}') || v.split(':').length < 4)) {
+      setNfMeldung('Format: host:port:benutzer…session-{sitzung}…:passwort'); return;
+    }
+    const { error } = v
+      ? await supabase.from('notfall_proxy').upsert({ team_id: teamId, vorlage: v, updated_at: new Date().toISOString() })
+      : await supabase.from('notfall_proxy').delete().eq('team_id', teamId);
+    setNfMeldung(error ? (error.message || 'Speichern fehlgeschlagen.') : 'Gespeichert.');
+  };
 
   useEffect(() => {
     (async () => {
@@ -240,6 +261,22 @@ export default function EinstellungenSeite() {
         {testMeldung && <div className="muted" style={{ marginTop: 8, marginLeft: 26 }}>{testMeldung}</div>}
 
         {nbMeldung && <div className="muted" style={{ marginTop: 10 }}>{nbMeldung}</div>}
+      </section>
+
+      <section className="section card">
+        <h2>Notfall-IP</h2>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          Proxy-Vorlage des Teams für den Knopf „🚨 Notfall-IP“ an jedem Konto. <code>{'{sitzung}'}</code> wird
+          bei jedem Druck durch eine zufällige Sitzung ersetzt – das ergibt eine neue IP. Beim Öffnen prüft die App
+          die IP gegen alle bekannten IPs eurer Konten und würfelt bis zu fünfmal neu. Sichtbar für alle im Team.
+        </div>
+        <input type="text" value={nfVorlage} onChange={e => setNfVorlage(e.target.value)} spellCheck={false} autoComplete="off"
+               placeholder="host:port:benutzer-…-session-{sitzung}-…:passwort"
+               style={{ width: '100%', fontFamily: 'monospace', fontSize: 12, padding: 8, border: '1px solid var(--odin-border)', borderRadius: 8 }} />
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
+          <button type="button" className="button" onClick={nfSpeichern}>Speichern</button>
+          {nfMeldung ? <span className="muted">{nfMeldung}</span> : null}
+        </div>
       </section>
 
       <section className="section card">
