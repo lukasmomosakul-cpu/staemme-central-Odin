@@ -4820,6 +4820,26 @@ public class GameWebViewActivity extends Activity {
   if(aktiv!=null)weltZeigen(aktiv);
   try{ fussleisteFuellen(); }catch(Exception ig){}
  }
+ // 2.0.88 AUTOMATISCH SCHWEBEN (Fetteruruk 16.10.): Verlaesst du Odin (Home,
+ // App-Wechsel - auch nach einem abgebrochenen Weckfenster), wandern alle
+ // offenen Welten ins Sammelfenster. Dort zeichnet Android sie weiter, GodBot
+ // laeuft ungedrosselt. Beleg 16.10. 19:20-19:50: Weckfenster abgebrochen,
+ // Odin hinter anderen Apps, 28 und 0 von 120 Lebenszeichen, kein Farmen.
+ // Nicht im Dimm-Modus (der haelt die Ansicht selbst vorn), nicht beim
+ // Schliessen, und nur mit erteilter Overlay-Erlaubnis (keine Rueckfrage
+ // aus dem Hintergrund). Aus mit prefs "odin" auto_schweben=false.
+ @Override protected void onUserLeaveHint(){
+  super.onUserLeaveHint();
+  try{
+   if(isFinishing()||isDestroyed())return;
+   if(dimDecke!=null)return;
+   if(!getSharedPreferences("odin",MODE_PRIVATE).getBoolean("auto_schweben",true))return;
+   if(weltRahmen==null||alleWelten().isEmpty())return;
+   if(OdinFloat.active(GRUPPE))return;
+   if(!OdinFloat.allowed(this)){ setStatus("Automatisch schweben: 'Über anderen Apps anzeigen' fehlt"); return; }
+   if(gruppeSchweben())setStatus("Odin verlassen - Welten schweben automatisch weiter (Symbol antippen)");
+  }catch(Exception e){ Log.w("ODIN_GODBOT","autoSchweben",e); }
+ }
  @Override protected void onPause(){
   super.onPause();
   // Alle Welten der Ansicht waren bis eben gezeichnet - fuer den Dienst
