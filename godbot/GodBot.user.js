@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      623
+// @version      624
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -48438,9 +48438,135 @@ function truppenStandMerken(villageId, seite) {
     try { localStorage.setItem(TRUPPEN_STAND_KEY, JSON.stringify(alle)); } catch (e) { }
 }
 
+// === ROHSTOFF-AUFTEILUNG BAU / TRUPPEN (v624) ===========================
+// Fetteruruk 16.10.: "festlegen koennen, wie die Rohstoffe zwischen
+// Gebaeude und Truppen verteilt werden - ggf. je Dorf bzw. Dorfgruppe".
+// Einstellung: Truppen-Anteil in Prozent (0 = alles Bau zuerst, 100 =
+// Truppen zuerst). Reihenfolge: Dorf > Gruppe (zuletzt gesetzte) >
+// Standard. Ohne Einstellung ("auto") gilt das Bisherige (Truppen-Vorrang
+// bis zum Soll, danach Bau zuerst).
+// Umsetzung ueber die vorhandenen Weichen: GodBot merkt sich, was in den
+// letzten 24 Std. je Dorf fuer Bau und fuer Truppen ausgegeben wurde.
+// Liegt der Truppen-Anteil darunter, haben Truppen Vorrang (Rekrutierung
+// haelt nichts fuer den Bau zurueck, gebaut werden nur Bauernhof/Speicher
+// oder bei vollem Speicher). Liegt er darueber, hat der Bau Vorrang
+// (Rekrutierung haelt den naechsten Bauauftrag zurueck). Fehlen keine
+// Truppen mehr, baut das Dorf frei.
+const ROHSTOFF_AUFTEILUNG_KEY = "tw_rohstoff_aufteilung";
+const ROHSTOFF_AUSGABEN_KEY = "tw_rohstoff_ausgaben";
+const ROHSTOFF_FENSTER_MS = 24 * 3600 * 1000;
+
+function rohstoffAufteilungLaden() {
+    let a = {};
+    try { a = JSON.parse(localStorage.getItem(ROHSTOFF_AUFTEILUNG_KEY) || "{}") || {}; } catch (e) { a = {}; }
+    const n = (v) => (v === null || v === undefined || v === "" || isNaN(Number(v))) ? null : Math.max(0, Math.min(100, Math.round(Number(v))));
+    return {
+        standard: n(a.standard),
+        doerfer: (a.doerfer && typeof a.doerfer === "object") ? a.doerfer : {},
+        gruppen: (a.gruppen && typeof a.gruppen === "object") ? a.gruppen : {}
+    };
+}
+
+function rohstoffAufteilungSpeichern(a) {
+    try { localStorage.setItem(ROHSTOFF_AUFTEILUNG_KEY, JSON.stringify(a)); } catch (e) { }
+}
+
+// art: "standard" | "dorf" | "gruppe"; wert null = keine eigene Angabe
+function rohstoffAnteilSetzen(art, id, wert, name) {
+    const a = rohstoffAufteilungLaden();
+    const w = (wert === null || wert === undefined) ? null : Math.max(0, Math.min(100, Math.round(Number(wert))));
+    if (art === "standard") a.standard = w;
+    else if (art === "dorf") { if (w === null) delete a.doerfer[String(id)]; else a.doerfer[String(id)] = w; }
+    else if (art === "gruppe") {
+        if (w === null) delete a.gruppen[String(id)];
+        else a.gruppen[String(id)] = { anteil: w, name: name || "", gesetztAt: Date.now() };
+    }
+    rohstoffAufteilungSpeichern(a);
+    return a;
+}
+
+function rohstoffAnteilFuerDorf(villageId) {
+    const a = rohstoffAufteilungLaden();
+    const key = String(villageId);
+    const d = a.doerfer[key];
+    if (d !== undefined && d !== null && !isNaN(Number(d))) return { anteil: Number(d), quelle: "Dorf" };
+    const treffer = [];
+    Object.keys(a.gruppen).forEach(gid => {
+        const g = a.gruppen[gid];
+        if (!g || g.anteil === null || g.anteil === undefined) return;
+        const ids = bauGruppenMitglieder(gid);
+        if (ids && ids.indexOf(key) >= 0) treffer.push(g);
+    });
+    if (treffer.length) {
+        treffer.sort((x, y) => (y.gesetztAt || 0) - (x.gesetztAt || 0));
+        return { anteil: Number(treffer[0].anteil), quelle: "Gruppe " + (treffer[0].name || "") };
+    }
+    if (a.standard !== null) return { anteil: a.standard, quelle: "Standard" };
+    return null;
+}
+
+function rohstoffAusgabeMerken(villageId, art, kosten, menge) {
+    try {
+        if (!kosten) return;
+        const m = menge || 1;
+        const summe = Math.round(((Number(kosten.wood) || 0) + (Number(kosten.stone) || 0) + (Number(kosten.iron) || 0)) * m);
+        if (!(summe > 0)) return;
+        let alle = {};
+        try { alle = JSON.parse(localStorage.getItem(ROHSTOFF_AUSGABEN_KEY) || "{}") || {}; } catch (e) { alle = {}; }
+        const grenze = Date.now() - ROHSTOFF_FENSTER_MS;
+        const liste = (Array.isArray(alle[String(villageId)]) ? alle[String(villageId)] : []).filter(x => x && x[0] > grenze);
+        liste.push([Date.now(), art === "t" ? "t" : "b", summe]);
+        alle[String(villageId)] = liste.slice(-150);
+        Object.keys(alle).forEach(k => {
+            alle[k] = (Array.isArray(alle[k]) ? alle[k] : []).filter(x => x && x[0] > grenze);
+            if (!alle[k].length) delete alle[k];
+        });
+        localStorage.setItem(ROHSTOFF_AUSGABEN_KEY, JSON.stringify(alle));
+    } catch (e) { }
+}
+
+function rohstoffAusgabenSumme(villageId) {
+    let liste = [];
+    try { liste = (JSON.parse(localStorage.getItem(ROHSTOFF_AUSGABEN_KEY) || "{}") || {})[String(villageId)] || []; } catch (e) { liste = []; }
+    const grenze = Date.now() - ROHSTOFF_FENSTER_MS;
+    let bau = 0, truppen = 0;
+    (Array.isArray(liste) ? liste : []).forEach(x => {
+        if (!x || x[0] <= grenze) return;
+        if (x[1] === "t") truppen += Number(x[2]) || 0; else bau += Number(x[2]) || 0;
+    });
+    return { bau, truppen };
+}
+
+// Fehlt laut Truppen-Soll noch etwas? Unbekannter Stand zaehlt als "fehlt".
+function truppenFehlenNoch(villageId, plan) {
+    const soll = (plan && plan.einheiten) || {};
+    let stand = {};
+    try { stand = (JSON.parse(localStorage.getItem(TRUPPEN_STAND_KEY) || "{}") || {})[String(villageId)] || {}; } catch (e) { stand = {}; }
+    return Object.keys(soll).some(u => {
+        const n = parseInt(soll[u], 10) || 0;
+        if (!n) return false;
+        const e = stand[u];
+        if (!e || typeof e.gesamt !== "number") return true;
+        return e.gesamt + (e.schleife || 0) < n;
+    });
+}
+
 // null = kein Vorrang fuer dieses Dorf; sonst { aktiv, zahl, grenze, einheit }
 function truppenVorrangLage(villageId) {
     const cfg = truppenVorrangCfg();
+    // v624: eigene Rohstoff-Aufteilung schlaegt den Vorrang bis zum Soll.
+    const auft = rohstoffAnteilFuerDorf(villageId);
+    if (auft) {
+        const plan = ladeTruppenPlaene()[String(villageId)];
+        if (!plan || !plan.einheiten || !Object.keys(plan.einheiten).length) return null;
+        const sum = rohstoffAusgabenSumme(villageId);
+        const ges = sum.bau + sum.truppen;
+        const ist = ges > 0 ? Math.round(sum.truppen / ges * 100) : 0;
+        const fehlen = truppenFehlenNoch(villageId, plan);
+        const aktiv = fehlen && auft.anteil > 0 && (auft.anteil >= 100 || ist < auft.anteil);
+        return { aktiv, modus: "anteil", anteil: auft.anteil, ist, quelle: auft.quelle, fehlen,
+            zahl: null, grenze: null, soll: null, einheit: cfg.einheit };
+    }
     if (!cfg.an) return null;
     const plan = ladeTruppenPlaene()[String(villageId)];
     const soll = parseInt(plan && plan.einheiten && plan.einheiten[cfg.einheit], 10) || 0;
@@ -48778,6 +48904,7 @@ function rekrutGebaeudeBesuchen(villageId, gebaeude, fertig) {
                 bauVorkommnisMerken("truppen", villageId,
                     `${getVillageDisplayNameWithCoord(villageId)}: ${schritt.grund} rekrutiert.`,
                     true, "truppen");
+                try { rohstoffAusgabeMerken(villageId, "t", seite.kosten && seite.kosten[schritt.einheit], schritt.menge); } catch (e) { }   // v624
                 // Der eben erteilte Auftrag steht jetzt mit in der
                 // Schleife. Die Antwort enthaelt sie zwar, aber ihr HTML
                 // ein zweites Mal zu zerlegen waere Aufwand fuer eine
@@ -51481,7 +51608,7 @@ function bauUiListeHtml() {
         </div>
     </div>`;
 
-    return bhBlock + belBlock + bauUiVerwaltungHtml(vorlagen, kacheln) +
+    return bhBlock + rohstoffAufteilungBlockHtml() + belBlock + bauUiVerwaltungHtml(vorlagen, kacheln) +
         `<div style="display:flex;align-items:center;gap:6px;margin:0 0 6px 0;">
             <span style="color:${BAU_UI_HELL};font-size:11px;font-weight:bold;flex:0 0 auto;">Dörfer</span>
             <span style="flex:1 1 auto;height:1px;background:#26334a;"></span>
@@ -52292,6 +52419,101 @@ function truppUiBefehl(cmd, arg, neuZeichnen) {
     return true;
 }
 
+// --- v624: Oberflaeche der Rohstoff-Aufteilung ------------------------
+function rohstoffAnteilText(w) { return w === null || w === undefined ? "auto" : `${w} % Truppen`; }
+function rohstoffStepper(ziel, wert, erbt) {
+    // ziel: "s" | "d:<vid>" | "g:<gid>"
+    const eigen = wert !== null && wert !== undefined;
+    return `<span style="display:inline-flex;align-items:center;gap:3px;flex:0 0 auto;">
+        ${bauUiKnopf("rt-minus", ziel, "−")}
+        <span style="min-width:74px;text-align:center;font-size:11px;font-weight:bold;color:${eigen ? "#e8c34a" : BAU_UI_SCHWACH};">
+            ${eigen ? `${wert} % Tr.` : (erbt ? escapeAttackPlanHtml(erbt) : "auto")}</span>
+        ${bauUiKnopf("rt-plus", ziel, "+")}
+        ${eigen ? bauUiKnopf("rt-auto", ziel, "×") : ""}
+    </span>`;
+}
+
+function rohstoffAufteilungBlockHtml() {
+    const a = rohstoffAufteilungLaden();
+    const n = Object.keys(a.doerfer).length + Object.keys(a.gruppen).length;
+    return `<div style="padding:6px 7px;background:#182234;border-radius:4px;margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <span style="font-weight:bold;color:${BAU_UI_HELL};font-size:11px;">Rohstoffe: Bau / Truppen</span>
+            ${rohstoffStepper("s", a.standard, null)}
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:6px;">
+            <span style="color:${BAU_UI_SCHWACH};font-size:10px;flex:1 1 auto;">
+                ${n ? `${n} eigene Angabe(n) für Dörfer/Gruppen` : "Für alle Dörfer gleich"}</span>
+            ${bauUiKnopf("rt-ansicht", "", "Dörfer & Gruppen")}
+        </div>
+        <div style="color:${BAU_UI_SCHWACH};font-size:9px;margin-top:5px;line-height:1.4;">
+            Anteil der Ausgaben, der in Truppen gehen soll (gemessen über 24 Std. je Dorf).
+            „auto“ = wie bisher: Truppen zuerst bis zum Soll, danach Bau zuerst.
+        </div>
+    </div>`;
+}
+
+function rohstoffAufteilungAnsichtHtml() {
+    const a = rohstoffAufteilungLaden();
+    const gruppen = loadCachedVillageGroups() || [];
+    const zeile = (titel, info, stepper) => `<div style="display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid #1b2432;">
+        <span style="flex:1 1 auto;font-size:11px;min-width:0;">${titel}${info ? `<br><span style="color:${BAU_UI_SCHWACH};font-size:9px;">${info}</span>` : ""}</span>
+        ${stepper}</div>`;
+    const gz = gruppen.map(g => {
+        const e = a.gruppen[String(g.id)];
+        const ids = bauGruppenMitglieder(g.id);
+        return zeile(escapeAttackPlanHtml(g.name), ids ? `${ids.length} Dörfer` : "Mitglieder unbekannt",
+            rohstoffStepper("g:" + g.id, e ? e.anteil : null, null));
+    }).join("") || `<div style="color:${BAU_UI_SCHWACH};font-size:10px;">Keine Dorfgruppen bekannt.</div>`;
+    const dz = bauDorfListe().map(({ id: vid, label }) => {
+        const eigen = a.doerfer[String(vid)];
+        const gilt = rohstoffAnteilFuerDorf(vid);
+        const sum = rohstoffAusgabenSumme(vid);
+        const ges = sum.bau + sum.truppen;
+        const ist = ges > 0 ? `24 Std.: ${Math.round(sum.truppen / ges * 100)} % Truppen (${Math.round(ges / 1000)}k ausgegeben)` : "24 Std.: noch keine Ausgaben gemerkt";
+        const erbt = (eigen === undefined && gilt) ? `${gilt.anteil} % (${gilt.quelle.replace(/^Gruppe /, "")})` : null;
+        return zeile(escapeAttackPlanHtml(label), ist, rohstoffStepper("d:" + vid, eigen === undefined ? null : eigen, erbt));
+    }).join("");
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="font-weight:bold;color:#8fd4a0;">Rohstoffe: Bau / Truppen</span>
+            ${bauUiKnopf("zurueck", "", "Zurück")}
+        </div>
+        <div style="color:${BAU_UI_SCHWACH};font-size:9px;line-height:1.5;margin-bottom:8px;">
+            Prozent = Anteil der Ausgaben, der in Truppen gehen soll. Ein Dorf schlägt seine Gruppe,
+            eine Gruppe den Standard (${rohstoffAnteilText(a.standard)}). × entfernt die eigene Angabe.
+            Fehlen einem Dorf keine Truppen mehr, baut es frei.
+        </div>
+        <div style="font-size:10px;font-weight:bold;color:${BAU_UI_HELL};margin:4px 0;">Standard</div>
+        ${zeile("Alle Dörfer ohne eigene Angabe", "", rohstoffStepper("s", a.standard, null))}
+        <div style="font-size:10px;font-weight:bold;color:${BAU_UI_HELL};margin:10px 0 4px;">Dorfgruppen</div>
+        ${gz}
+        <div style="font-size:10px;font-weight:bold;color:${BAU_UI_HELL};margin:10px 0 4px;">Dörfer</div>
+        ${dz}`;
+}
+
+function rohstoffStepperBefehl(cmd, arg) {
+    const a = rohstoffAufteilungLaden();
+    let art = "standard", id = null, name = "", alt = a.standard;
+    if (String(arg).indexOf("d:") === 0) { art = "dorf"; id = String(arg).slice(2); alt = a.doerfer[id]; }
+    else if (String(arg).indexOf("g:") === 0) {
+        art = "gruppe"; id = String(arg).slice(2);
+        alt = a.gruppen[id] ? a.gruppen[id].anteil : undefined;
+        const g = (loadCachedVillageGroups() || []).find(x => String(x.id) === id);
+        name = g ? g.name : "";
+    }
+    let neu;
+    if (cmd === "rt-auto") neu = null;
+    else {
+        const basis = (alt === null || alt === undefined) ? 50 : Number(alt);
+        const schritt = (alt === null || alt === undefined) ? 0 : 10;
+        neu = Math.max(0, Math.min(100, basis + (cmd === "rt-plus" ? schritt : -schritt)));
+    }
+    rohstoffAnteilSetzen(art, id, neu, name);
+    console.log(`[TW] Rohstoff-Aufteilung: ${art === "standard" ? "Standard" : art === "dorf" ? "Dorf " + id : "Gruppe " + (name || id)} → ` +
+        `${rohstoffAnteilText(neu)}.`);
+    return neu;
+}
+
 function bauUiHtml() {
     const kopf = bauUiMeldung
         ? `<div style="margin-bottom:6px;font-size:10px;color:${bauUiMeldungFarbe};">${bauUiMeldung}</div>`
@@ -52299,6 +52521,7 @@ function bauUiHtml() {
     let rumpf;
     if (bauUiAnsicht === "editor") rumpf = bauUiEditorHtml();
     else if (bauUiAnsicht === "zuweisung") rumpf = bauUiZuweisungHtml();
+    else if (bauUiAnsicht === "aufteilung") rumpf = rohstoffAufteilungAnsichtHtml();   // v624
     else rumpf = bauUiListeHtml();
     return kopf + rumpf;
 }
@@ -52339,6 +52562,16 @@ function bauUiBefehl(cmd, arg, neuZeichnen) {
     bauUiMelde("");
 
     switch (cmd) {
+        // v624: Rohstoff-Aufteilung
+        case "rt-ansicht":
+            bauUiAnsicht = "aufteilung";
+            break;
+        case "rt-plus": case "rt-minus": case "rt-auto": {
+            const w = rohstoffStepperBefehl(cmd, arg);
+            bauUiMelde(`Rohstoff-Aufteilung: ${rohstoffAnteilText(w)}.`, "#8fd4a0");
+            break;
+        }
+
         case "neu":
             bauUiEntwurf = { id: null, name: "Neue Vorlage", auftraege: [], zusatz: [0, 0], art: "4" };
             bauUiAnsicht = "editor";
@@ -54757,7 +54990,10 @@ function bauSchrittAusfuehren(win, doc, villageId, callback) {
                 voll = cap > 0 && ["wood", "stone", "iron"].some(k => Number(v[k]) >= cap * 0.9);
             } catch (e) { }
             if (!voll) {
-                const grund = `Truppen-Vorrang: ${lage.zahl === null ? "?" : lage.zahl}/${lage.grenze} ` +
+                const grund = lage.modus === "anteil"
+                    ? `Rohstoff-Aufteilung (${lage.quelle}): Truppen ${lage.anteil} %, in 24 Std. erst ${lage.ist} % - ` +
+                      `${BAU_NAMEN[schritt.gebaeude] || schritt.gebaeude} wartet (nur Bauernhof/Speicher oder bei vollem Speicher).`
+                    : `Truppen-Vorrang: ${lage.zahl === null ? "?" : lage.zahl}/${lage.grenze} ` +
                     `${lage.einheit === "light" ? "LKav" : lage.einheit} - ${BAU_NAMEN[schritt.gebaeude] || schritt.gebaeude} wartet ` +
                     `(nur Bauernhof/Speicher oder bei vollem Speicher).`;
                 console.log(`[TW] Bauen ${dorf}: ${grund}`);
@@ -54821,6 +55057,7 @@ function bauSchrittAusfuehren(win, doc, villageId, callback) {
             merkeBauErgebnis(villageId, "ok", schritt.grund +
                 (antwort.fertigIn ? `, fertig in ${antwort.fertigIn}` : ""),
                 stand, bauSchleifeRestMs(doc), null);
+            try { rohstoffAusgabeMerken(villageId, "b", schritt.kosten, 1); } catch (e) { }   // v624
 
             // 04.09.2026: Der Bauernhof wurde vorgezogen, landet in der
             // Schleife aber HINTEN - bei vier laufenden Auftraegen also
