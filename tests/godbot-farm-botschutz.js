@@ -98,12 +98,18 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
    {id:'5',x:0,y:1,dist:1,gebaeude:{main:1,wall:0},verluste:0},{id:'6',x:0,y:0,dist:0.5,gebaeude:{main:4},verluste:1}];
  let e=E(zl,{ziele:{},lern:{}},cfgK,{spy:8,catapult:10,ram:2,axe:30});
  const kurz=(e)=>e.aktionen.map(a=>a.ziel.id+':'+a.art+':'+(a.pakete?a.pakete.map(p=>JSON.stringify(p.truppen)).join('|'):JSON.stringify(a.truppen))+':'+(a.geb||'-')).join(' ');
- t('M1 (v610) naechste zuerst: Spaeher; HG 3->1 = 2 Pakete zu 2 Kats; Kaserne 2->0 = 2 Pakete; Wall nur Rammen - jedes Paket mit 5 Axt + 1 Spaeher',
-   kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:main 3:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:barracks 4:beschuss:{"ram":2,"spy":1,"axe":5}:-'&&e.gruende.fertig===1&&e.gruende.verluste===1&&!e.gruende.grenze,kurz(e)+' '+JSON.stringify(e.gruende));
+ t('M1 (v625) erst Beschuss, dann Erkundung; HG 3->1 = 2 Pakete zu 2 Kats; Kaserne 2->0 = 2 Pakete; Wall nur Rammen - jedes Paket mit 5 Axt + 1 Spaeher',
+   kurz(e)==='2:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:main 3:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:barracks 4:beschuss:{"ram":2,"spy":1,"axe":5}:- 1:spaeher:{"spy":1}:-'&&e.gruende.fertig===1&&e.gruende.verluste===1&&!e.gruende.grenze,kurz(e)+' '+JSON.stringify(e.gruende));
  e=E(zl,{ziele:{},lern:{}},Object.assign({},cfgK,{maxOffen:2}),{spy:8,catapult:10,ram:2,axe:30});
- t('M2 Grenze nur, wenn gesetzt (2): nur die beiden naechsten',kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:main'&&e.gruende.grenze===2,kurz(e));
+ t('M2 Grenze nur, wenn gesetzt (2): Beschuesse belegen die Plaetze zuerst',kurz(e)==='2:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:main 3:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:barracks'&&e.gruende.grenze===2,kurz(e)+' '+JSON.stringify(e.gruende));
  e=E(zl,{ziele:{},lern:{}},cfgK,{spy:2,catapult:3,ram:0,axe:10});
- t('M3 knappe Truppen: 3 Kats reichen fuer 1 Paket (2 Kats), Rest wartet auf Spaeher',kurz(e)==='1:spaeher:{"spy":1}:- 2:beschuss:{"catapult":2,"spy":1,"axe":5}:main'&&e.gruende.keineSpaeher===2&&/Truppen fehlen/.test(e.aktionen[1].grund),kurz(e)+' '+JSON.stringify(e.gruende));
+ t('M3 knappe Truppen: 3 Kats reichen fuer 1 Paket (2 Kats), Erkundung danach',kurz(e)==='2:beschuss:{"catapult":2,"spy":1,"axe":5}:main 1:spaeher:{"spy":1}:-'&&e.gruende.keineKatapulte===1&&/Truppen fehlen/.test(e.aktionen[0].grund),kurz(e)+' '+JSON.stringify(e.gruende));
+ { const zs=[{id:'a',x:0,y:0,dist:1,gebaeude:null,verluste:0},{id:'b',x:0,y:0,dist:1.5,gebaeude:null,verluste:0},{id:'c',x:0,y:0,dist:2,gebaeude:null,verluste:0},{id:'d',x:0,y:0,dist:9,gebaeude:{main:3,wall:0},verluste:0}];
+   const r=E(zs,{ziele:{},lern:{}},cfgK,{spy:3,catapult:10,axe:50});
+   t('S3 (v625) Spaeher zuerst fuer den Kata-Trupp: fernes HG-Ziel bekommt 2 Pakete, Erkundung haelt Spaeher fuer weitere Pakete zurueck',
+     kurz(r)==='d:beschuss:{"catapult":2,"spy":1,"axe":5}|{"catapult":2,"spy":1,"axe":5}:main'&&r.gruende.spaeherFuerBeschuss===3,kurz(r)+' '+JSON.stringify(r.gruende));
+   const r2=E(zs.slice(0,3),{ziele:{},lern:{}},cfgK,{spy:3,catapult:10,axe:50});
+   t('S4 (v625) ohne bekanntes Beschussziel darf die Erkundung alle Spaeher nutzen',r2.aktionen.length===3&&r2.aktionen.every(a=>a.art==='spaeher'),kurz(r2)); }
  const hg11=[{id:'9',x:1,y:1,dist:1,gebaeude:{main:11,wall:0},verluste:0}];
  e=E(hg11,{ziele:{},lern:{}},cfgK,{spy:20,catapult:100,axe:100});
  const e2=E(hg11,{ziele:{},lern:{},faktor:{main:1.25}},cfgK,{spy:20,catapult:100,axe:100});

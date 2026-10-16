@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      624
+// @version      625
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33255,6 +33255,15 @@ function godFarmLauf(fertig) {
             const msFeldMax = msWerte.length ? Math.max.apply(null, msWerte) : 10 * 60000;
             const res = godFarmPlanReserve(2 * cfg.maxFelder * msFeldMax + 10 * 60000);
             if (res.anzahl) hinweise.push(`Truppen fuer ${res.anzahl} geplante(n) Angriff(e) zurueckgehalten`);
+            // v625: Spaeher fuer Auto-Kat im Seitendorf stehen lassen.
+            try {
+                const eigenId = String((seite.eigen && seite.eigen.id) || "");
+                const sp = autoKatSpaeherReserve(seite.einheiten);
+                if (eigenId && sp > 0) {
+                    const r = res.proDorf[eigenId] = res.proDorf[eigenId] || {};
+                    if (r.spy !== Infinity) r.spy = (r.spy || 0) + sp;
+                }
+            } catch (e) { }
             const aw = godFarmAuswahl(seite, cfg, log, Date.now(), doerfer, res.proDorf);
             const g = aw.gruende;
             const ausgelassen = `ausgelassen: ${g.abstand} Abstand, ${g.laufend} fremd laufend, ${g.verluste} Verluste, ` +
@@ -33639,28 +33648,55 @@ function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
     const aktionen = [], gruende = {};
     const zaehle = (k) => { gruende[k] = (gruende[k] || 0) + 1; };
     let offen = Object.keys(stand.ziele || {}).filter(id => stand.ziele[id].offen || stand.ziele[id].warte).length;
-    ziele.slice().sort((a, b) => a.dist - b.dist).forEach(z => {
-        const zs = (stand.ziele || {})[z.id] || {};
-        if (zs.offen || zs.warte) { zaehle("unterwegs"); return; }
-        if (z.teamBelegt) { zaehle("team"); return; }   // v615
-        if (zs.sperreBis && zs.sperreBis > Date.now()) { zaehle("gesperrt"); return; }
-        if (cfg.maxOffen > 0 && offen >= cfg.maxOffen) { zaehle("grenze"); return; }
-        if (z.verluste > 0) { zaehle("verluste"); return; }
+    // v625 (Fetteruruk 16.10.: "Wichtige Regel: es muessen immer genuegend
+    // Spaeher da sein, um den Kata-Trupp abschicken zu koennen"). Bisher lief
+    // EINE Schleife nach Entfernung: nahe Ziele mit unbekannten Gebaeuden
+    // nahmen je cfg.spaeher Spaeher, und fuer den Beschuss weiter hinten
+    // (jedes Paket braucht 1 Spaeher) blieb keiner ("keineSpaeher").
+    // Jetzt: 1. Durchgang nur Beschuesse, 2. Durchgang Erkundung - und die
+    // Erkundung laesst so viele Spaeher stehen, wie die uebrigen Katapulte
+    // noch Pakete bilden koennten (je Paket mind. 2 Katapulte = 1 Spaeher),
+    // solange es Ziele mit bekannten Gebaeuden gibt, die Beschuss brauchen.
+    // Ohne solche Ziele darf die Erkundung alle Spaeher nutzen - sonst
+    // wuerde nie ein neues Ziel gefunden.
+    let beschussBedarf = false;
+    const sortiert = ziele.slice().sort((a, b) => a.dist - b.dist);
+    const spaehenNoetig = (z, zs) => {
         const g = z.gebaeude || {};
-        const bekannt = typeof g.main === "number";
-        if (!bekannt || z.spaehenGrund || zs.nachBeschuss) {
-            if ((frei.spy || 0) < cfg.spaeher) { zaehle("keineSpaeher"); return; }
-            frei.spy -= cfg.spaeher;
-            offen++;
-            aktionen.push({ ziel: z, art: "spaeher", truppen: { spy: cfg.spaeher },
-                grund: !bekannt ? "Gebäude unbekannt" : (zs.nachBeschuss ? "nach Beschuss" : z.spaehenGrund) });
-            return;
-        }
+        return typeof g.main !== "number" || !!z.spaehenGrund || !!zs.nachBeschuss;
+    };
+    const vorpruefen = (z, zs) => {
+        if (zs.offen || zs.warte) { zaehle("unterwegs"); return false; }
+        if (z.teamBelegt) { zaehle("team"); return false; }   // v615
+        if (zs.sperreBis && zs.sperreBis > Date.now()) { zaehle("gesperrt"); return false; }
+        if (cfg.maxOffen > 0 && offen >= cfg.maxOffen) { zaehle("grenze"); return false; }
+        if (z.verluste > 0) { zaehle("verluste"); return false; }
+        return true;
+    };
+    // 2. Durchgang (unten): Erkundung mit dem, was der Beschuss uebrig laesst.
+    const erkunden = () => sortiert.forEach(z => {
+        const zs = (stand.ziele || {})[z.id] || {};
+        if (!spaehenNoetig(z, zs)) return;
+        if (!vorpruefen(z, zs)) return;
+        const g = z.gebaeude || {};
+        const reserve = beschussBedarf ? Math.floor((frei.catapult || 0) / 2) : 0;
+        if ((frei.spy || 0) - reserve < cfg.spaeher) { zaehle(reserve ? "spaeherFuerBeschuss" : "keineSpaeher"); return; }
+        frei.spy -= cfg.spaeher;
+        offen++;
+        aktionen.push({ ziel: z, art: "spaeher", truppen: { spy: cfg.spaeher },
+            grund: typeof g.main !== "number" ? "Gebäude unbekannt" : (zs.nachBeschuss ? "nach Beschuss" : z.spaehenGrund) });
+    });
+    sortiert.forEach(z => {
+        const zs = (stand.ziele || {})[z.id] || {};
+        if (spaehenNoetig(z, zs)) return;   // -> 2. Durchgang
+        if (!vorpruefen(z, zs)) return;
+        const g = z.gebaeude || {};
         const wall = g.wall || 0, kaserne = g.barracks || 0, hg = g.main || 0;
         let geb = null, von = 0, bis = 0;
         if (kaserne > 0) { geb = "barracks"; von = kaserne; bis = 0; }
         else if (hg > cfg.hgZiel) { geb = "main"; von = hg; bis = cfg.hgZiel; }
         if (!geb && !wall) { zaehle("fertig"); return; }
+        beschussBedarf = true;   // v625
         // v608: immer mindestens 1 Spaeher und Begleitung mit (Fetteruruk).
         if ((frei.spy || 0) < 1) { zaehle("keineSpaeher"); return; }
         let begleit = cfg.begleitEinheit;
@@ -33702,7 +33738,19 @@ function autoKatEntscheiden(ziele, stand, cfg, einheiten) {
             grund: [wall ? `Wall ${wall}` : "", stufen ? `${AUTOKAT_GEB_NAME[geb]} ${von}→${von - stufen} in ${stufen} Paket(en)` +
                 (von - stufen > bis ? ` (Ziel ${bis}, Truppen fehlen)` : "") : ""].filter(Boolean).join(", ") });
     });
+    erkunden();   // v625: Erkundung erst nach den Beschuessen
     return { aktionen, gruende };
+}
+
+// v625: Spaeher, die GodBot-Farm im Auto-Kat-Dorf stehen laesst - genug fuer
+// so viele Kata-Pakete, wie die Katapulte bilden koennen (je mind. 2), plus
+// eine Erkundung. Nur wirksam, wenn eine Farmvorlage Spaeher enthaelt.
+function autoKatSpaeherReserve(einheiten) {
+    try {
+        const c = autoKatCfg();
+        if (!c.an) return 0;
+        return Math.floor(((einheiten && einheiten.catapult) || 0) / 2) + c.spaeher;
+    } catch (e) { return 0; }
 }
 
 // Lernen aus einem Bericht NACH dem Beschuss (Folge-Spaeher oder ein
