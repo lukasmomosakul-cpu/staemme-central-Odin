@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      626
+// @version      627
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -33956,7 +33956,12 @@ function autoKatTakt(fertig) {
                     Object.keys(ak.truppen).forEach(u => { if (info && info.unitSpeeds[u] === basis) langsam = u; });
                 } catch (e) { }
                 if (!lauf) { meldung.push(`${nach}: Laufzeit unbekannt (Weltdaten fehlen) - übersprungen`); return; }
-                let start = serverNowMs() + SUPPORT_PLAN_MIN_LEAD_MS + humanDelay(30000, 150000);
+                // v627 (App-Protokoll 16.10. 17:25-17:30): Mit 30-150 s Vorlauf lag der
+                // Wecktermin (Start - 90 s, geweckt 20 s davor) oft schon in der
+                // Vergangenheit, wenn die gedrosselte Seite ihn meldete - die App
+                // weckte gar nicht fuer den Angriffsplaner. 3-6 Min. lassen dem
+                // Wecker Zeit; Barbarendoerfer brauchen keine Eile.
+                let start = serverNowMs() + SUPPORT_PLAN_MIN_LEAD_MS + humanDelay(180000, 360000);
                 let ankunft = start + lauf * 1000;
                 // Nach dem letzten eigenen Farmangriff ankommen - sonst waere
                 // dessen Bericht der letzte im Farm-Assistenten.
