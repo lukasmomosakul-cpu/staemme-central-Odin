@@ -4347,6 +4347,7 @@ public class GameWebViewActivity extends Activity {
   catch(Exception ignored){}
   if(dimDecke!=null){ setStatus("Dimm-Modus aufgefrischt"); return; }
   taktHandler.removeCallbacks(dimmPuls); taktHandler.postDelayed(dimmPuls,300_000L);
+  taktHandler.removeCallbacks(dimStatusTakt); taktHandler.postDelayed(dimStatusTakt,30_000L);
   android.widget.LinearLayout decke=new android.widget.LinearLayout(this);
   decke.setOrientation(android.widget.LinearLayout.VERTICAL);
   decke.setGravity(android.view.Gravity.CENTER);
@@ -4367,6 +4368,18 @@ public class GameWebViewActivity extends Activity {
   hin.setGravity(android.view.Gravity.CENTER);
   decke.addView(hin);
   dimHinweis=hin;
+  // 2.0.89 (Fetteruruk 16.10.: "im Dimmen weiss man nicht, was gerade los
+  // ist"): Beim Antippen steht hier, was jede Welt tut - GodBot lebt?,
+  // Farmen (letzter Lauf, naechster), Angriffsplaner, Botschutz, laufender
+  // Vorgang. Alles aus der Seite selbst (localStorage), keine Anfrage.
+  TextView st=new TextView(this);
+  st.setTextColor(0xFFB8B8B8); st.setTextSize(12.5f);
+  st.setLineSpacing(0f,1.35f);
+  int pad=(int)(getResources().getDisplayMetrics().density*22);
+  st.setPadding(pad,pad,pad,0);
+  st.setGravity(android.view.Gravity.START);
+  decke.addView(st,new android.widget.LinearLayout.LayoutParams(-1,-2));
+  dimStatus=st;
   // Kein Tippen mehr: in der Hosentasche reicht der kleinste Kontakt, und
   // der Dimm-Modus waere weg - samt laufender Nachtarbeit. Nur eine
   // bewusste waagerechte Wischbewegung beendet ihn. Dieselbe Geste und
@@ -4376,9 +4389,78 @@ public class GameWebViewActivity extends Activity {
   dimDecke=decke;
   // Kurz zeigen, was da liegt, dann in die Ruhe fallen - sonst waere der
   // Umschaltmoment nicht von einem Absturz zu unterscheiden.
-  dimWach(); dimNachdunkeln();
+  dimWach(); dimNachdunkeln(); dimStatusAuffrischen();
   setStatus("gedimmt - läuft im vollen Takt weiter ("+alleWelten().size()+" Welt(en) unter der Abdeckung)");
  }
+ private TextView dimStatus;
+ private static final String DIM_STATUS_JS="(function(){try{var g=function(k){try{return JSON.parse(localStorage.getItem(k)||'null')}catch(e){return null}};"
+  +"var st=g('tw_odin_steuerstand')||{},f=g('tw_godfarm_stand')||{},p=g('tw_attack_plans')||{},n=0,c=0;"
+  +"Object.keys(p).forEach(function(k){((p[k]||{}).attacks||[]).forEach(function(a){if(a&&!a.removed&&!a.sent&&!a.failed&&a.startsAtMs){c++;if(!n||a.startsAtMs<n)n=a.startsAtMs;}})});"
+  +"return JSON.stringify({bot:!!st.botschutz,laeuft:st.laeuft||null,farmAn:!!(st.schalter&&st.schalter.farmen),farmNext:(st.naechst||{}).farmen||0,"
+  +"fG:f.gesendet||0,fAt:f.at||0,fF:!!f.fehler,offen:c,planNext:n,prob:st.probleme||{}});}catch(e){return '{}'}})()";
+ private static String dimUhr(long ms){
+  return new java.text.SimpleDateFormat("HH:mm",java.util.Locale.GERMANY).format(new java.util.Date(ms));
+ }
+ private static String dimVor(long ms){
+  long s=Math.max(0,(System.currentTimeMillis()-ms)/1000);
+  return s<90?s+" s":(s<5400?(s/60)+" Min":(s/3600)+" Std");
+ }
+ private static final java.util.Map<String,String> DIM_VORGANG=new java.util.HashMap<String,String>(){{
+  put("farm","Farmen"); put("godfarm","Farmen"); put("attack","Angriffsplaner"); put("bau","Bauen/Rekrutieren");
+  put("scavenge","Raubzug"); put("resources","Rohstoffe"); put("tabben","Rausstellen");
+ }};
+ // Liest jede Welt aus und schreibt die Statuszeilen. Laeuft beim Antippen
+ // und alle 30 s, solange die Abdeckung liegt (die Zeilen sind in der Ruhe
+ // unsichtbar - der Bildschirm soll dann wie aus wirken).
+ private void dimStatusAuffrischen(){
+  if(dimDecke==null||dimStatus==null)return;
+  final java.util.List<Welt> welten=new java.util.ArrayList<>(alleWelten());
+  final String[] teile=new String[welten.size()];
+  final int[] offen={welten.size()};
+  final Runnable fertig=()->{
+   StringBuilder b=new StringBuilder(dimUhr(System.currentTimeMillis())).append("\n");
+   for(String t:teile)if(t!=null)b.append("\n").append(t);
+   if(dimStatus!=null)dimStatus.setText(b.toString());
+  };
+  if(welten.isEmpty()){ dimStatus.setText(dimUhr(System.currentTimeMillis())+"\n\nkeine Welt offen"); return; }
+  for(int i=0;i<welten.size();i++){
+   final int idx=i; final Welt w=welten.get(i);
+   final String kopf=(w.kopfName==null?"":w.kopfName)+" · "+w.weltName;
+   if(w.webView==null){ teile[idx]=kopf+"\n  keine Ansicht"; if(--offen[0]==0)fertig.run(); continue; }
+   try{
+    w.webView.evaluateJavascript(DIM_STATUS_JS,r->{
+     try{
+      String roh=r==null?"{}":r;
+      if(roh.startsWith("\""))roh=new org.json.JSONTokener(roh).nextValue().toString();
+      org.json.JSONObject o=new org.json.JSONObject(roh.isEmpty()?"{}":roh);
+      long l=OdinService.zuletztLebend(w.gameAccountId);
+      StringBuilder t=new StringBuilder(kopf);
+      t.append("\n  GodBot: ").append(l>0?(System.currentTimeMillis()-l<120_000L?"aktiv":"still")+" (vor "+dimVor(l)+")":"noch kein Lebenszeichen");
+      if(o.optBoolean("bot",false))t.append("\n  ⚠ BOTSCHUTZ – von Hand lösen");
+      String lf=o.optString("laeuft","");
+      if(!lf.isEmpty()&&!"null".equals(lf))t.append("\n  gerade: ").append(DIM_VORGANG.containsKey(lf)?DIM_VORGANG.get(lf):lf);
+      long fAt=o.optLong("fAt",0), fN=o.optLong("farmNext",0);
+      if(o.optBoolean("farmAn",false)||fAt>0){
+       t.append("\n  Farmen: ");
+       if(fAt>0)t.append("zuletzt ").append(dimUhr(fAt)).append(" · ").append(o.optInt("fG",0)).append(" Angriffe").append(o.optBoolean("fF",false)?" (Fehler)":"");
+       if(fN>System.currentTimeMillis())t.append(fAt>0?" · ":"").append("nächster ").append(dimUhr(fN));
+      }
+      int offenPl=o.optInt("offen",0); long pN=o.optLong("planNext",0);
+      if(offenPl>0)t.append("\n  Angriffsplaner: ").append(offenPl).append(" offen").append(pN>0?" · nächster "+dimUhr(pN):"");
+      org.json.JSONObject pr=o.optJSONObject("prob");
+      if(pr!=null&&pr.length()>0)t.append("\n  Hinweis: ").append(pr.length()).append(" Problem(e) im Manager");
+      teile[idx]=t.toString();
+     }catch(Exception e){ teile[idx]=kopf+"\n  Stand nicht lesbar"; }
+     if(--offen[0]==0)fertig.run();
+    });
+   }catch(Exception e){ teile[idx]=kopf+"\n  Stand nicht lesbar"; if(--offen[0]==0)fertig.run(); }
+  }
+ }
+ private final Runnable dimStatusTakt=new Runnable(){ @Override public void run(){
+  if(dimDecke==null)return;
+  dimStatusAuffrischen();
+  taktHandler.postDelayed(this,30_000L);
+ }};
  // Alles, was den Bildschirm an und die Ansicht vorn haelt - auch ueber dem
  // Sperrbildschirm. setShowWhenLocked ENTSPERRT nichts: das Geraet bleibt
  // gesperrt, die Ansicht liegt nur davor und wird dadurch weiter gerendert.
@@ -4398,7 +4480,7 @@ public class GameWebViewActivity extends Activity {
  // Schwellen wie in GodBot: bei 412 px Breite genau 140 px Wischweg und
  // hoechstens 70 px senkrechte Abweichung. An der Bildschirmbreite
  // aufgehaengt, damit sie auf jedem Geraet dasselbe bedeuten.
- private static final long DIM_WISCH_MIN_MS=120L, DIM_WISCH_MAX_MS=2500L, DIM_ZURUECK_MS=5000L;
+ private static final long DIM_WISCH_MIN_MS=120L, DIM_WISCH_MAX_MS=2500L, DIM_ZURUECK_MS=10000L;
  // Ruhe: Helligkeit 0, Inhalt unsichtbar - vom ausgeschalteten Bildschirm
  // nicht zu unterscheiden. Wach: nur solange jemand hinschaut.
  private static final float DIM_RUHE=0f, DIM_WACH=0.15f;
@@ -4416,6 +4498,7 @@ public class GameWebViewActivity extends Activity {
  private void dimSicht(float a){
   if(dimZeichen!=null)dimZeichen.setAlpha(a);
   if(dimHinweis!=null)dimHinweis.setAlpha(a);
+  if(dimStatus!=null)dimStatus.setAlpha(a);
  }
  private void dimRuhe(){ dimHelligkeit(DIM_RUHE); dimSicht(0f); }
  private void dimWach(){ dimHelligkeit(DIM_WACH); dimSicht(1f); }
@@ -4515,6 +4598,7 @@ public class GameWebViewActivity extends Activity {
     // Beruehrung ist das einzige, was die Abdeckung sichtbar macht.
     dimWach();
     dimText("→ zum Beenden nach rechts wischen");
+    dimStatusAuffrischen();
     dimNachdunkeln();
     return true;
    }
@@ -4553,7 +4637,8 @@ public class GameWebViewActivity extends Activity {
         .putBoolean("dimm_an",false).apply(); }catch(Exception ignored){}
   if(dimDecke==null)return;
   if(dimZurueck!=null){ try{ dimDecke.removeCallbacks(dimZurueck); }catch(Exception ignored){} dimZurueck=null; }
-  dimHinweis=null;
+  dimHinweis=null; dimStatus=null;
+  taktHandler.removeCallbacks(dimStatusTakt);
   try{ dimRahmen.removeView(dimDecke); }catch(Exception ignored){}
   dimDecke=null;
   android.view.Window w=getWindow();
@@ -4853,8 +4938,19 @@ public class GameWebViewActivity extends Activity {
    try{
     android.os.PowerManager pm=(android.os.PowerManager)getSystemService(POWER_SERVICE);
     android.app.KeyguardManager km=getSystemService(android.app.KeyguardManager.class);
+    boolean an=pm!=null&&pm.isInteractive();
     setStatus("Dimm-Modus verlässt den Vordergrund - Bildschirm="
-      +(pm!=null&&pm.isInteractive()?"an":"aus")+", gesperrt="+(km!=null&&km.isKeyguardLocked()));
+      +(an?"an":"aus")+", gesperrt="+(km!=null&&km.isKeyguardLocked()));
+    // 2.0.89 (Fetteruruk 16.10.: "macht Sperrbildschirm an, aus etc."): Der
+    // Dimm-Modus haelt den Bildschirm selbst an (FLAG_KEEP_SCREEN_ON) - geht
+    // er trotzdem aus, war das die Ein-/Aus-Taste. Bisher holte der Dienst
+    // die Ansicht dann alle paar Minuten zurueck und schaltete dazu den
+    // Bildschirm wieder ein - ein Hin und Her. Jetzt gilt die Taste: Dimm-
+    // Modus endet, ab da weckt Odin wie sonst je Termin.
+    if(!an){
+     dimmenAus();
+     setStatus("Bildschirm per Taste aus - Dimm-Modus beendet, Odin weckt je Termin");
+    }
    }catch(Exception ignored){}
   }
   // Ohne flush() bleiben die Anmeldecookies nur im Speicher und sind nach
