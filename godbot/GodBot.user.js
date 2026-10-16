@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      622
+// @version      623
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19480,6 +19480,7 @@ function botMarkerSichtbar() {
 
         // Die doppelte tote Zeile wurde hier erfolgreich entfernt.
         try { statistikHintergrund(); } catch (e) { }   // v622
+        try { ruheseitePruefen(); } catch (e) { }       // v623
         maybeRefreshCommandOverview();
         maybeSyncPlansWithMemo();
 
@@ -30324,6 +30325,40 @@ function statsCacheFresh() {
 //   Produktion: wenn aelter als PRODUCTION_CACHE_MS (6 Std.)
 // Nie waehrend Botschutz. Die Werte gehen wie immer per Abgleich ins
 // Dashboard.
+// v623 RUHESEITE (Fetteruruk 16.10.: "Serveranfragen reduzieren, wo es ohne
+// Farmverluste machbar ist"). Beleg app_events 24 Std., FetterOrk de260:
+// overview:widget 2441 und place:commands 1867 Anfragen - zusammen mehr als
+// der ganze Farm-Versand (2516). Beide kommen NICHT von GodBot (fehlen in
+// GodBots eigener Zaehlung der Vorfallakte), sondern vom Spiel selbst: Die
+// Dorfuebersicht listet alle eigenen Befehle (16.10. 02:57: 245 Zeilen mit
+// data-endtime) und laedt Widget und Befehlsliste bei JEDEM ablaufenden
+// Zeitgeber nach - beim Farmen also alle paar Sekunden. Reine Anzeige.
+// Steht die Ansicht unbeobachtet (5 Min. keine Eingabe) auf einer solchen
+// Seite, wechselt GodBot einmal auf die Produktionsuebersicht (keine
+// Befehls-Zeitgeber). Nie waehrend Botschutz, Arbeitsrahmen oder Sperre.
+let ruheseiteVersuchAt = 0;
+function ruheseitePruefen() {
+    try {
+        if (typeof game_data === "undefined" || !game_data || !game_data.village) return;
+        const scr = String(game_data.screen || "");
+        if (scr !== "overview" && scr !== "place") return;
+        if (isBotProtectionActive()) return;
+        if (Date.now() - twLetzteEingabeAt < 5 * 60 * 1000) return;
+        if (Date.now() - ruheseiteVersuchAt < 10 * 60 * 1000) return;
+        if (document.querySelectorAll("[data-endtime]").length < 10) return;
+        if (document.querySelector("iframe[id^='tw-'], iframe[id*='Frame'], iframe[id*='frame']")) return;
+        if (readProcessLock()) return;
+        if (tabbenNavigationBlocked("Ruheseite")) return;
+        ruheseiteVersuchAt = Date.now();
+        console.log(`[TW] Ruheseite: ${scr === "overview" ? "Dorfübersicht" : "Versammlungsplatz"} mit ` +
+            `${document.querySelectorAll("[data-endtime]").length} Befehls-Zeitgebern unbeobachtet - wechsle auf die ` +
+            "Produktionsübersicht (spart die Nachlade-Anfragen des Spiels).");
+        localStorage.setItem("tw_expected_navigation", "1");
+        gbNavFreigeben();
+        window.location.href = "/game.php?village=" + game_data.village.id + "&screen=overview_villages&mode=prod";
+    } catch (e) { }
+}
+
 let statsHgLaeuft = false, statsHgVersuchAt = 0, prodHgVersuchAt = 0;
 let statsHgAbstandMs = (60 + Math.random() * 15) * 60 * 1000;
 function statistikHintergrund() {
@@ -33478,7 +33513,9 @@ function autoKatCfg() {
         maxOffen: c.v === 2 ? zahl(c.maxOffen, 0, 0, 200) : 0,
         spaeher: zahl(c.spaeher, 1, 1, 50),
         begleitEinheit: AUTOKAT_BEGLEIT_EINHEITEN.indexOf(c.begleitEinheit) >= 0 ? c.begleitEinheit : "axe",
-        begleitAnzahl: zahl(c.begleitAnzahl, 5, 1, 500)
+        begleitAnzahl: zahl(c.begleitAnzahl, 5, 1, 500),
+        // v623: Katapult-Faktor aus Berichten lernen (aus = nur von Hand)
+        lernen: c.lernen !== false
     };
 }
 
@@ -33684,6 +33721,9 @@ function autoKatLernen(stand, zs, neu) {
         // lernen; bisher stieg der Faktor fuer ALLE kuenftigen Ziele.
         if (gefallen < 0) {
             out.push(`${b.geb}: ${b.vorher[b.geb]}→${neu[b.geb]} - ausgebaut, nicht gelernt`);
+        } else if (!autoKatCfg().lernen) {
+            // v623: Faktor steht von Hand - nur berichten, nichts aendern.
+            out.push(`${b.geb}: ${b.kats} Kat. → ${gefallen} von ${geplant} Stufe(n), Faktor bleibt ${autoKatFaktor(stand, b.geb)} (Lernen aus)`);
         } else {
             if (!stand.faktor) stand.faktor = {};
             const f = autoKatFaktor(stand, b.geb);
@@ -33995,30 +34035,57 @@ function autoKatTakt(fertig) {
 }
 
 // --- Einstellungen (im Farmen-Bereich, unter GodBot-Farm) --------------
+// v623 (Fetteruruk 16.10.: "Farmen-Einstellungen praktikabel, aber nicht
+// schoen angezeigt"): gleiche Zeilen-Raster fuer Farmen und Auto-Kat,
+// Abschnitte mit Ueberschrift, Einheiten direkt am Feld, Hinweise klein.
+const GF_FELD_STIL = "background:#1b2230;color:#e8eef6;border:1px solid #3a4558;border-radius:5px;padding:3px 6px;font-size:12px;";
+function gfFeld(id, wert, breite, extra) {
+    return `<input type="number" id="${id}" value="${wert}" class="tw-numfield" ${extra || ""} ` +
+        `style="width:${breite || 46}px;text-align:right;${GF_FELD_STIL}" />`;
+}
+function gfAuswahl(id, optionen, wert) {
+    return `<select id="${id}" style="${GF_FELD_STIL}max-width:100%;">` +
+        optionen.map(([v, t]) => `<option value="${v}" ${wert === v ? "selected" : ""}>${t}</option>`).join("") + `</select>`;
+}
+function gfAbschnitt(titel, inhalt, rechts) {
+    return `<div style="margin-top:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px;
+                    padding-bottom:3px;border-bottom:1px solid #2c3546;">
+            <span style="font-size:10.5px;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;color:#8fa8c7;">${titel}</span>
+            ${rechts || ""}
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(92px,auto) 1fr;gap:6px 10px;align-items:center;font-size:12px;">${inhalt}</div>
+    </div>`;
+}
+function gfZeile(label, inhalt) {
+    return `<span style="color:#9aa4b2;">${label}</span>` +
+        `<span style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;color:#d9e6f2;">${inhalt}</span>`;
+}
+function gfHinweis(text) {
+    return `<div style="grid-column:1 / -1;font-size:10.5px;color:#7d8796;line-height:1.4;">${text}</div>`;
+}
+
 function autoKatUiHtml() {
     const c = autoKatCfg();
-    const feld = (id, wert, breite) => `<input type="number" id="${id}" value="${wert}" class="tw-numfield" ` +
-        `style="width:${breite || 40}px;text-align:right;background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;" />`;
+    const s = autoKatStand();
     const namen = { axe: "Axtkämpfer", light: "Leichte Kav.", spear: "Speerträger", sword: "Schwertkämpfer", heavy: "Schwere Kav." };
-    return `
-                <div style="margin-top:8px;padding-top:6px;border-top:1px dashed #333;font-size:12px;">
-                    <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                        <input type="checkbox" id="tw-autokat-an" ${c.an ? "checked" : ""}/>
-                        <b>Auto-Kat</b><span>HG auf</span>${feld("tw-autokat-hg", c.hgZiel, 36)}<span>halten, Kaserne weg, Rammen nur bei Wall</span>
-                    </label>
-                    <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px;">
-                        <span>Begleitung</span>${feld("tw-autokat-begleit-n", c.begleitAnzahl, 40)}
-                        <select id="tw-autokat-begleit" style="background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;">
-                            ${AUTOKAT_BEGLEIT_EINHEITEN.map(u => `<option value="${u}" ${c.begleitEinheit === u ? "selected" : ""}>${namen[u]}</option>`).join("")}
-                        </select><span>+ 1 Späher je Beschuss</span>
-                    </div>
-                    <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px;">
-                        <span>Späher je Erkundung</span>${feld("tw-autokat-spy", c.spaeher, 36)}
-                        <span>· höchstens</span>${feld("tw-autokat-offen", c.maxOffen, 40)}<span>Ziele gleichzeitig (0 = alle Truppen nutzen)</span>
-                    </div>
-                    <div style="font-size:11px;color:#999;margin-top:3px;">Nächste Ziele zuerst, alle verfügbaren Katapulte. Katapulte je Stufe: bis Stufe 3 zwei, bis 8 drei, bis 11 vier. Steigen die Punkte eines Dorfes (Karte), geht ein Späher hin. Fehlt die Begleitung, wird Leichte Kavallerie genommen. Einträge im Angriffsplaner unter „Auto-Kat“.</div>
-                    <div id="tw-autokat-stand" style="font-size:11px;color:#aab;margin-top:4px;"></div>
-                </div>`;
+    const fFeld = (geb) => gfFeld("tw-autokat-f-" + geb, autoKatFaktor(s, geb).toFixed(2), 54, 'step="0.05" min="1" max="3"');
+    const schalter = `<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#d9e6f2;cursor:pointer;">
+        <input type="checkbox" id="tw-autokat-an" ${c.an ? "checked" : ""}/> an</label>`;
+    return gfAbschnitt("Auto-Kat", [
+        gfZeile("HG halten auf", gfFeld("tw-autokat-hg", c.hgZiel, 40) + `<span style="color:#7d8796;">Kaserne weg · Rammen nur bei Wall</span>`),
+        gfZeile("Begleitung", gfFeld("tw-autokat-begleit-n", c.begleitAnzahl, 44) +
+            gfAuswahl("tw-autokat-begleit", AUTOKAT_BEGLEIT_EINHEITEN.map(u => [u, namen[u]]), c.begleitEinheit) +
+            `<span style="color:#7d8796;">+ 1 Späher</span>`),
+        gfZeile("Späher", gfFeld("tw-autokat-spy", c.spaeher, 40) + `<span>je Erkundung</span>`),
+        gfZeile("Gleichzeitig", gfFeld("tw-autokat-offen", c.maxOffen, 44) + `<span>Ziele</span><span style="color:#7d8796;">(0 = alle Truppen)</span>`),
+        gfZeile("Katapult-Faktor", `<span>HG</span>${fFeld("main")}<span>Kaserne</span>${fFeld("barracks")}` +
+            `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="tw-autokat-lernen" ${c.lernen ? "checked" : ""}/>aus Berichten lernen</label>`),
+        gfHinweis("Katapulte je Stufe: bis Stufe 3 zwei, bis 8 drei, bis 11 vier – mal Faktor (1,00 = Tabelle). " +
+            "Mit „lernen“ passt Auto-Kat den Faktor nach Beschussberichten selbst an; ohne bleibt dein Wert. " +
+            "Nächste Ziele zuerst, steigen die Punkte eines Dorfes, geht ein Späher hin. Einträge im Angriffsplaner unter „Auto-Kat“."),
+        `<div id="tw-autokat-stand" style="grid-column:1 / -1;font-size:11px;color:#aab6c6;background:#151b26;border:1px solid #263042;border-radius:6px;padding:5px 7px;"></div>`
+    ].join(""), schalter);
 }
 
 function autoKatUiStand(el) {
@@ -34031,14 +34098,14 @@ function autoKatUiStand(el) {
     try { vid = String(game_data.village.id); } catch (e) { }
     const warte = !autoKatEinheitenFrisch(vid) ? " (wartet auf Truppenzahlen aus dem nächsten GodBot-Farm-Lauf)" : "";
     el.innerHTML = !c.an ? "aus" :
-        `${unterwegs} Ziel(e) in Arbeit, ${ids.length} beobachtet · Tabelle ${fak} · Rammen ${autoKatJeStufe(s, "wall")} je Wallstufe` +
+        `${unterwegs} Ziel(e) in Arbeit, ${ids.length} beobachtet · Faktor ${fak} · Rammen ${autoKatJeStufe(s, "wall")} je Wallstufe` +
         ` · nächster Takt ${s.next && s.next > Date.now() ? new Date(s.next).toLocaleTimeString("de-DE") : "fällig"}${warte}`;
 }
 
 function autoKatUiBinden(content) {
     const q = (id) => content.querySelector("#" + id);
     if (!q("tw-autokat-an")) return;
-    const ids = ["tw-autokat-an", "tw-autokat-hg", "tw-autokat-offen", "tw-autokat-spy", "tw-autokat-begleit", "tw-autokat-begleit-n"];
+    const ids = ["tw-autokat-an", "tw-autokat-hg", "tw-autokat-offen", "tw-autokat-spy", "tw-autokat-begleit", "tw-autokat-begleit-n", "tw-autokat-lernen"];
     const speichern = () => {
         const vorher = autoKatCfg().an;
         const c = autoKatCfgSetzen({
@@ -34047,7 +34114,8 @@ function autoKatUiBinden(content) {
             maxOffen: q("tw-autokat-offen").value,
             spaeher: q("tw-autokat-spy").value,
             begleitEinheit: q("tw-autokat-begleit").value,
-            begleitAnzahl: q("tw-autokat-begleit-n").value
+            begleitAnzahl: q("tw-autokat-begleit-n").value,
+            lernen: !!(q("tw-autokat-lernen") && q("tw-autokat-lernen").checked)
         });
         if (c.an && !vorher) { const s = autoKatStand(); s.next = 0; autoKatStandSpeichern(s); }
         console.log(`[TW] Auto-Kat ${c.an ? "an" : "aus"}: HG auf ${c.hgZiel}, Begleitung ${c.begleitAnzahl} ${c.begleitEinheit} + 1 Späher, ` +
@@ -34055,43 +34123,49 @@ function autoKatUiBinden(content) {
         autoKatUiStand(q("tw-autokat-stand"));
     };
     ids.forEach(id => q(id).addEventListener("change", speichern));
+    // v623: Katapult-Faktor von Hand (1,00-3,00) - wirkt sofort auf neue Beschuesse.
+    ["main", "barracks"].forEach(geb => {
+        const el = q("tw-autokat-f-" + geb);
+        if (!el) return;
+        el.addEventListener("change", () => {
+            let f = parseFloat(String(el.value).replace(",", "."));
+            if (!(f >= 1)) f = 1;
+            f = Math.min(3, Math.round(f * 100) / 100);
+            el.value = f.toFixed(2);
+            const st = autoKatStand();
+            if (!st.faktor || typeof st.faktor !== "object") st.faktor = {};
+            st.faktor[geb] = f;
+            autoKatStandSpeichern(st);
+            console.log(`[TW] Auto-Kat: Katapult-Faktor ${AUTOKAT_GEB_NAME[geb]} von Hand auf ${f} gesetzt.`);
+            autoKatUiStand(q("tw-autokat-stand"));
+        });
+    });
     autoKatUiStand(q("tw-autokat-stand"));
 }
 
 // --- Einstellungen im Farmen-Bereich -----------------------------------
 function godFarmUiHtml() {
     const c = godFarmCfg();
-    const feld = (id, wert, breite) => `<input type="number" id="${id}" value="${wert}" class="tw-numfield" ` +
-        `style="width:${breite || 46}px;text-align:right;background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;" />`;
     return `
             <div style="margin:2px 0 12px;padding-bottom:10px;border-bottom:1px solid #333;">
-                <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                    <b>Farmmethode</b>
-                    <select id="tw-godfarm-modus" style="background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;">
-                        <option value="godbot" ${c.modus === "godbot" ? "selected" : ""}>GodBot-Farm</option>
-                        <option value="farmgod" ${c.modus === "farmgod" ? "selected" : ""}>FarmGod (alt, Rückfall)</option>
-                    </select>
-                </label>
-                <div style="font-size:11px;color:#999;margin:3px 0 6px;">Ein/aus über den Farmen-Knopf (lange drücken). Es farmt immer nur die gewählte Methode, nur für dieses Konto.</div>
+                <div style="display:grid;grid-template-columns:minmax(92px,auto) 1fr;gap:6px 10px;align-items:center;font-size:12px;">
+                    ${gfZeile("<b style='color:#d9e6f2;'>Farmmethode</b>", gfAuswahl("tw-godfarm-modus",
+                        [["godbot", "GodBot-Farm"], ["farmgod", "FarmGod (alt, Rückfall)"]], c.modus))}
+                    ${gfHinweis("Ein/aus über den Farmen-Knopf (lange drücken). Es farmt nur die gewählte Methode, nur für dieses Konto.")}
+                </div>
                 <div id="tw-godfarm-werte">
-                <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;">
-                    <span>Abstand je Dorf</span>${feld("tw-godfarm-abstand", c.abstandMin)}<span>Min. (zwischen Ankünften)</span>
-                    <span>· max.</span>${feld("tw-godfarm-felder", c.maxFelder, 40)}<span>Felder</span>
-                </div>
-                <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;margin-top:4px;">
-                    <span>Lauf alle</span>${feld("tw-godfarm-von", c.laufMin, 40)}<span>bis</span>${feld("tw-godfarm-bis", c.laufMax, 40)}<span>Min.</span>
-                </div>
-                <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:12px;margin-top:4px;">
-                    <span>Tempo</span>
-                    <select id="tw-godfarm-tempo" style="background:#222;color:#fff;border:1px solid #444;border-radius:3px;padding:2px 4px;">
-                        <option value="zuegig" ${c.tempo === "zuegig" ? "selected" : ""}>zügig (0,25–0,6 s)</option>
-                        <option value="normal" ${c.tempo === "normal" ? "selected" : ""}>normal (0,4–1,1 s + Pausen)</option>
-                        <option value="gemuetlich" ${c.tempo === "gemuetlich" ? "selected" : ""}>gemütlich (0,7–1,8 s + Pausen)</option>
-                    </select>
-                    <span>· max.</span>${feld("tw-godfarm-stunde", c.maxProStunde, 56)}<span>je Std. (0 = ohne)</span>
-                </div>
-                <div id="tw-godfarm-stand" style="font-size:11px;color:#aab;margin-top:6px;"></div>
-                ${autoKatUiHtml()}
+                    ${gfAbschnitt("Ziele", [
+                        gfZeile("Abstand je Dorf", gfFeld("tw-godfarm-abstand", c.abstandMin) + "<span>Min. zwischen zwei Ankünften</span>"),
+                        gfZeile("Reichweite", gfFeld("tw-godfarm-felder", c.maxFelder, 44) + "<span>Felder höchstens</span>")
+                    ].join(""))}
+                    ${gfAbschnitt("Takt", [
+                        gfZeile("Lauf alle", gfFeld("tw-godfarm-von", c.laufMin, 40) + "<span>–</span>" + gfFeld("tw-godfarm-bis", c.laufMax, 40) + "<span>Min.</span>"),
+                        gfZeile("Tempo", gfAuswahl("tw-godfarm-tempo", [["zuegig", "zügig · 0,25–0,6 s"],
+                            ["normal", "normal · 0,4–1,1 s + Pausen"], ["gemuetlich", "gemütlich · 0,7–1,8 s + Pausen"]], c.tempo)),
+                        gfZeile("Obergrenze", gfFeld("tw-godfarm-stunde", c.maxProStunde, 56) + "<span>je Std.</span><span style='color:#7d8796;'>(0 = ohne)</span>"),
+                        `<div id="tw-godfarm-stand" style="grid-column:1 / -1;font-size:11px;color:#aab6c6;background:#151b26;border:1px solid #263042;border-radius:6px;padding:5px 7px;line-height:1.45;"></div>`
+                    ].join(""))}
+                    ${autoKatUiHtml()}
                 </div>
             </div>`;
 }
