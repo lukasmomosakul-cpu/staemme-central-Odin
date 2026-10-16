@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      625
+// @version      626
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -61771,6 +61771,7 @@ if (location.href.includes("mode=scavenge_mass")) {
                 if (attack.sent || attack.failed || !attack.startsAtMs) return;
                 const lateMs = now - attack.startsAtMs;
                 if (lateMs <= maxLate) return;
+                if (attack.ohneSekunde && lateMs <= OHNE_SEKUNDE_MAX_SPAET_MS) return;   // v626
 
                 attack.failed = true;
                 attack.failReason =
@@ -61793,10 +61794,20 @@ if (location.href.includes("mode=scavenge_mass")) {
         return count;
     }
 
+    // v626 (Diagnose 16.10. 22:31): 38 Auto-Kat-Eintraege "verpasst (2-13 min
+    // zu spaet) - wird nicht mehr versucht" (15:28, 17:30, 18:49, 19:55). Die
+    // Ansicht lag gedrosselt im Hintergrund ("Wake Lock: page not visible"),
+    // GodBot lief z.B. von 17:25:43 bis 17:30:42 gar nicht; der erste Eintrag
+    // ging dann noch raus, die Nachkontrolle sortierte die uebrigen 10 aus,
+    // und Auto-Kat sperrte jedes Ziel 2 Std. Eintraege OHNE Sollsekunde
+    // (Auto-Kat: Barbarendoerfer, keine Zeitvorgabe) duerfen bis zu 60 Min.
+    // spaeter starten - sie gehen dann einfach beim naechsten Takt raus.
+    const OHNE_SEKUNDE_MAX_SPAET_MS = 60 * 60 * 1000;
     function attackIsHopelesslyLate(attack, nowMs) {
         if (!attack || !attack.startsAtMs) return false;
         const cfg = getCommandsConfig();
         const maxLate = Math.max(0, cfg.maxLatenessMinutes) * 60 * 1000;
+        if (attack.ohneSekunde) return (nowMs - attack.startsAtMs) > Math.max(maxLate, OHNE_SEKUNDE_MAX_SPAET_MS);
         return (nowMs - attack.startsAtMs) > maxLate;
     }
 

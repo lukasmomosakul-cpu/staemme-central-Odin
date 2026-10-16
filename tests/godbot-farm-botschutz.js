@@ -190,6 +190,11 @@ const R=[];const t=(n,c,i)=>R.push((c?'OK   ':'FEHL ')+n+(c||!i?'':' -> '+i));
  const due=x.T.findAllDueAttackBatches().map(g=>g[0].attack.id);
  t('P1 ohne Sollsekunde: Vorladen 0, nicht gestaffelt; normale Angriffe unveraendert 60 s; faellig erst zur Startzeit',
    pre.k1===0&&pre.k2===0&&pre.k3===0&&pre.a1===60000&&pre.a2===60000&&pre.a3===60000&&due.includes('k3')&&!due.includes('k1')&&!due.includes('k2'),JSON.stringify([pre,due]));
+ { const y=welt({});const n1=y.T.serverNowMs();
+   y.w.localStorage.setItem('tw_attack_plans',JSON.stringify({'p':{name:'n',attacks:[mk('alt',-10*60000,false)].map(a=>Object.assign(a,{startsAtMs:n1-10*60000}))},
+     'tw-autokat':{name:'Auto-Kat',attacks:[Object.assign(mk('spaet',0,true),{startsAtMs:n1-10*60000}),Object.assign(mk('uralt',0,true),{startsAtMs:n1-61*60000})]}}));
+   const d2=y.T.findAllDueAttackBatches().map(g=>g[0].attack.id);
+   t('P2 (v626) ohne Sollsekunde 10 Min. zu spaet geht noch raus, normaler Angriff und >60 Min. nicht',d2.includes('spaet')&&!d2.includes('alt')&&!d2.includes('uralt'),JSON.stringify(d2)); }
  // Q (v613): App geht mitten im Lauf in den Hintergrund.
  x=welt({});let qStand=null;const qLauf=new Promise(res=>{x.T.godFarmLauf(st=>{qStand=st;res(st);});});
  for(let k=0;k<200&&x.st.posts.length<2;k++)await new Promise(r=>setTimeout(r,50));
