@@ -4980,6 +4980,7 @@ public class GameWebViewActivity extends Activity {
   // 2.0.81: Notfall-IP wurde beim Laden automatisch gesetzt (Botschutz-Hilfe)
   // - beim Schliessen der Welt wieder auf direkt.
   volatile boolean notfallAuto=false;
+  volatile String notfallFehlt=null;
   // 2.0.1: zuletzt gesehene Ausgangs-IP des Proxys (Wechsel melden).
   volatile String letzteProxyIp=null;
   // Fail closed: Welt wurde wegen Proxy-Fehler nicht geladen/angehalten.
@@ -5335,8 +5336,12 @@ public class GameWebViewActivity extends Activity {
    // 2.0.81: Hilfe beim Botschutz eines ANDEREN Geraets - Notfall-IP aus der
    // Team-Vorlage automatisch, nur beim Laden und nur ohne eigenen Proxy.
    if(vollTest&&roh.trim().isEmpty()){
+    notfallFehlt=null;
     String nf=notfallAutomatisch();
     if(nf!=null){ roh=nf; sp.edit().putString(gameAccountId,roh).apply(); notfallAuto=true; }
+    // 2.0.82: Hilfe noetig, aber keine Notfall-IP moeglich -> NICHT laden
+    // (sonst meldete sich das Konto ueber die IP des Helfer-Geraets an).
+    else if(notfallFehlt!=null)return "Botschutz-Hilfe: "+notfallFehlt+" - ohne Notfall-IP wird das fremde Konto nicht geladen";
    }
    // Ohne Proxy nichts zu testen; mit Proxy beim Laden immer voller Test.
    if(roh.equals(proxyRoh)&&!vollTest)return null;
@@ -5435,12 +5440,16 @@ public class GameWebViewActivity extends Activity {
     if(l.length()==0)return null;
     String halter=l.getJSONObject(0).optString("geraet_id","");
     if(halter.isEmpty()||halter.equals(OdinService.geraetId(GameWebViewActivity.this)))return null;
+    // Ab hier ist die Notfall-IP noetig - jeder Fehlschlag sperrt das Laden.
+    notfallFehlt="Notfall-Vorlage nicht abrufbar";
     org.json.JSONArray v=new org.json.JSONArray(supaRequest("GET","notfall_proxy?select=vorlage",null));
-    if(v.length()==0)return null;
+    if(v.length()==0){ notfallFehlt="keine Notfall-Vorlage hinterlegt (Einstellungen → Notfall-IP)"; return null; }
     String vorlage=v.getJSONObject(0).optString("vorlage","");
-    if(!vorlage.contains("{sitzung}"))return null;
+    if(!vorlage.contains("{sitzung}")){ notfallFehlt="Notfall-Vorlage ohne {sitzung}"; return null; }
     String roh=notfallNeueSitzung(vorlage.replace("{sitzung}","nf0"));
+    notfallFehlt="Notfall-IP nicht speicherbar";
     supaRequest("PATCH","game_accounts?id=eq."+id,"{\"proxy\":"+org.json.JSONObject.quote(roh)+"}");
+    notfallFehlt=null;
     melde("WICHTIG","Botschutz-Hilfe: Konto lief zuletzt auf "+l.getJSONObject(0).optString("geraet_name","anderem Gerät")
       +" - Notfall-IP automatisch gesetzt");
     return roh;

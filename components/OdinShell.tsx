@@ -10,7 +10,6 @@ const SEITEN: [string, string][] = [
   ['Accounts', '/#accounts'],
   ['GodBot', '/godbot/'],
   ['Vorlagen', '/vorlagen/'],
-  ['Statistik', '/statistik/'],
   ['Protokoll', '/protokoll/'],
   ['IP-Wächter', '/ipwaechter/'],
   ['Team', '/team/'],
@@ -24,11 +23,10 @@ const SEITEN: [string, string][] = [
 const FUSS: [string, string, string][] = [
   ['⌂', 'Dashboard', '/'],
   ['⚔', 'GodBot', '/godbot/'],
-  ['📊', 'Statistik', '/statistik/'],
   ['📋', 'Protokoll', '/protokoll/'],
+  ['🛡', 'IP-Wächter', '/ipwaechter/'],
 ];
 const MEHR: [string, string, string][] = [
-  ['🛡', 'IP-Wächter', '/ipwaechter/'],
   ['👥', 'Accounts', '/#accounts'],
   ['🤝', 'Team', '/team/'],
   ['📐', 'Vorlagen', '/vorlagen/'],

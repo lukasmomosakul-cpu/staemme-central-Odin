@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      621
+// @version      622
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19479,6 +19479,7 @@ function botMarkerSichtbar() {
         }
 
         // Die doppelte tote Zeile wurde hier erfolgreich entfernt.
+        try { statistikHintergrund(); } catch (e) { }   // v622
         maybeRefreshCommandOverview();
         maybeSyncPlansWithMemo();
 
@@ -21547,6 +21548,8 @@ function botMarkerSichtbar() {
     let botAbfrageBereitGemeldet = false;   // v621
 
     function captchaOeffnenFaellig() {
+        return false;   // v621/v622: GodBot oeffnet den Botschutz nie selbst.
+        // eslint-disable-next-line no-unreachable
         try {
             const raw = localStorage.getItem(BOT_CAPTCHA_OPEN_KEY);
             if (!raw) return false;
@@ -30310,6 +30313,59 @@ function statsCacheFresh() {
     const d = statsCacheLoad();
     if (!d) return null;
     return (Date.now() - d.at) < STATS_CACHE_TTL_MS ? d : null;
+}
+
+// v622 (Fetteruruk 16.10.: Statistik im Dashboard "einigermassen aktuell").
+// Bisher erneuerten sich Punkte/Rang/Beute nur, wenn jemand das
+// Statistik-Fenster oeffnete (FetterOrk zuletzt 15.10., Ares20 de256
+// 05.10.), die Produktion nur, wenn Rohstoff-Funktionen sie brauchten
+// (de260-Konten seit 09./10.10.). Jetzt im Hintergrund:
+//   Rangliste: alle 60-75 Min., 4 Anfragen, nacheinander mit Pausen
+//   Produktion: wenn aelter als PRODUCTION_CACHE_MS (6 Std.)
+// Nie waehrend Botschutz. Die Werte gehen wie immer per Abgleich ins
+// Dashboard.
+let statsHgLaeuft = false, statsHgVersuchAt = 0, prodHgVersuchAt = 0;
+let statsHgAbstandMs = (60 + Math.random() * 15) * 60 * 1000;
+function statistikHintergrund() {
+    if (isBotProtectionActive()) return;
+    const jetzt = Date.now();
+    if (!statsHgLaeuft && jetzt - statsHgVersuchAt > 20 * 60 * 1000) {
+        const d = statsCacheLoad();
+        if (!d || jetzt - d.at > statsHgAbstandMs) {
+            statsHgLaeuft = true;
+            statsHgVersuchAt = jetzt;
+            const neu = { at: 0, points: null, rank: null };
+            const reihe = ["loot_res", "loot_vil", "scavenge"];
+            const weiter = (i) => {
+                if (isBotProtectionActive()) { statsHgLaeuft = false; return; }
+                if (i >= reihe.length) {
+                    neu.at = Date.now();
+                    if (neu.points !== null || reihe.some(k => neu[k] !== null && neu[k] !== undefined)) {
+                        statsCacheSave(neu);
+                        console.log("[TW] Statistik im Hintergrund erneuert (4 Anfragen).");
+                    }
+                    statsHgAbstandMs = (60 + Math.random() * 15) * 60 * 1000;
+                    statsHgLaeuft = false;
+                    return;
+                }
+                setTimeout(() => fetchDailyRankingValue(reihe[i], (v) => { neu[reihe[i]] = v; weiter(i + 1); }),
+                    humanDelay(1500, 3500));
+            };
+            try {
+                fetchPlayerRankAndPoints((info) => {
+                    if (info) { neu.points = info.points; neu.rank = info.rank; }
+                    weiter(0);
+                });
+            } catch (e) { statsHgLaeuft = false; }
+        }
+    }
+    if (jetzt - prodHgVersuchAt > 30 * 60 * 1000) {
+        const p = loadProductionCache();
+        if (!p || !p.at || jetzt - p.at >= PRODUCTION_CACHE_MS) {
+            prodHgVersuchAt = jetzt;
+            try { ensureProductionData(); } catch (e) { }
+        }
+    }
 }
 
 // === Export fuer die Stammesdatenbank ================================

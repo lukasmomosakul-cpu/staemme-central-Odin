@@ -167,7 +167,7 @@ export function kontoBild(w: KontoWerte | undefined): KontoBild {
     letzteAufnahme: Number(lies<number | string>(w, 'tw_botschutz_aufnahme_at', 0)) || 0,
     aktivitaet: (Array.isArray(akt) ? akt : []).filter(a => a && a.at)
       .map(a => ({ at: a.at as number, art: a.art ?? '', text: a.text ?? '' }))
-      .sort((a, c) => c.at - a.at).slice(0, 4),
+      .sort((a, c) => c.at - a.at).slice(0, 40),
   };
 }
 
