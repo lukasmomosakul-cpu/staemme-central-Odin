@@ -968,6 +968,7 @@ public class OdinService extends Service {
   nm.createNotificationChannel(new NotificationChannel(CH_STATUS,"Odin Status",NotificationManager.IMPORTANCE_LOW));
   NotificationChannel a=new NotificationChannel(CH_ALERT,"Odin Meldungen",NotificationManager.IMPORTANCE_HIGH);
   a.enableVibration(true); nm.createNotificationChannel(a);
+  try{ nm.cancel(ID_VORWARNUNG); }catch(Exception ignored){}   // 2.0.90
   NotificationChannel wk=new NotificationChannel(CH_WAKE,"Odin Termine",NotificationManager.IMPORTANCE_HIGH);
   wk.enableVibration(false); wk.setVibrationPattern(null); wk.setSound(null,null);
   wk.setShowBadge(false); nm.createNotificationChannel(wk);
@@ -1024,7 +1025,11 @@ public class OdinService extends Service {
   String text=art+" in "+Math.max(1,Math.round(rest/60000f))+" Min – Odin läuft gerade nicht";
   OdinLog.schreib(this,"-","WICHTIG","Vorwarnung: "+text);
   protokoll(this,"WICHTIG","wecker","Vorwarnung: "+text);
-  zeigeFest(ID_VORWARNUNG,CH_ALERT,"Termin steht an",text,false);
+  // 2.0.90 (Fetteruruk 17.10.: "bei Terminen, wo der Nutzer nichts machen
+  // muss, Vibration und Benachrichtigung aus - unnoetig und stoeren"): Den
+  // Termin erledigt Odin selbst (Wecken), die Vorwarnung steht nur noch im
+  // Protokoll. Benachrichtigt wird nur, wo du handeln musst (Botschutz,
+  // Angriffe, Befehle, Anmeldung).
  }
  // Botschutz: erst in Abstaenden vibrieren, nach einer Weile der Wecker. Er
  // hoert auf, sobald die App im Vordergrund ist - dann hast du es gesehen.
@@ -1174,11 +1179,20 @@ public class OdinService extends Service {
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setCategory(Notification.CATEGORY_ALARM)
     .setFullScreenIntent(pi,true)
+    .setOnlyAlertOnce(true)
     .setAutoCancel(true).build();
-  c.getSystemService(NotificationManager.class)
-   .notify((int)(System.currentTimeMillis()%90000),n);
+  final NotificationManager nm=c.getSystemService(NotificationManager.class);
+  // 2.0.90: feste Nummer und nach 5 s wieder weg. Die Vollbild-Benachrichtigung
+  // braucht Android nur, um die Ansicht ueber den Sperrbildschirm zu holen -
+  // liegen bleiben (oder bei eingeschaltetem Bildschirm als Banner oben
+  // aufpoppen) soll sie nicht; zu tun gibt es fuer dich nichts.
+  nm.notify(ID_WECKEN,n);
   c.startActivity(i);
+  new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{
+   try{ nm.cancel(ID_WECKEN); }catch(Exception ignored){}
+  },5000L);
  }
+ static final int ID_WECKEN=4806;
  // 2.0.39: AUSWAHL "AUTOMATISCH OEFFNEN" je Geraet. Fetteruruk 11.10.: "nicht
  // mehr random in alle hinzugefuegten Konten geladen werden" - am 11.10. um
  // 02:31 holte der Wecker auf FetterOrks Handy Ares20/de256 nach vorn, weil
