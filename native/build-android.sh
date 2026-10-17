@@ -1255,6 +1255,14 @@ public class OdinService extends Service {
    protokoll(c,"info","wecker","Dimm-Modus läuft ("+art+") - kein Wecken nötig");
    return;
   }
+  // 2.0.92: Schwebt die Welt (Sammelfenster/Symbol) und GodBot gibt
+  // Lebenszeichen, laeuft der Termin dort - kein Vollbild ueber dem
+  // Sperrbildschirm, der Bildschirm bleibt aus.
+  if(GameWebViewActivity.laeuftUngedrosselt(c,kt)){
+   OdinLog.schreib(c,"-","info","Läuft im Sammelfenster ("+art+") - kein Wecken nötig");
+   protokoll(c,"info","wecker","Läuft im Sammelfenster ("+art+") - kein Wecken nötig");
+   return;
+  }
   // Die Seite muss sichtbar sein, damit die Zeitgeber laufen - das leistet
   // auch das kleine schwebende Fenster, ohne dir dazwischenzufunken.
   if(inBenutzung(c)&&GameWebViewActivity.weckeLeise(kt)){
@@ -3421,19 +3429,23 @@ public class GameWebViewActivity extends Activity {
  //      Welten, auch die verdeckten im Stapel
  //   2. schwebendes Fenster UND Bildschirm an - ein Overlay bei dunklem
  //      Bildschirm wird nicht gezeichnet und zaehlt deshalb NICHT
+ // 2.0.92 (Fetteruruk 17.10.: "im Sperrbildschirm wird immer noch Odin
+ // geoeffnet"): Die Annahme "Overlay bei dunklem Bildschirm wird nicht
+ // gezeichnet" stimmt auf deinen Geraeten nicht - belegt 16.10. 22:19
+ // "120/120 Lebenszeichen - Sammelfenster, Bildschirm aus". Massgeblich ist
+ // jetzt, ob GodBot tatsaechlich Lebenszeichen gibt: schwebt die Welt und kam
+ // in den letzten 2 Min. eins, laeuft sie - kein Wecken. Bleiben sie aus
+ // (falls ein Geraet das Overlay doch drosselt), wird wie bisher geweckt.
  static boolean laeuftUngedrosselt(Context c,String accountId){
   try{
    String kt=accountId==null?"":accountId;
-   if(OdinFloat.active(kt)){
-    android.os.PowerManager pm=(android.os.PowerManager)c.getSystemService(Context.POWER_SERVICE);
-    return pm!=null&&pm.isInteractive();
-   }
    GameWebViewActivity a=hostFuer(kt);
    if(a!=null&&a.imVordergrund)return true;
-   // 1.97.0: im Sammelfenster - gezeichnet, solange der Bildschirm an ist.
-   if(a!=null&&OdinFloat.active(GRUPPE)){
+   if(OdinFloat.active(kt)||(a!=null&&OdinFloat.active(GRUPPE))){
     android.os.PowerManager pm=(android.os.PowerManager)c.getSystemService(Context.POWER_SERVICE);
-    return pm!=null&&pm.isInteractive();
+    if(pm!=null&&pm.isInteractive())return true;
+    long l=OdinService.zuletztLebend(kt);
+    return l>0&&System.currentTimeMillis()-l<120_000L;
    }
   }catch(Exception ignored){}
   return false;
