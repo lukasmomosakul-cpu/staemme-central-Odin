@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GodBot
-// @version      627
+// @version      628
 // @description  Fester Bestandteil der Odin-App. Im Browser nur als Spiegel.
 // @author       lukasmomosakul-cpu
 // @match        *://*.die-staemme.de/game.php*
@@ -19481,6 +19481,7 @@ function botMarkerSichtbar() {
         // Die doppelte tote Zeile wurde hier erfolgreich entfernt.
         try { statistikHintergrund(); } catch (e) { }   // v622
         try { ruheseitePruefen(); } catch (e) { }       // v623
+        try { serienNachschub(); } catch (e) { }        // v628
         maybeRefreshCommandOverview();
         maybeSyncPlansWithMemo();
 
@@ -63976,6 +63977,141 @@ if (location.href.includes("mode=scavenge_mass")) {
         });
     }
 
+    // === ANGRIFFSSERIEN (v628) =========================================
+    // Fetteruruk 17.10.: Farm-Assistent und FarmGod koennen nur Barbaren-
+    // doerfer. Fuer Spielerdoerfer eine schnelle Serie im Angriffsplaner -
+    // mehrere Angriffe auf dieselbe Koordinate, entweder als feste Zahl mit
+    // Abstand ODER laufend alle X Std. bis zu einer Uhrzeit. Nie automatisch
+    // stoppen (ausdruecklich so gewuenscht): die Serie laeuft, bis du sie
+    // entfernst oder das Enddatum erreicht ist. Die einzelnen Angriffe sind
+    // ganz normale Planer-Eintraege - Versand, Vorwarnung, Botschutz-Schutz
+    // gelten unveraendert. Eine Vorlage legt bei jedem Scheduler-Lauf so viele
+    // Eintraege nach, dass immer die naechsten paar in der Liste stehen (nicht
+    // alle 500 auf einmal - das Konto-Limit des Planers bliebe sonst voll).
+    const SERIE_STORE_KEY = "tw_angriff_serien";
+    const SERIE_VORLAUF_H = 12;        // so viele Stunden im Voraus angelegt
+    const SERIE_MAX_OFFEN = 20;        // nie mehr offene Eintraege je Serie
+
+    function ladeSerien() {
+        try { const a = JSON.parse(localStorage.getItem(SERIE_STORE_KEY) || "[]"); return Array.isArray(a) ? a : []; }
+        catch (e) { return []; }
+    }
+    function speichereSerien(liste) {
+        try { localStorage.setItem(SERIE_STORE_KEY, JSON.stringify(liste)); } catch (e) { }
+    }
+
+    // Naechste Abfluege einer Serie ab "ab" (ms), bis Vorlauf/Ende/Max.
+    function serieNaechsteStarts(se, ab, schonOffen) {
+        const out = [];
+        const abstandMs = Math.max(1, Number(se.abstandMin) || 60) * 60000;
+        const endeMs = se.endeMs || Infinity;
+        let t = Math.max(ab, se.letzterStartMs ? se.letzterStartMs + abstandMs : ab);
+        const grenze = ab + SERIE_VORLAUF_H * 3600000;
+        let platz = SERIE_MAX_OFFEN - schonOffen;
+        while (t <= grenze && t <= endeMs && platz > 0) {
+            if (se.modus === "anzahl" && se.rest <= out.length) break;
+            out.push(t);
+            t += abstandMs;
+            platz--;
+        }
+        return out;
+    }
+
+    // Legt faellige Serien-Eintraege nach. Laeuft im Scheduler (ruhig, kein Abruf).
+    function serienNachschub() {
+        const serien = ladeSerien();
+        if (!serien.length) return;
+        const plans = loadAttackPlans();
+        const jetzt = serverNowMs();
+        let geaendert = false, plansGeaendert = false;
+
+        serien.forEach(se => {
+            if (se.pausiert) return;
+            const planId = "tw-serie-" + se.id;
+            const plan = plans[planId] = plans[planId] || { name: "Serie " + se.toCoord, createdAt: Date.now(), attacks: [] };
+            if (!Array.isArray(plan.attacks)) plan.attacks = [];
+            const offen = plan.attacks.filter(a => !a.removed && !a.sent && !a.failed).length;
+            // Lauf-/Ankunftszeit aus Welt-Tempo (kein Abruf).
+            const lang = fakeLangsamste(se.fromCoord, se.toCoord, se.troops, loadUnitSecsPerField());
+            if (!lang) return;
+            const starts = serieNaechsteStarts(se, jetzt + SUPPORT_PLAN_MIN_LEAD_MS + 60000, offen);
+            starts.forEach(start => {
+                const ankunft = start + lang.sec * 1000;
+                plan.attacks.push({
+                    id: "serie-" + se.id + "-" + start,
+                    type: "attack",
+                    attacker: se.attacker || se.fromCoord,
+                    fromCoord: se.fromCoord,
+                    unitLabel: lang.art,
+                    targetPlayer: se.targetPlayer || "",
+                    toCoord: se.toCoord,
+                    startsAtMs: start,
+                    arrivesAtMs: ankunft,
+                    startsAtLabel: supportPlanTimeLabel(start),
+                    arrivesAtLabel: supportPlanTimeLabel(ankunft),
+                    villageId: String(se.villageId || ""),
+                    targetId: se.targetId ? String(se.targetId) : "",
+                    targetBuilding: se.targetBuilding || null,
+                    troops: Object.assign({}, se.troops),
+                    topUp: false, topUpUnits: [],
+                    serieId: se.id,
+                    sent: false, sentAt: null, failed: false, failReason: null
+                });
+                se.letzterStartMs = start;
+                if (se.modus === "anzahl") se.rest = Math.max(0, (se.rest || 0) - 1);
+                plansGeaendert = true; geaendert = true;
+            });
+            // Fertige/abgelaufene Serie: Marker, aber bestehende Eintraege bleiben.
+            if ((se.modus === "anzahl" && se.rest <= 0 && offen + starts.length <= 0) ||
+                (se.endeMs && jetzt > se.endeMs && offen + starts.length <= 0)) {
+                se.fertig = true;
+            }
+        });
+        if (plansGeaendert) saveAttackPlans(plans);
+        if (geaendert) speichereSerien(serien);
+        // Fertige Serien aus der Verwaltung nehmen (die Angriffe sind schon raus).
+        const bleiben = serien.filter(se => !se.fertig);
+        if (bleiben.length !== serien.length) speichereSerien(bleiben);
+    }
+
+    function serienListeHtml() {
+        const serien = ladeSerien().filter(se => !se.fertig);
+        if (!serien.length) return `<div style="color:#667;padding:8px;font-size:11px;">
+            Keine laufende Serie. Über „+ Eintrag“ einen Angriff anlegen und dort „Serie“ einschalten.</div>`;
+        const plans = loadAttackPlans();
+        return serien.map(se => {
+            const plan = plans["tw-serie-" + se.id];
+            const offen = plan ? plan.attacks.filter(a => !a.removed && !a.sent && !a.failed).length : 0;
+            const gesendet = plan ? plan.attacks.filter(a => a.sent).length : 0;
+            const wie = se.modus === "anzahl"
+                ? `noch ${se.rest} von ${se.anzahl}, alle ${se.abstandMin} Min.`
+                : `alle ${se.abstandMin} Min. bis ${supportPlanTimeLabel(se.endeMs)}`;
+            const truppen = Object.keys(se.troops).filter(u => se.troops[u]).map(u => se.troops[u] + " " + tabbenUnitShortLabel(u)).join(", ");
+            return `<div style="border:1px solid #243147;border-radius:5px;padding:7px;margin-bottom:6px;">
+                <div style="display:flex;justify-content:space-between;gap:6px;align-items:baseline;">
+                    <b style="color:#c9d4e3;">${escapeAttackPlanHtml(se.targetPlayer || "")} <span style="color:#7fb2ff;">${escapeAttackPlanHtml(se.toCoord)}</span></b>
+                    <a href="#" class="tw-serie-stop" data-id="${se.id}" style="color:#e07a7a;font-size:11px;flex:0 0 auto;">entfernen</a>
+                </div>
+                <div style="font-size:10px;color:#8fa8c7;margin-top:3px;">von ${escapeAttackPlanHtml(se.fromCoord)} · ${escapeAttackPlanHtml(truppen)}</div>
+                <div style="font-size:10px;color:#8fa8c7;margin-top:2px;">${wie}</div>
+                <div style="font-size:10px;color:#667;margin-top:2px;">${gesendet} gesendet · ${offen} eingeplant</div>
+            </div>`;
+        }).join("") + `<div style="font-size:9px;color:#667;padding:2px 2px 6px;">
+            „entfernen“ stoppt den Nachschub. Bereits eingeplante Angriffe bleibst in der Angriffsliste stehen, bis du sie dort löschst.</div>`;
+    }
+
+    // Entfernt die Serie UND ihre noch nicht gesendeten Eintraege.
+    function serieEntfernen(id) {
+        speichereSerien(ladeSerien().filter(se => String(se.id) !== String(id)));
+        const plans = loadAttackPlans();
+        const planId = "tw-serie-" + id;
+        if (plans[planId]) {
+            plans[planId].attacks = (plans[planId].attacks || []).filter(a => a.sent);
+            if (!plans[planId].attacks.length) delete plans[planId];
+            saveAttackPlans(plans);
+        }
+    }
+
     function manuellFormularHtml() {
         // 06.09.2026 - "Barbarendorf (454|449) K44 (454|449)".
         //
@@ -64040,6 +64176,36 @@ if (location.href.includes("mode=scavenge_mass")) {
             </div>
 
             <div style="display:flex;flex-wrap:wrap;gap:4px 10px;margin-bottom:4px;">${felder}</div>
+
+            <!-- v628: Serie. Aus = ein Eintrag wie bisher. An = mehrere. -->
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#c9d4e3;margin:6px 0 4px;cursor:pointer;">
+                <input type="checkbox" id="tw-man-serie" /> <b>Serie</b> (mehrere Angriffe auf dieses Ziel)
+            </label>
+            <div id="tw-man-serie-box" style="display:none;border:1px solid #2c3546;border-radius:5px;padding:6px;margin-bottom:6px;">
+                <div id="tw-man-serie-art" data-wert="anzahl" style="display:flex;gap:5px;margin-bottom:6px;">
+                    <button class="tw-serie-art-btn" data-wert="anzahl" style="flex:1;padding:5px;border-radius:4px;cursor:pointer;font-size:10px;">Feste Anzahl</button>
+                    <button class="tw-serie-art-btn" data-wert="dauer" style="flex:1;padding:5px;border-radius:4px;cursor:pointer;font-size:10px;">Alle X Std. bis…</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
+                    <span style="font-size:10px;color:#8fa8c7;min-width:46px;">Abstand</span>
+                    <input type="number" id="tw-man-serie-abstand" value="60" min="1"
+                        style="width:64px;${rahmen}" /><span style="font-size:10px;color:#8fa8c7;">Min. zwischen Ankünften</span>
+                </div>
+                <div id="tw-man-serie-anzahl-zeile" style="display:flex;align-items:center;gap:5px;margin-bottom:2px;">
+                    <span style="font-size:10px;color:#8fa8c7;min-width:46px;">Anzahl</span>
+                    <input type="number" id="tw-man-serie-anzahl" value="10" min="1"
+                        style="width:64px;${rahmen}" /><span style="font-size:10px;color:#8fa8c7;">Angriffe</span>
+                </div>
+                <div id="tw-man-serie-ende-zeile" style="display:none;align-items:center;gap:5px;margin-bottom:2px;">
+                    <span style="font-size:10px;color:#8fa8c7;min-width:46px;">Bis</span>
+                    <input type="datetime-local" id="tw-man-serie-ende"
+                        value="${arrivalDateFieldValue(Date.now() + 24 * 3600000)}" style="flex:1;min-width:0;${rahmen}" />
+                </div>
+                <div style="font-size:9px;color:#667;margin-top:5px;line-height:1.4;">
+                    Die Ankunftszeit oben ist der erste Angriff. Die Serie stoppt nie von selbst – nur
+                    am Enddatum, bei erreichter Anzahl oder wenn du sie unter „Serien“ entfernst.
+                </div>
+            </div>
 
             <!-- 06.09.2026: Zielgebaeude fuer Katapulte. Das Feld gibt es
                  im Modell (targetBuilding) und auf der Bestaetigungsseite
@@ -64200,6 +64366,31 @@ if (location.href.includes("mode=scavenge_mass")) {
         if (zielEl) zielEl.addEventListener("input", vorschau);
         bindArrivalSecondsField(ank, ankSec, vorschau);
 
+        // v628: Serien-Box
+        const serieChk = body.querySelector("#tw-man-serie");
+        const serieBox = body.querySelector("#tw-man-serie-box");
+        const serieArt = body.querySelector("#tw-man-serie-art");
+        const serieAnzZeile = body.querySelector("#tw-man-serie-anzahl-zeile");
+        const serieEndeZeile = body.querySelector("#tw-man-serie-ende-zeile");
+        const serieModus = () => (serieArt && serieArt.dataset.wert) || "anzahl";
+        const zeichneSerie = () => {
+            if (serieBox) serieBox.style.display = serieChk && serieChk.checked ? "block" : "none";
+            const m = serieModus();
+            body.querySelectorAll(".tw-serie-art-btn").forEach(b => {
+                const an = b.dataset.wert === m;
+                b.style.background = an ? "#1d3324" : "#161c26";
+                b.style.color = an ? "#8fd4a0" : "#8fa8c7";
+                b.style.border = "1px solid " + (an ? "#2f6b3f" : "#33415a");
+            });
+            if (serieAnzZeile) serieAnzZeile.style.display = m === "anzahl" ? "flex" : "none";
+            if (serieEndeZeile) serieEndeZeile.style.display = m === "dauer" ? "flex" : "none";
+        };
+        if (serieChk) serieChk.addEventListener("change", zeichneSerie);
+        body.querySelectorAll(".tw-serie-art-btn").forEach(b => b.onclick = () => {
+            if (serieArt) serieArt.dataset.wert = b.dataset.wert || "anzahl"; zeichneSerie();
+        });
+        zeichneSerie();
+
         zeichneArt();
         vorschau();
 
@@ -64228,6 +64419,44 @@ if (location.href.includes("mode=scavenge_mass")) {
             knopf.disabled = true;
             knopf.textContent = "wird angelegt …";
 
+            // v628: Serie statt Einzeleintrag.
+            const istSerie = serieChk && serieChk.checked && art() === "attack";
+            if (istSerie) {
+                const abstandMin = Math.max(1, parseInt((body.querySelector("#tw-man-serie-abstand") || {}).value, 10) || 60);
+                const modus = serieModus();
+                const anzahl = Math.max(1, parseInt((body.querySelector("#tw-man-serie-anzahl") || {}).value, 10) || 10);
+                const endeMs = modus === "dauer"
+                    ? (readArrivalWithSeconds(body.querySelector("#tw-man-serie-ende"), null) || 0) : 0;
+                if (modus === "dauer" && endeMs <= a) {
+                    showToast("Enddatum muss nach der ersten Ankunft liegen.", "error");
+                    knopf.disabled = false; knopf.textContent = "Eintrag anlegen"; return;
+                }
+                manuellZielAufloesen(ziel, (z) => {
+                    const serien = ladeSerien();
+                    const id = Date.now().toString(36) + Math.floor(Math.random() * 1000);
+                    serien.push({
+                        id, modus, abstandMin,
+                        anzahl: modus === "anzahl" ? anzahl : null,
+                        rest: modus === "anzahl" ? anzahl : null,
+                        endeMs: modus === "dauer" ? endeMs : null,
+                        erstAnkunftMs: a,
+                        letzterStartMs: start - Math.max(1, abstandMin) * 60000,   // damit der erste genau auf "start" faellt
+                        fromCoord: von, toCoord: ziel, villageId: String(quelleId),
+                        targetId: z ? String(z.id) : "", targetPlayer: (z && z.dorf) || "",
+                        attacker: getVillageDisplayNameWithCoord(quelleId) || von,
+                        unitLabel: lang.art, troops: troops,
+                        targetBuilding: ((parseInt(troops.catapult, 10) || 0) !== 0 && gebEl && gebEl.value) ? gebEl.value : null
+                    });
+                    speichereSerien(serien);
+                    try { serienNachschub(); } catch (e) { }
+                    console.log(`[TW] Serie angelegt: ${von} -> ${ziel}, ${modus === "anzahl" ? anzahl + " Angriffe" : "bis " + supportPlanTimeLabel(endeMs)}, alle ${abstandMin} Min.`);
+                    knopf.disabled = false; knopf.textContent = "Eintrag anlegen";
+                    showToast("Serie angelegt – die ersten Angriffe stehen in der Liste.", "ok");
+                    attackPlanActiveTab = "serien";
+                    renderAttackPlanPopup();
+                });
+                return;
+            }
             // Die Dorf-ID des Ziels ist ein Zugewinn, kein Muss: ohne sie
             // traegt der Versand die Koordinate ins Formular ein.
             manuellZielAufloesen(ziel, (z) => {
@@ -64418,6 +64647,11 @@ if (location.href.includes("mode=scavenge_mass")) {
         const stuetzen = all.filter(a => a.type === "support");
         renderAttackPlanTabs(root, angriffe.length, stuetzen.length);
 
+        if (attackPlanActiveTab === "serien") {   // v628
+            twSetHtmlIfChanged(body, serienListeHtml());
+            twCountdownRefresh(root);
+            return;
+        }
         const liste = attackPlanActiveTab === "unt" ? stuetzen : angriffe;
         twSetHtmlIfChanged(body, liste.length
             ? liste.map(a => attackPlanRowHtml(a, a.id === sendingId)).join("")
@@ -64428,9 +64662,12 @@ if (location.href.includes("mode=scavenge_mass")) {
 
     function renderAttackPlanTabs(root, zahlAngriffe, zahlUnt) {
         if (!root) return;
+        let zahlSerien = 0;
+        try { zahlSerien = ladeSerien().filter(x => !x.fertig).length; } catch (e) { }
         const defs = [
             ["angriffe", "Angriffe" + twTabCount(zahlAngriffe)],
             ["unt", "Unterstützungen" + twTabCount(zahlUnt)],
+            ["serien", "Serien" + twTabCount(zahlSerien)],   // v628
         ];
         // 07.09.2026: Der Reiter "Fakes" ist raus. Fakes werden jetzt
         // ausschliesslich ueber Vorlagen geplant, und die stehen in den
@@ -64458,6 +64695,17 @@ if (location.href.includes("mode=scavenge_mass")) {
                 ev.stopPropagation();
                 attackPlanActiveTab = tab.dataset.tab || "angriffe";
                 renderAttackPlanPopup();
+                return;
+            }
+
+            const stop = ev.target.closest && ev.target.closest(".tw-serie-stop");
+            if (stop && root.contains(stop)) {
+                ev.preventDefault(); ev.stopPropagation();
+                if (confirm("Serie entfernen? Noch nicht gesendete Angriffe dieser Serie werden gelöscht.")) {
+                    serieEntfernen(stop.dataset.id);
+                    showToast("Serie entfernt.", "ok");
+                    renderAttackPlanPopup();
+                }
                 return;
             }
 
