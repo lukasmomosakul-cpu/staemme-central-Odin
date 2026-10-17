@@ -3531,6 +3531,7 @@ public class GameWebViewActivity extends Activity {
  }
  private final String instanzAnsicht=Integer.toHexString(System.identityHashCode(this)).substring(0,4);
  @SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b); Fullscreen.apply(this);
+  bildschirmAusAnmelden();
   // 1.96.0: Es gibt genau EINE Spielansicht. Lebt schon eine andere, bekommt
   // sie das Intent (oeffnet/zeigt dort die Welt), diese hier verschwindet.
   GameWebViewActivity h=HOST;
@@ -4986,7 +4987,39 @@ public class GameWebViewActivity extends Activity {
    return true;
   }catch(Exception e){ android.util.Log.w("ODIN","moveTaskToFront",e); return false; }
  }
+ // 2.0.91 BILDSCHIRM AUS = SCHWEBEN (Fetteruruk 17.10.: "im Sperrbildschirm
+ // wacht dauernd der Bildschirm auf und geht nicht mehr aus - Hosentaschen-
+ // modus sinnfrei"). Bisher lief die Ansicht bei ausgeschaltetem Bildschirm
+ // gedrosselt, also weckte der Dienst fuer jeden Termin ein Vollbild ueber
+ // dem Sperrbildschirm - Bildschirm an. Belegt ist aber: im Sammelfenster
+ // laeuft GodBot auch bei AUS-geschaltetem Bildschirm voll weiter
+ // (16.10. 22:19 "120/120 Lebenszeichen - Sammelfenster, Bildschirm aus").
+ // Geht der Bildschirm aus, wandern die Welten deshalb sofort ins Sammel-
+ // fenster; der Dienst sieht das ("Termin - laeuft im Sammelfenster, nichts
+ // noetig") und weckt nicht mehr. Der Bildschirm bleibt aus. Ein laufender
+ // Dimm-Modus endet dabei (wie schon bei der Ein-/Aus-Taste).
+ private android.content.BroadcastReceiver bildschirmAus;
+ private void bildschirmAusAnmelden(){
+  try{
+   bildschirmAus=new android.content.BroadcastReceiver(){ @Override public void onReceive(Context c,Intent i){
+    try{
+     if(!Intent.ACTION_SCREEN_OFF.equals(i.getAction()))return;
+     if(isFinishing()||isDestroyed())return;
+     if(!getSharedPreferences("odin",MODE_PRIVATE).getBoolean("auto_schweben",true))return;
+     if(alleWelten().isEmpty()||OdinFloat.active(GRUPPE))return;
+     if(!OdinFloat.allowed(GameWebViewActivity.this)){ setStatus("Bildschirm aus: 'Über anderen Apps anzeigen' fehlt - Odin weckt je Termin"); return; }
+     if(dimDecke!=null)dimmenAus();
+     if(gruppeSchweben())setStatus("Bildschirm aus - Welten laufen im Sammelfenster weiter, kein Wecken nötig");
+    }catch(Exception e){ Log.w("ODIN_GODBOT","bildschirmAus",e); }
+   }};
+   android.content.IntentFilter f=new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF);
+   if(Build.VERSION.SDK_INT>=33)registerReceiver(bildschirmAus,f,Context.RECEIVER_NOT_EXPORTED);
+   else registerReceiver(bildschirmAus,f);
+  }catch(Exception e){ Log.w("ODIN_GODBOT","bildschirmAusAnmelden",e); }
+ }
  @Override protected void onDestroy(){
+  try{ if(bildschirmAus!=null)unregisterReceiver(bildschirmAus); }catch(Exception ignored){}
+  bildschirmAus=null;
   taktHandler.removeCallbacksAndMessages(null);
   netzLoesen();
   if(HOST==this){ HOST=null; try{ OdinFloat.hideRahmen(GRUPPE); }catch(Exception ig){} }
